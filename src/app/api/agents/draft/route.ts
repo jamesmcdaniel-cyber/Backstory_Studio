@@ -1,0 +1,115 @@
+import Anthropic from '@anthropic-ai/sdk'
+import { z } from 'zod'
+import { prisma } from '@/lib/prisma'
+import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
+import { DEFAULT_AGENT_MODEL } from '@/features/agents/execute-agent'
+import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+
+const DRAFT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    title: { type: 'string', description: 'Short agent name, e.g. "Weekly Report Agent".' },
+    icon: { type: 'string', description: 'A single emoji that represents the agent, e.g. "📄" or "💰".' },
+    description: { type: 'string', description: 'One sentence describing what the agent does.' },
+    instructions: {
+      type: 'string',
+      description: 'Detailed operating instructions for the agent, written in second person, covering goal, steps, tools to use, and what the final report should contain.',
+    },
+    integrations: {
+      type: 'array',
+      items: { type: 'string', enum: [...PROVIDERS] },
+      description: 'Only the integrations the task actually requires.',
+    },
+    schedule: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        type: { type: 'string', enum: ['manual', 'hourly', 'daily', 'weekly', 'cron'] },
+        time: { type: 'string', description: '24h HH:MM start time; empty string when not applicable.' },
+        cron: { type: 'string', description: 'Cron expression; empty string unless type is "cron".' },
+        timezone: { type: 'string', description: 'IANA timezone, default UTC.' },
+        isActive: { type: 'boolean', description: 'True when the user described a recurring cadence.' },
+      },
+      required: ['type', 'time', 'cron', 'timezone', 'isActive'],
+    },
+  },
+  required: ['title', 'icon', 'description', 'instructions', 'integrations', 'schedule'],
+} as const
+
+type Draft = {
+  title: string
+  icon: string
+  description: string
+  instructions: string
+  integrations: string[]
+  schedule: { type: string; time: string; cron: string; timezone: string; isActive: boolean }
+}
+
+// Den-style natural-language agent builder: describe the job, get a ready
+// agent config. Pass { create: true } to save it immediately.
+export const POST = withAuthenticatedApi(async (request, auth) => {
+  if (!process.env.ANTHROPIC_API_KEY) throw new ApiError('ANTHROPIC_API_KEY is not configured', 503, 'AI_UNAVAILABLE')
+  const { description, create } = z.object({
+    description: z.string().min(10).max(4000),
+    create: z.boolean().default(false),
+  }).parse(await request.json())
+
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const response = await client.messages.create({
+    model: 'claude-opus-4-8',
+    max_tokens: 4096,
+    system: [
+      'You configure autonomous agents for a team workspace. Turn the user\'s plain-language description into an agent configuration.',
+      `Available integrations: ${PROVIDERS.join(', ')}. Include only the ones the task needs; an agent with no integrations is fine.`,
+      'Write instructions the agent can follow without further clarification: the goal, the steps, which tools to use, and what to include in the final report. If anything is genuinely ambiguous, instruct the agent to ask the user via its ask_user tool at run time.',
+      'Set a schedule only when the user describes a recurring cadence; otherwise use type "manual" with isActive false.',
+    ].join('\n'),
+    messages: [{ role: 'user', content: description }],
+    output_config: { format: { type: 'json_schema', schema: DRAFT_SCHEMA } },
+  })
+
+  const text = response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('')
+  if (!text) throw new ApiError('The model returned no draft', 502, 'DRAFT_FAILED')
+  const draft = JSON.parse(text) as Draft
+
+  const schedule = {
+    type: draft.schedule.type,
+    timezone: draft.schedule.timezone || 'UTC',
+    isActive: draft.schedule.isActive && draft.schedule.type !== 'manual',
+    ...(draft.schedule.time ? { time: draft.schedule.time } : {}),
+    ...(draft.schedule.cron ? { cron: draft.schedule.cron } : {}),
+  }
+
+  const icon = draft.icon?.trim() || '🤖'
+  const enrichedDraft = { ...draft, icon, schedule, model: DEFAULT_AGENT_MODEL, priority: 'medium', visibility: 'shared' as const, folder: null }
+  if (!create) {
+    return { success: true, draft: enrichedDraft }
+  }
+
+  const agent = await prisma.agentTask.create({
+    data: {
+      type: 'agent',
+      agentType: 'CUSTOM',
+      priority: 'MEDIUM',
+      description: draft.description || draft.title,
+      objective: draft.instructions,
+      context: {},
+      schedule,
+      status: 'ACTIVE',
+      visibility: 'shared',
+      organizationId: auth.organizationId,
+      metadata: {
+        title: draft.title,
+        description: draft.description,
+        model: DEFAULT_AGENT_MODEL,
+        integrations: draft.integrations,
+        icon,
+      },
+    },
+  })
+  return { success: true, draft: enrichedDraft, agentId: agent.id }
+})

@@ -1,0 +1,390 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { usePathname, useRouter } from 'next/navigation'
+import {
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
+  FileText,
+  Folder,
+  Lock,
+  LogOut,
+  Play,
+  Plug,
+  Plus,
+  Search,
+  Trash2,
+} from 'lucide-react'
+import { CommandPalette } from '@/components/search/command-palette'
+import { NotificationBell } from '@/components/notifications/notification-bell'
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/hooks/use-auth'
+import { cn } from '@/lib/utils'
+
+type Agent = {
+  id: string
+  title: string
+  description: string
+  instructions: string
+  icon: string
+  folder: string | null
+  visibility: 'shared' | 'private'
+}
+
+type Organization = { id: string; name: string; slug: string; plan: string }
+type Usage = { executions: number; inputTokens: number; outputTokens: number }
+
+const CREDIT_TOKENS = 1_000_000
+export const AGENTS_CHANGED_EVENT = 'sprintiq:agents-changed'
+
+export function notifyAgentsChanged() {
+  window.dispatchEvent(new CustomEvent(AGENTS_CHANGED_EVENT))
+}
+
+const navigation = [
+  { name: 'Home', href: '/dashboard', icon: Brain },
+  { name: 'Integrations', href: '/integrations', icon: Plug },
+  { name: 'Explore', href: '/templates', icon: FileText },
+]
+
+function planLabel(plan: string) {
+  const lower = plan.toLowerCase()
+  return lower.charAt(0).toUpperCase() + lower.slice(1)
+}
+
+export function Sidebar() {
+  const pathname = usePathname()
+  const router = useRouter()
+  const { user, signOut } = useAuth()
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [orgMenuOpen, setOrgMenuOpen] = useState(false)
+  const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(null)
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [dragOver, setDragOver] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const [agentResponse, usageResponse, orgResponse] = await Promise.all([
+      fetch('/api/agents', { cache: 'no-store' }),
+      fetch('/api/usage', { cache: 'no-store' }),
+      fetch('/api/organizations', { cache: 'no-store' }),
+    ])
+    if (agentResponse.ok) {
+      const data = await agentResponse.json()
+      setAgents(data.agents || [])
+    }
+    if (usageResponse.ok) {
+      const data = await usageResponse.json()
+      setUsage(data.usage || null)
+    }
+    if (orgResponse.ok) {
+      const data = await orgResponse.json()
+      setOrganizations(data.organizations || [])
+      setActiveOrgId(data.activeOrganizationId || null)
+    }
+  }, [])
+
+  useEffect(() => {
+    load().catch(() => undefined)
+    const interval = window.setInterval(() => load().catch(() => undefined), 30000)
+    const onChanged = () => load().catch(() => undefined)
+    window.addEventListener(AGENTS_CHANGED_EVENT, onChanged)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener(AGENTS_CHANGED_EVENT, onChanged)
+    }
+  }, [load])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setPaletteOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [pathname])
+
+  const activeOrg = organizations.find((org) => org.id === activeOrgId) || organizations[0] || null
+
+  const sections = useMemo(() => {
+    const shared = agents.filter((agent) => agent.visibility !== 'private')
+    const folders = new Map<string, Agent[]>()
+    for (const agent of shared) {
+      const key = agent.folder?.trim() || 'General'
+      const bucket = folders.get(key)
+      if (bucket) bucket.push(agent)
+      else folders.set(key, [agent])
+    }
+    return {
+      workspace: [...folders.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      private: agents.filter((agent) => agent.visibility === 'private'),
+    }
+  }, [agents])
+
+  const creditPct = usage ? Math.min(100, Math.round(((usage.inputTokens + usage.outputTokens) / CREDIT_TOKENS) * 100)) : 0
+
+  const moveAgent = async (agentId: string, target: { folder: string | null; visibility: 'shared' | 'private' }) => {
+    const agent = agents.find((candidate) => candidate.id === agentId)
+    if (!agent) return
+    if ((agent.folder || null) === target.folder && agent.visibility === target.visibility) return
+    await fetch('/api/agents', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: agentId, folder: target.folder, visibility: target.visibility }),
+    })
+    notifyAgentsChanged()
+  }
+
+  const runAgent = async (agent: Agent) => {
+    await fetch(`/api/agents/${agent.id}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: agent.instructions }),
+    })
+    notifyAgentsChanged()
+    router.push('/dashboard')
+  }
+
+  const deleteAgent = async (agent: Agent) => {
+    await fetch('/api/agents', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: agent.id }),
+    })
+    notifyAgentsChanged()
+  }
+
+  const dropProps = (key: string, target: { folder: string | null; visibility: 'shared' | 'private' }) => ({
+    onDragOver: (event: React.DragEvent) => {
+      event.preventDefault()
+      setDragOver(key)
+    },
+    onDragLeave: () => setDragOver((current) => (current === key ? null : current)),
+    onDrop: (event: React.DragEvent) => {
+      event.preventDefault()
+      setDragOver(null)
+      const agentId = event.dataTransfer.getData('text/agent-id')
+      if (agentId) moveAgent(agentId, target).catch(() => undefined)
+    },
+  })
+
+  const renderAgent = (agent: Agent) => (
+    <div
+      key={agent.id}
+      draggable
+      onDragStart={(event) => event.dataTransfer.setData('text/agent-id', agent.id)}
+      className="group flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-100 active:cursor-grabbing"
+    >
+      <span className="w-5 text-center text-base leading-none">{agent.icon || '🤖'}</span>
+      <button
+        className="flex-1 truncate text-left text-sm"
+        title={agent.description || agent.title}
+        onClick={() => router.push(`/dashboard?agent=${agent.id}`)}
+      >
+        {agent.title}
+      </button>
+      <div className="hidden gap-0.5 group-hover:flex">
+        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => runAgent(agent)} aria-label="Run agent">
+          <Play className="h-3 w-3" />
+        </Button>
+        <Button size="icon" variant="ghost" className="h-6 w-6 text-red-600" onClick={() => deleteAgent(agent)} aria-label="Delete agent">
+          <Trash2 className="h-3 w-3" />
+        </Button>
+      </div>
+    </div>
+  )
+
+  return (
+    <>
+      {mobileOpen && (
+        <div className="fixed inset-0 z-40 bg-black bg-opacity-50 lg:hidden" onClick={() => setMobileOpen(false)} />
+      )}
+
+      <div className="fixed left-4 top-4 z-50 lg:hidden">
+        <Button variant="outline" size="icon" onClick={() => setMobileOpen(true)} className="bg-white shadow-md" aria-label="Open navigation">
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </Button>
+      </div>
+
+      <div
+        className={cn(
+          'fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r bg-gray-50 transition-transform duration-200 lg:relative lg:translate-x-0',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+        )}
+      >
+        {/* Org switcher */}
+        <div className="relative border-b p-3">
+          <button
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-100"
+            onClick={() => setOrgMenuOpen((open) => !open)}
+          >
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-sm font-bold text-white">
+              {(activeOrg?.name || 'W').charAt(0).toUpperCase()}
+            </div>
+            <span className="flex-1 truncate text-left text-sm font-semibold">{activeOrg?.name || 'Workspace'}</span>
+            <ChevronsUpDown className="h-4 w-4 text-gray-400" />
+          </button>
+          {orgMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setOrgMenuOpen(false)} />
+              <div className="absolute left-3 right-3 z-20 mt-1 rounded-lg border bg-white p-1 shadow-lg">
+                {organizations.map((org) => (
+                  <button
+                    key={org.id}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-100"
+                    onClick={() => setOrgMenuOpen(false)}
+                  >
+                    <span className="flex-1 truncate text-left">{org.name}</span>
+                    <span className="text-xs text-gray-400">{planLabel(org.plan)}</span>
+                    {org.id === activeOrg?.id && <Check className="h-4 w-4 text-indigo-600" />}
+                  </button>
+                ))}
+                <div className="my-1 border-t" />
+                <div className="truncate px-2 py-1 text-xs text-gray-400">{user?.emailAddress}</div>
+                <button
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
+                  onClick={signOut}
+                >
+                  <LogOut className="h-3.5 w-3.5" /> Sign out
+                </button>
+              </div>
+            </>
+          )}
+
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              className="flex flex-1 items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-sm text-gray-400 hover:bg-gray-100"
+              onClick={() => setPaletteOpen(true)}
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span className="flex-1 text-left">Search</span>
+              <kbd className="rounded border bg-gray-50 px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+            </button>
+            <NotificationBell />
+          </div>
+        </div>
+
+        {/* Nav + agent tree */}
+        <div className="flex-1 overflow-y-auto px-2 py-2">
+          <nav className="mb-2 space-y-0.5">
+            {navigation.map((item) => {
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
+              return (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm font-medium',
+                    isActive ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-100',
+                  )}
+                >
+                  <item.icon className={cn('h-4 w-4', isActive ? 'text-indigo-600' : 'text-gray-400')} />
+                  {item.name}
+                </Link>
+              )
+            })}
+          </nav>
+
+          <div
+            className={cn(
+              'flex items-center justify-between rounded-lg px-2 pb-1 pt-3',
+              dragOver === 'workspace' && 'bg-indigo-50',
+            )}
+            {...dropProps('workspace', { folder: null, visibility: 'shared' })}
+          >
+            <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">Workspace</span>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-5 w-5"
+              onClick={() => router.push('/dashboard?agent=new')}
+              aria-label="New agent"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {sections.workspace.map(([folder, folderAgents]) => {
+            const key = `ws:${folder}`
+            const isCollapsed = collapsed[key]
+            const isGeneral = folder === 'General'
+            return (
+              <div key={key} className="mb-0.5">
+                <button
+                  className={cn(
+                    'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100',
+                    dragOver === key && 'bg-indigo-50',
+                  )}
+                  onClick={() => setCollapsed((current) => ({ ...current, [key]: !current[key] }))}
+                  {...dropProps(key, { folder: isGeneral ? null : folder, visibility: 'shared' })}
+                >
+                  {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  <Folder className="h-3.5 w-3.5 text-gray-400" />
+                  <span className="flex-1 truncate text-left">{folder}</span>
+                  <span className="text-xs text-gray-400">{folderAgents.length}</span>
+                </button>
+                {!isCollapsed && <div className="ml-3 border-l pl-1">{folderAgents.map(renderAgent)}</div>}
+              </div>
+            )
+          })}
+
+          <div
+            className={cn(
+              'flex items-center gap-1.5 rounded-lg px-2 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-gray-400',
+              dragOver === 'private' && 'bg-indigo-50',
+            )}
+            {...dropProps('private', { folder: null, visibility: 'private' })}
+          >
+            <Lock className="h-3 w-3" /> Private
+          </div>
+          {sections.private.length > 0
+            ? <div className="ml-3 border-l pl-1">{sections.private.map(renderAgent)}</div>
+            : <p className="px-2 py-1 text-xs text-gray-400">Drag agents here to make them private.</p>}
+        </div>
+
+        {/* Footer: usage + user */}
+        <div className="border-t p-3">
+          {usage && (
+            <div className="mb-2 px-1">
+              <div className="mb-1 flex justify-between text-xs text-gray-500">
+                <span>Usage this month</span>
+                <span>{creditPct}% of credits</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-gray-200">
+                <div className="h-full rounded-full bg-indigo-500" style={{ width: `${creditPct}%` }} />
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2 px-1">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600">
+              {(user?.firstName || 'U').charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-medium">{user?.firstName || 'Account'}</div>
+              <div className="truncate text-xs text-gray-400">{user?.emailAddress}</div>
+            </div>
+            {activeOrg && (
+              <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600">{planLabel(activeOrg.plan)}</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+    </>
+  )
+}

@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: sprintiq-worker
+    env: node
+    buildCommand: npm ci && npm run db:generate
+    startCommand: npm run worker:start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: KLAVIS_API_KEY
+        sync: false

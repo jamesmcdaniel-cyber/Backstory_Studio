@@ -1,0 +1,33 @@
+# Architecture
+
+## Runtime Boundary
+
+There are two runtimes:
+
+1. **Next.js**: pages, authentication, CRUD APIs, integration management, execution inspection, and external trigger endpoints.
+2. **Worker**: one Fastify process with BullMQ consumers for manual, scheduled, webhook-triggered, and resumed agent runs.
+
+Pipedream owns embedded account connections; Klavis owns agent-facing MCP tool servers. Model access goes through `src/lib/llm/model-runner.ts`, which routes `claude-*` models to the Anthropic SDK and everything else to OpenAI. The default agent model is `claude-opus-4-8`; `claude-haiku-4-5` powers cheap surfaces (run Q&A, activity headlines).
+
+## Agent Execution
+
+1. Runs are enqueued by `POST /api/agents/:id/execute` (manual), the BullMQ job schedulers reconciled in `agent-schedule-registrar.ts` (hourly/daily/weekly/cron), or `POST /api/agents/:id/trigger` (webhook, authenticated by a per-agent secret).
+2. The worker loads the agent and its active Klavis MCP connections, then runs a model tool-calling loop (max `AGENT_MAX_TURNS`, default 16). Each tool call is persisted as a `WorkflowStep` and `WorkflowEvent`; token usage accumulates on the execution.
+3. The loop always exposes an `ask_user` tool. When the model calls it, the run pauses: the provider-native transcript is persisted on the execution, status becomes `waiting_for_input`, and the question is stored as an `ExecutionMessage`.
+4. `POST /api/executions/:id/reply` records the user's answer and enqueues a resume job; the worker replays the saved transcript, feeds the answer back as the tool result, and continues.
+5. Output or failure is persisted on the execution and surfaced by Agent HQ. `POST /api/chat` answers follow-up questions about a finished run; `GET /api/usage` reports month-to-date token usage per organization.
+
+`POST /api/agents/draft` turns a plain-language description into an agent configuration (structured output) and can create the agent directly.
+
+## Shared Server Utilities
+
+- `src/lib/prisma.ts`: process-wide Prisma client
+- `src/lib/server/auth.ts`: required Supabase user and tenant context
+- `src/lib/server/api-handler.ts`: authenticated API wrapper and consistent errors
+- `src/lib/supabase/middleware.ts`: session refresh and page protection
+
+All tenant data queries must include `organizationId`. The only session-less API route is the agent trigger endpoint, which authenticates with a per-agent secret.
+
+## Core Data
+
+`prisma/schema.prisma` intentionally contains only organizations, users, agents, executions, execution messages, workflow steps/events, templates, integrations, and Klavis MCP connections. Executions carry the resumable model transcript, token counts, and the model that ran them.
