@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { apiLogger } from '@/lib/logger'
+import { composeInstructions } from '@/lib/skills/compose'
 
 export const runtime = 'nodejs'
 
@@ -35,7 +36,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({})) as { input?: unknown }
-    const input = typeof body.input === 'string' && body.input.trim() ? body.input.trim() : agent.objective
+    const skillIds: string[] = Array.isArray(metadata.skills) ? (metadata.skills as string[]) : []
+    const objectiveWithSkills = composeInstructions(agent.objective, skillIds)
+    const input = typeof body.input === 'string' && body.input.trim() ? body.input.trim() : objectiveWithSkills
 
     const user = await prisma.user.findFirst({
       where: { organizationId: agent.organizationId, isActive: true },

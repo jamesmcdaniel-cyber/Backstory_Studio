@@ -9,6 +9,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
+type SkillSummary = {
+  id: string
+  name: string
+  description: string
+  category: string
+  audience: string[]
+  tags: string[]
+  integrations: string[]
+}
+
 type AgentDraft = {
   title: string
   description: string
@@ -16,6 +26,7 @@ type AgentDraft = {
   model: string
   priority: string
   integrations: string[]
+  skills: string[]
   icon: string
   folder: string
   visibility: 'shared' | 'private'
@@ -35,6 +46,7 @@ const emptyDraft: AgentDraft = {
   model: 'claude-opus-4-8',
   priority: 'medium',
   integrations: [],
+  skills: [],
   icon: '🤖',
   folder: '',
   visibility: 'shared',
@@ -56,6 +68,14 @@ export function AgentConfigDialog({
 }) {
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
+  const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
+
+  useEffect(() => {
+    fetch('/api/skills')
+      .then((res) => res.json())
+      .then((data) => { if (data.success) setAvailableSkills(data.skills) })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     const source = editingAgent || template
@@ -64,6 +84,7 @@ export function AgentConfigDialog({
       ...source,
       instructions: source.instructions || source.objective || '',
       integrations: source.integrations || [],
+      skills: source.skills || [],
       icon: source.icon || emptyDraft.icon,
       folder: source.folder || '',
       visibility: source.visibility || 'shared',
@@ -187,6 +208,38 @@ export function AgentConfigDialog({
               onCheckedChange={(isActive) => setDraft({ ...draft, schedule: { ...draft.schedule, isActive } })}
             />
           </div>
+          {availableSkills.length > 0 && (
+            <div>
+              <Label>Skills</Label>
+              <p className="text-xs text-muted-foreground mb-2">Attach instruction packs that extend this agent at run time.</p>
+              <div className="flex flex-wrap gap-2">
+                {availableSkills.map((skill) => {
+                  const selected = draft.skills.includes(skill.id)
+                  return (
+                    <button
+                      key={skill.id}
+                      type="button"
+                      title={skill.description}
+                      onClick={() => {
+                        const next = selected
+                          ? draft.skills.filter((id) => id !== skill.id)
+                          : [...draft.skills, skill.id]
+                        setDraft({ ...draft, skills: next })
+                      }}
+                      className={[
+                        'rounded-full border px-3 py-1 text-xs transition-colors',
+                        selected
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
+                      ].join(' ')}
+                    >
+                      {skill.name}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           <Button className="w-full" disabled={saving || !draft.title || !draft.instructions} onClick={submit}>
             {saving ? 'Saving...' : editingAgent ? 'Save agent' : 'Create agent'}
           </Button>
