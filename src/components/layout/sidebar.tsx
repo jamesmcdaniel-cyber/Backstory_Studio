@@ -11,6 +11,7 @@ import {
   ChevronsUpDown,
   FileText,
   Folder,
+  Loader2,
   Lock,
   LogOut,
   Play,
@@ -19,6 +20,7 @@ import {
   Search,
   Trash2,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { CommandPalette } from '@/components/search/command-palette'
 import { NotificationBell } from '@/components/notifications/notification-bell'
 import { Button } from '@/components/ui/button'
@@ -69,6 +71,7 @@ export function Sidebar() {
   const [usage, setUsage] = useState<Usage | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [dragOver, setDragOver] = useState<string | null>(null)
+  const [runningId, setRunningId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const [agentResponse, usageResponse, orgResponse] = await Promise.all([
@@ -149,13 +152,28 @@ export function Sidebar() {
   }
 
   const runAgent = async (agent: Agent) => {
-    await fetch(`/api/agents/${agent.id}/execute`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: agent.instructions }),
-    })
-    notifyAgentsChanged()
-    router.push('/dashboard')
+    setRunningId(agent.id)
+    try {
+      const res = await fetch(`/api/agents/${agent.id}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        if (data.result?.status === 'waiting_for_input') {
+          toast(`${agent.title} needs your input`)
+        } else {
+          toast.success(`${agent.title} ran`)
+        }
+        notifyAgentsChanged()
+        router.push('/dashboard')
+      } else {
+        toast.error(data.error || 'Run failed')
+      }
+    } finally {
+      setRunningId(null)
+    }
   }
 
   const deleteAgent = async (agent: Agent) => {
@@ -197,8 +215,8 @@ export function Sidebar() {
         {agent.title}
       </button>
       <div className="hidden gap-0.5 group-hover:flex">
-        <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => runAgent(agent)} aria-label="Run agent">
-          <Play className="h-3 w-3" />
+        <Button size="icon" variant="ghost" className="h-6 w-6" disabled={runningId === agent.id} onClick={() => runAgent(agent)} aria-label="Run agent">
+          {runningId === agent.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
         </Button>
         <Button size="icon" variant="ghost" className="h-6 w-6 text-red-600" onClick={() => deleteAgent(agent)} aria-label="Delete agent">
           <Trash2 className="h-3 w-3" />

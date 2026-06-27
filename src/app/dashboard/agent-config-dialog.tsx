@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { Loader2, Play } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -57,14 +58,18 @@ export function AgentConfigDialog({
   open,
   onOpenChange,
   onCreateAgent,
+  onRunAgent,
   editingAgent,
   template,
+  runningId,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   onCreateAgent: (draft: AgentDraft) => Promise<void> | void
+  onRunAgent?: (agent: any) => Promise<void> | void
   editingAgent?: any
   template?: any
+  runningId?: string | null
 }) {
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
@@ -240,9 +245,24 @@ export function AgentConfigDialog({
               </div>
             </div>
           )}
-          <Button className="w-full" disabled={saving || !draft.title || !draft.instructions} onClick={submit}>
-            {saving ? 'Saving...' : editingAgent ? 'Save agent' : 'Create agent'}
-          </Button>
+          <div className="flex gap-2">
+            {editingAgent && onRunAgent && (
+              <Button
+                variant="outline"
+                disabled={runningId === editingAgent.id}
+                onClick={() => onRunAgent(editingAgent)}
+                className="shrink-0"
+              >
+                {runningId === editingAgent.id
+                  ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  : <Play className="mr-1.5 h-4 w-4" />}
+                Run
+              </Button>
+            )}
+            <Button className="flex-1" disabled={saving || !draft.title || !draft.instructions} onClick={submit}>
+              {saving ? 'Saving...' : editingAgent ? 'Save agent' : 'Create agent'}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

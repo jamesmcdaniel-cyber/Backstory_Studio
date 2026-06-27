@@ -90,6 +90,7 @@ function AgentHQ() {
   const [replying, setReplying] = useState(false)
   const [describe, setDescribe] = useState('')
   const [building, setBuilding] = useState(false)
+  const [runningId, setRunningId] = useState<string | null>(null)
   const [authError, setAuthError] = useState<string | null>(null)
   const [authStatus, setAuthStatus] = useState<number | null>(null)
 
@@ -231,6 +232,40 @@ function AgentHQ() {
       await load()
     } finally {
       setBuilding(false)
+    }
+  }
+
+  const runAgent = async (agent: Agent) => {
+    setRunningId(agent.id)
+    try {
+      const res = await fetch(`/api/agents/${agent.id}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        if (data.result?.status === 'waiting_for_input') {
+          toast(`${agent.title} needs your input`)
+        } else {
+          toast.success(`${agent.title} ran`)
+        }
+        const newExecutionId: string | undefined = data.executionId
+        // Refresh activities; load() updates the activities state internally and
+        // already selects the first item — override to open the new execution.
+        await load()
+        if (newExecutionId) {
+          setActivities((prev) => {
+            const found = prev.find((a) => a.id === newExecutionId)
+            if (found) setSelectedRun(found)
+            return prev
+          })
+        }
+      } else {
+        toast.error(data.error || 'Run failed')
+      }
+    } finally {
+      setRunningId(null)
     }
   }
 
@@ -440,7 +475,9 @@ function AgentHQ() {
         open={showAgentDialog}
         onOpenChange={setShowAgentDialog}
         onCreateAgent={saveAgent}
+        onRunAgent={editingAgent ? runAgent : undefined}
         editingAgent={editingAgent}
+        runningId={runningId}
       />
     </DashboardLayout>
   )
