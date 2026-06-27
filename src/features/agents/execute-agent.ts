@@ -1,6 +1,7 @@
 import type { Job } from 'bullmq'
 import { prisma } from '@/lib/prisma'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
+import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { notify } from '@/lib/notifications/service'
 import {
   createModelRunner,
@@ -19,11 +20,17 @@ export type AgentExecutionJob = {
   reply?: string
 }
 
+// Minimal interface that both KlavisClient and BackstoryMcpClient satisfy,
+// so ToolBinding.client can hold either without casting.
+interface McpToolClient {
+  executeTool(serverUrl: string, name: string, args: Record<string, unknown>): Promise<any>
+}
+
 type ToolBinding = {
   provider: string
   serverUrl: string
   toolName: string
-  client: KlavisClient
+  client: McpToolClient
 }
 
 type PendingQuestion = {
@@ -61,35 +68,57 @@ function metadataOf(value: unknown): Record<string, any> {
 }
 
 async function loadTools(organizationId: string, providers: string[]) {
-  if (!process.env.KLAVIS_API_KEY || providers.length === 0) {
-    return { tools: [] as ToolDefinition[], bindings: new Map<string, ToolBinding>() }
-  }
-
-  const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'sprintiq' })
-  const agents = await prisma.mCPAgent.findMany({
-    where: {
-      organizationId,
-      isActive: true,
-      agentType: { in: providers.map((provider) => provider.toUpperCase()) },
-    },
-  })
-
   const tools: ToolDefinition[] = []
   const bindings = new Map<string, ToolBinding>()
-  for (const agent of agents) {
-    const provider = String(agent.agentType).toLowerCase()
-    const available = await client.getServerTools(agent.mcpServerUrl)
+
+  // ---- Klavis-managed MCP servers ----------------------------------------
+  const hasBackstoryProvider = providers.some((p) => /backstory/i.test(p))
+  // Non-Backstory providers that Klavis handles
+  const klavisProviders = providers.filter((p) => !/backstory/i.test(p))
+
+  if (process.env.KLAVIS_API_KEY && klavisProviders.length > 0) {
+    const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'sprintiq' })
+    const agents = await prisma.mCPAgent.findMany({
+      where: {
+        organizationId,
+        isActive: true,
+        agentType: { in: klavisProviders.map((provider) => provider.toUpperCase()) },
+      },
+    })
+
+    for (const agent of agents) {
+      const provider = String(agent.agentType).toLowerCase()
+      const available = await client.getServerTools(agent.mcpServerUrl)
+      for (const tool of available.slice(0, 20)) {
+        const name = toolName(provider, tool.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, { provider, serverUrl: agent.mcpServerUrl, toolName: tool.name, client })
+        tools.push({
+          name,
+          description: tool.description || `${tool.name} via ${provider}`,
+          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+        })
+      }
+    }
+  }
+
+  // ---- Backstory MCP (OAuth 2.0 client-credentials or static bearer) ------
+  if (hasBackstoryProvider && backstoryMcpConfigured()) {
+    const backstoryUrl = process.env.BACKSTORY_MCP_URL!
+    const backstoryClient = new BackstoryMcpClient()
+    const available = await backstoryClient.getServerTools(backstoryUrl)
     for (const tool of available.slice(0, 20)) {
-      const name = toolName(provider, tool.name)
+      const name = toolName('backstory', tool.name)
       if (bindings.has(name)) continue
-      bindings.set(name, { provider, serverUrl: agent.mcpServerUrl, toolName: tool.name, client })
+      bindings.set(name, { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient })
       tools.push({
         name,
-        description: tool.description || `${tool.name} via ${provider}`,
+        description: tool.description || `${tool.name} via backstory`,
         inputSchema: tool.inputSchema || { type: 'object', properties: {} },
       })
     }
   }
+
   return { tools: tools.slice(0, 64), bindings }
 }
 

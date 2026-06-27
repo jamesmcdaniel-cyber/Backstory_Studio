@@ -1,0 +1,198 @@
+/**
+ * Backstory MCP client
+ *
+ * Authenticates via either:
+ *   a) Static bearer token: BACKSTORY_MCP_TOKEN
+ *   b) OAuth 2.0 client-credentials:
+ *        BACKSTORY_MCP_TOKEN_URL, BACKSTORY_MCP_CLIENT_ID,
+ *        BACKSTORY_MCP_CLIENT_SECRET, BACKSTORY_MCP_SCOPES (optional)
+ *
+ * All env vars are read at call time (never at module load) so that the
+ * Next.js build succeeds even when they are not set.
+ */
+
+// ---------------------------------------------------------------------------
+// Configuration check
+// ---------------------------------------------------------------------------
+
+export function backstoryMcpConfigured(): boolean {
+  const url = process.env.BACKSTORY_MCP_URL
+  if (!url) return false
+
+  const hasStaticToken = Boolean(process.env.BACKSTORY_MCP_TOKEN)
+  const hasClientCreds =
+    Boolean(process.env.BACKSTORY_MCP_TOKEN_URL) &&
+    Boolean(process.env.BACKSTORY_MCP_CLIENT_ID) &&
+    Boolean(process.env.BACKSTORY_MCP_CLIENT_SECRET)
+
+  return hasStaticToken || hasClientCreds
+}
+
+// ---------------------------------------------------------------------------
+// Token cache (module scope — one cache per process / worker)
+// ---------------------------------------------------------------------------
+
+interface CachedToken {
+  value: string
+  expiresAt: number // ms since epoch
+}
+
+let tokenCache: CachedToken | null = null
+
+async function getAccessToken(): Promise<string> {
+  const staticToken = process.env.BACKSTORY_MCP_TOKEN
+  if (staticToken) return staticToken
+
+  const tokenUrl = process.env.BACKSTORY_MCP_TOKEN_URL
+  const clientId = process.env.BACKSTORY_MCP_CLIENT_ID
+  const clientSecret = process.env.BACKSTORY_MCP_CLIENT_SECRET
+  const scopes = process.env.BACKSTORY_MCP_SCOPES
+
+  if (!tokenUrl || !clientId || !clientSecret) {
+    throw new Error(
+      'Backstory MCP: no auth configured. Set BACKSTORY_MCP_TOKEN or ' +
+        'BACKSTORY_MCP_TOKEN_URL + BACKSTORY_MCP_CLIENT_ID + BACKSTORY_MCP_CLIENT_SECRET.',
+    )
+  }
+
+  // Return cached token if still valid (with 60-second buffer)
+  const now = Date.now()
+  if (tokenCache && tokenCache.expiresAt - now > 60_000) {
+    return tokenCache.value
+  }
+
+  const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret })
+  if (scopes) body.set('scope', scopes)
+
+  // Send both body credentials and HTTP Basic auth — different OAuth servers
+  // require different styles and including both is safe.
+  const basicCredentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
+
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${basicCredentials}`,
+    },
+    body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
+  })
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(`Backstory MCP token request failed (${response.status}): ${detail.slice(0, 200)}`)
+  }
+
+  const data = (await response.json()) as { access_token?: string; expires_in?: number }
+  if (!data.access_token) {
+    throw new Error('Backstory MCP token response did not include access_token')
+  }
+
+  const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 3600
+  tokenCache = { value: data.access_token, expiresAt: now + expiresIn * 1000 }
+
+  return tokenCache.value
+}
+
+// ---------------------------------------------------------------------------
+// MCP JSON-RPC helpers
+// ---------------------------------------------------------------------------
+
+// Backstory MCP may use StreamableHTTP (SSE) or plain JSON — handle both.
+function parseRpc(text: string): any {
+  const trimmed = text.trim()
+  if (!trimmed) return { result: null }
+  if (trimmed.startsWith('{')) return JSON.parse(trimmed)
+  let last: any = { result: null }
+  for (const line of trimmed.split('\n')) {
+    const l = line.trim()
+    if (!l.startsWith('data:')) continue
+    const payload = l.slice(5).trim()
+    if (!payload || payload === '[DONE]') continue
+    try {
+      last = JSON.parse(payload)
+    } catch {
+      /* keep scanning */
+    }
+  }
+  return last
+}
+
+// ---------------------------------------------------------------------------
+// BackstoryMcpClient
+// ---------------------------------------------------------------------------
+
+export class BackstoryMcpClient {
+  private readonly readyServers = new Set<string>()
+  private readonly sessionIds = new Map<string, string>()
+  private rpcId = 1
+
+  private async rpc(serverUrl: string, method: string, params?: Record<string, unknown>, notification = false) {
+    const token = await getAccessToken()
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    }
+
+    const sessionId = this.sessionIds.get(serverUrl)
+    if (sessionId) headers['Mcp-Session-Id'] = sessionId
+
+    const response = await fetch(serverUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        ...(!notification ? { id: this.rpcId++ } : {}),
+        method,
+        ...(params ? { params } : {}),
+      }),
+      signal: AbortSignal.timeout(30_000),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Backstory MCP server returned ${response.status} for method ${method}`)
+    }
+
+    // Capture session id from initialize response (if provided)
+    if (method === 'initialize') {
+      const sid = response.headers.get('Mcp-Session-Id')
+      if (sid) this.sessionIds.set(serverUrl, sid)
+    }
+
+    if (notification) return { result: null }
+    return parseRpc(await response.text())
+  }
+
+  private async initialize(serverUrl: string) {
+    if (this.readyServers.has(serverUrl)) return
+    const response = await this.rpc(serverUrl, 'initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: { tools: {} },
+      clientInfo: { name: 'BackstoryStudio', version: '1.0.0' },
+    })
+    if (response.error) throw new Error(response.error.message || 'Unable to initialize Backstory MCP server')
+    await this.rpc(serverUrl, 'notifications/initialized', undefined, true)
+    this.readyServers.add(serverUrl)
+  }
+
+  async getServerTools(serverUrl: string): Promise<{ name: string; description?: string; inputSchema?: any }[]> {
+    await this.initialize(serverUrl)
+    const response = await this.rpc(serverUrl, 'tools/list')
+    if (response.error) throw new Error(response.error.message || 'Unable to list Backstory MCP tools')
+    const tools = response.result?.tools || response.result?.items || []
+    return tools.map((tool: any) => ({
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema || tool.input_schema || tool.parameters || { type: 'object', properties: {} },
+    }))
+  }
+
+  async executeTool(serverUrl: string, name: string, args: Record<string, unknown>): Promise<any> {
+    await this.initialize(serverUrl)
+    const response = await this.rpc(serverUrl, 'tools/call', { name, arguments: args })
+    if (response.error) throw new Error(response.error.message || `Tool ${name} failed`)
+    return response.result
+  }
+}
