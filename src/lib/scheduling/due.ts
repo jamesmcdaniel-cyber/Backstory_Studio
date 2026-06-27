@@ -149,7 +149,30 @@ export function isDue(
 
     case 'cron': {
       if (!schedule.cron) return false
-      return matchesCron(schedule.cron, schedule.timezone || 'UTC', now)
+      const tz = schedule.timezone || 'UTC'
+
+      // Catch-up based: the agent is due if ANY cron-matching minute exists in
+      // the window (since, now]. This means an infrequent dispatch tick still
+      // fires a cron like "0 9 * * *" even when the tick minute is not 09:00.
+      //
+      // since = lastExecutedAt ?? (now - 25h). Clamp the scan so we never
+      // iterate more than 400 days of minutes (cap `since` to now - 400 days).
+      const MINUTE_MS = 60_000
+      const DEFAULT_LOOKBACK_MS = 25 * 60 * 60 * 1000 // 25h
+      const MAX_LOOKBACK_MS = 400 * 24 * 60 * 60 * 1000 // 400 days
+
+      const sinceMs = lastExecutedAt ? lastExecutedAt.getTime() : now.getTime() - DEFAULT_LOOKBACK_MS
+      const flooredSince = Math.max(sinceMs, now.getTime() - MAX_LOOKBACK_MS)
+
+      // Iterate minute-by-minute from `now` backward to (but not including)
+      // `since`, truncating seconds/millis. `(since, now]` is half-open at the
+      // start, so we stop once the candidate minute is <= since.
+      let cursor = Math.floor(now.getTime() / MINUTE_MS) * MINUTE_MS
+      while (cursor > flooredSince) {
+        if (matchesCron(schedule.cron, tz, new Date(cursor))) return true
+        cursor -= MINUTE_MS
+      }
+      return false
     }
 
     default:

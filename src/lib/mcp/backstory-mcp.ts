@@ -37,12 +37,16 @@ interface CachedToken {
   expiresAt: number // ms since epoch
 }
 
+// Max token lifetime we will honor, regardless of what the server reports, so a
+// bogus/huge expires_in can't pin a stale token forever.
+const MAX_TOKEN_TTL_S = 24 * 60 * 60 // 24h
+
 let tokenCache: CachedToken | null = null
+// Coalesce concurrent refreshes: while one fetch is in flight, other callers
+// share the same Promise instead of each kicking off their own token request.
+let inFlightToken: Promise<string> | null = null
 
-async function getAccessToken(): Promise<string> {
-  const staticToken = process.env.BACKSTORY_MCP_TOKEN
-  if (staticToken) return staticToken
-
+async function fetchAccessToken(): Promise<string> {
   const tokenUrl = process.env.BACKSTORY_MCP_TOKEN_URL
   const clientId = process.env.BACKSTORY_MCP_CLIENT_ID
   const clientSecret = process.env.BACKSTORY_MCP_CLIENT_SECRET
@@ -53,12 +57,6 @@ async function getAccessToken(): Promise<string> {
       'Backstory MCP: no auth configured. Set BACKSTORY_MCP_TOKEN or ' +
         'BACKSTORY_MCP_TOKEN_URL + BACKSTORY_MCP_CLIENT_ID + BACKSTORY_MCP_CLIENT_SECRET.',
     )
-  }
-
-  // Return cached token if still valid (with 60-second buffer)
-  const now = Date.now()
-  if (tokenCache && tokenCache.expiresAt - now > 60_000) {
-    return tokenCache.value
   }
 
   const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret })
@@ -79,8 +77,9 @@ async function getAccessToken(): Promise<string> {
   })
 
   if (!response.ok) {
-    const detail = await response.text().catch(() => '')
-    throw new Error(`Backstory MCP token request failed (${response.status}): ${detail.slice(0, 200)}`)
+    // M5 — never echo the raw upstream response body; it may carry sensitive
+    // detail. Log only the status code with a generic message.
+    throw new Error(`Backstory MCP token request failed with status ${response.status}`)
   }
 
   const data = (await response.json()) as { access_token?: string; expires_in?: number }
@@ -88,10 +87,34 @@ async function getAccessToken(): Promise<string> {
     throw new Error('Backstory MCP token response did not include access_token')
   }
 
-  const expiresIn = typeof data.expires_in === 'number' ? data.expires_in : 3600
-  tokenCache = { value: data.access_token, expiresAt: now + expiresIn * 1000 }
+  // I6 — clamp expires_in to a sane maximum before computing the expiry.
+  const rawExpiresIn = typeof data.expires_in === 'number' && data.expires_in > 0 ? data.expires_in : 3600
+  const expiresIn = Math.min(rawExpiresIn, MAX_TOKEN_TTL_S)
+  tokenCache = { value: data.access_token, expiresAt: Date.now() + expiresIn * 1000 }
 
   return tokenCache.value
+}
+
+async function getAccessToken(): Promise<string> {
+  const staticToken = process.env.BACKSTORY_MCP_TOKEN
+  if (staticToken) return staticToken
+
+  // Return cached token if still valid (with 60-second buffer)
+  const now = Date.now()
+  if (tokenCache && tokenCache.expiresAt - now > 60_000) {
+    return tokenCache.value
+  }
+
+  // I6 — coalesce: if a refresh is already running, await it instead of
+  // launching another. Clear the in-flight handle on both success and failure.
+  if (inFlightToken) return inFlightToken
+
+  inFlightToken = fetchAccessToken()
+  try {
+    return await inFlightToken
+  } finally {
+    inFlightToken = null
+  }
 }
 
 // ---------------------------------------------------------------------------

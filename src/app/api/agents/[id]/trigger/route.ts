@@ -40,6 +40,9 @@ export async function POST(request: NextRequest) {
     const objectiveWithSkills = composeInstructions(agent.objective, skillIds)
     const input = typeof body.input === 'string' && body.input.trim() ? body.input.trim() : objectiveWithSkills
 
+    // I3 — AgentTask has no creator/owner field (only organizationId), so
+    // triggered runs are attributed to the first active user in the org. If an
+    // owner field is later added, attribute to that user instead.
     const user = await prisma.user.findFirst({
       where: { organizationId: agent.organizationId, isActive: true },
       orderBy: { createdAt: 'asc' },
@@ -76,7 +79,8 @@ export async function POST(request: NextRequest) {
           where: { id: execution.id },
           data: {
             status: 'failed',
-            error: error instanceof Error ? error.message : String(error),
+            // M5 — cap persisted error strings so they can't bloat the row.
+            error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
             completedAt: new Date(),
           },
         })

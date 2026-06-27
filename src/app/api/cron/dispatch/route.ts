@@ -1,17 +1,16 @@
 /**
  * /api/cron/dispatch — Vercel Cron handler
  *
- * Fires every 15 minutes (see vercel.json). For each active agentTask whose
- * schedule is due, creates an agentExecution row and runs it inline.
+ * Invoked by the Vercel cron entry (see vercel.json). Scheduling is catch-up
+ * based, not tick-aligned: for each active agentTask, `isDue` checks whether
+ * any scheduled minute has elapsed since the agent's last run (e.g. a cron of
+ * "0 9 * * *" still fires even if the dispatch tick lands at 13:00, not 09:00).
+ * For every due agent it creates an agentExecution row and runs it inline.
  *
- * Auth: CRON_SECRET env var MUST be set. Requests must carry:
+ * Auth (fail closed): CRON_SECRET env var MUST be set. If it is not configured
+ * the handler returns 503. When set, requests must carry:
  *   Authorization: Bearer <CRON_SECRET>
- * (Vercel sets this header automatically when the secret is configured in the
- * project settings alongside the cron entry.)
- *
- * If CRON_SECRET is not set the handler fails closed with 401, unless the
- * request comes from Vercel's internal cron infrastructure (x-vercel-cron
- * header). In production, always set CRON_SECRET.
+ * compared in constant time. There is no header-only bypass in any environment.
  */
 
 import { timingSafeEqual } from 'crypto'
@@ -26,38 +25,61 @@ export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 const MAX_AGENTS_PER_TICK = 25
+const STUCK_RUN_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+const MAX_ERROR_LENGTH = 300
 
-function isAuthorized(request: Request): boolean {
+function capError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.slice(0, MAX_ERROR_LENGTH)
+}
+
+/**
+ * Fail-closed auth. CRON_SECRET must be configured; otherwise the handler is
+ * unavailable. When set, the request must present a matching bearer token,
+ * compared in constant time over equal-length buffers. No header-only bypass.
+ *
+ * Returns null when authorized, or a Response to short-circuit with.
+ */
+function checkAuthorized(request: Request): Response | null {
   const secret = process.env.CRON_SECRET
-
   if (!secret) {
-    // Fail closed unless Vercel's internal cron header is present
-    const isVercelCron = request.headers.get('x-vercel-cron') === '1'
-    if (isVercelCron) {
-      // Allow only if in a non-production environment (dev/preview)
-      // In production, CRON_SECRET must always be set.
-      return process.env.NODE_ENV !== 'production'
-    }
-    return false
+    return Response.json(
+      { success: false, error: 'CRON_SECRET not configured' },
+      { status: 503 },
+    )
   }
 
   const authHeader = request.headers.get('authorization') || ''
   const provided = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : ''
-  if (!provided) return false
 
-  // Constant-time comparison to prevent timing attacks
   const a = Buffer.from(provided)
   const b = Buffer.from(secret)
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
+  const authorized = a.length === b.length && timingSafeEqual(a, b)
+  if (!authorized) {
+    return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+  return null
 }
 
 export async function GET(request: Request) {
-  if (!isAuthorized(request)) {
-    return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+  const unauthorized = checkAuthorized(request)
+  if (unauthorized) return unauthorized
 
   try {
+    // I5 — reap stuck runs: any execution still "running" past the time limit
+    // is marked failed so it doesn't pin resources or block reporting.
+    await prisma.agentExecution.updateMany({
+      where: {
+        status: 'running',
+        startedAt: { lt: new Date(Date.now() - STUCK_RUN_TIMEOUT_MS) },
+      },
+      data: {
+        status: 'failed',
+        error: 'Run exceeded time limit',
+        completedAt: new Date(),
+      },
+    })
+
     // Load all active agents (capped at 200 to avoid huge fetches)
     const agents = await prisma.agentTask.findMany({
       where: { status: 'ACTIVE' },
@@ -79,77 +101,92 @@ export async function GET(request: Request) {
     const ranIds: string[] = []
 
     for (const agent of dueAgents) {
-      const metadata =
-        agent.metadata && typeof agent.metadata === 'object' && !Array.isArray(agent.metadata)
-          ? (agent.metadata as Record<string, unknown>)
-          : {}
+      // I2 — advance lastExecutedAt BEFORE running so that even a persistently
+      // failing (or throwing) agent does not re-fire on every tick. The whole
+      // per-agent body is wrapped so one agent can never abort the tick.
+      try {
+        await prisma.agentTask.update({
+          where: { id: agent.id },
+          data: {
+            lastExecutedAt: new Date(),
+            executionCount: { increment: 1 },
+          },
+        })
 
-      // Find the first active user in the org
-      const user = await prisma.user.findFirst({
-        where: { organizationId: agent.organizationId, isActive: true },
-        orderBy: { createdAt: 'asc' },
-      })
+        const metadata =
+          agent.metadata && typeof agent.metadata === 'object' && !Array.isArray(agent.metadata)
+            ? (agent.metadata as Record<string, unknown>)
+            : {}
 
-      if (!user) {
-        apiLogger.error('cron/dispatch: no active user found, skipping agent', {
+        // I3 — AgentTask has no creator/owner field (only organizationId), so
+        // scheduled runs are attributed to the first active user in the org.
+        // If an owner field is later added, attribute to that user instead.
+        const user = await prisma.user.findFirst({
+          where: { organizationId: agent.organizationId, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        })
+
+        if (!user) {
+          apiLogger.error('cron/dispatch: no active user found, skipping agent', {
+            agentId: agent.id,
+            organizationId: agent.organizationId,
+          })
+          continue
+        }
+
+        const skillIds: string[] = Array.isArray(metadata.skills)
+          ? (metadata.skills as string[])
+          : []
+        const input = composeInstructions(agent.objective, skillIds)
+
+        // Create the execution row in pending state
+        const execution = await prisma.agentExecution.create({
+          data: {
+            agentType: agent.agentType,
+            agentTaskId: agent.id,
+            status: 'pending',
+            input: { prompt: input },
+            trigger: { type: 'schedule' },
+            metadata: { title: (metadata.title as string) || agent.description },
+            userId: user.id,
+            organizationId: agent.organizationId,
+          },
+        })
+
+        try {
+          await runAgentExecution({
+            executionId: execution.id,
+            agentId: agent.id,
+            organizationId: agent.organizationId,
+            userId: user.id,
+            input,
+          })
+          ranIds.push(agent.id)
+        } catch (error) {
+          apiLogger.error('cron/dispatch: agent execution failed', {
+            agentId: agent.id,
+            executionId: execution.id,
+            error: capError(error),
+          })
+          await prisma.agentExecution.update({
+            where: { id: execution.id },
+            data: {
+              status: 'failed',
+              error: capError(error),
+              completedAt: new Date(),
+            },
+          })
+        }
+      } catch (error) {
+        // Any failure in the per-agent body (user lookup, execution row
+        // creation, etc.) is isolated so the tick continues with other agents.
+        apiLogger.error('cron/dispatch: agent dispatch failed, skipping', {
           agentId: agent.id,
           organizationId: agent.organizationId,
+          error: capError(error),
         })
         continue
       }
-
-      const skillIds: string[] = Array.isArray(metadata.skills)
-        ? (metadata.skills as string[])
-        : []
-      const input = composeInstructions(agent.objective, skillIds)
-
-      // Create the execution row in pending state
-      const execution = await prisma.agentExecution.create({
-        data: {
-          agentType: agent.agentType,
-          agentTaskId: agent.id,
-          status: 'pending',
-          input: { prompt: input },
-          trigger: { type: 'schedule' },
-          metadata: { title: (metadata.title as string) || agent.description },
-          userId: user.id,
-          organizationId: agent.organizationId,
-        },
-      })
-
-      try {
-        await runAgentExecution({
-          executionId: execution.id,
-          agentId: agent.id,
-          organizationId: agent.organizationId,
-          userId: user.id,
-          input,
-        })
-        ranIds.push(agent.id)
-      } catch (error) {
-        apiLogger.error('cron/dispatch: agent execution failed', {
-          agentId: agent.id,
-          executionId: execution.id,
-          error: error instanceof Error ? error.message : String(error),
-        })
-        await prisma.agentExecution.update({
-          where: { id: execution.id },
-          data: {
-            status: 'failed',
-            error: error instanceof Error ? error.message : String(error),
-            completedAt: new Date(),
-          },
-        })
-      }
-
-      // Update the agent's lastExecutedAt and increment executionCount
-      await prisma.agentTask.update({
-        where: { id: agent.id },
-        data: {
-          lastExecutedAt: new Date(),
-          executionCount: { increment: 1 },
-        },
-      })
     }
 
     return Response.json({ success: true, due: dueCount, ran: ranIds })

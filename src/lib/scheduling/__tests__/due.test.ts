@@ -233,10 +233,12 @@ describe('isDue', () => {
     assert.equal(isDue(schedule, null, now), true)
   })
 
-  // 13. cron — now does NOT match
-  it('cron: returns false when now does not match the cron expression', () => {
-    // "0 3 * * *" = 03:00 every day. Use 10:00.
+  // 13. cron — no matching minute in the catch-up window → NOT due
+  it('cron: returns false when no cron-matching minute is in the window', () => {
+    // "0 3 * * *" = 03:00 every day. now = 10:00, last ran at 04:00 today
+    // (after the 03:00 fire) so no matching minute exists in (04:00, 10:00].
     const now = nowAtTime(10, 0, 'UTC')
+    const lastExecutedAt = nowAtTime(4, 0, 'UTC')
     const schedule: AgentSchedule = {
       type: 'cron',
       time: '',
@@ -244,6 +246,38 @@ describe('isDue', () => {
       timezone: 'UTC',
       isActive: true,
     }
-    assert.equal(isDue(schedule, null, now), false)
+    assert.equal(isDue(schedule, lastExecutedAt, now), false)
+  })
+
+  // 14. cron catch-up — "0 9 * * *" with lastExecutedAt = yesterday and
+  //     now = today 13:00 should return true (the 09:00 minute is in the
+  //     (since, now] window even though now itself is not 09:00).
+  it('cron: catches up when a matching minute is in the window since last run', () => {
+    const now = nowAtTime(13, 0, 'UTC')
+    const lastExecutedAt = daysAgo(1)
+    const schedule: AgentSchedule = {
+      type: 'cron',
+      time: '',
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      isActive: true,
+    }
+    assert.equal(isDue(schedule, lastExecutedAt, now), true)
+  })
+
+  // 15. cron catch-up — same "0 9 * * *" cron, but lastExecutedAt = today 10:00
+  //     (after the 09:00 fire). No matching minute exists in (10:00, 13:00],
+  //     so it should return false.
+  it('cron: does not re-fire when last run was after the scheduled minute', () => {
+    const now = nowAtTime(13, 0, 'UTC')
+    const lastExecutedAt = nowAtTime(10, 0, 'UTC')
+    const schedule: AgentSchedule = {
+      type: 'cron',
+      time: '',
+      cron: '0 9 * * *',
+      timezone: 'UTC',
+      isActive: true,
+    }
+    assert.equal(isDue(schedule, lastExecutedAt, now), false)
   })
 })

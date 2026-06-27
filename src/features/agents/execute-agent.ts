@@ -1,5 +1,6 @@
 import type { Job } from 'bullmq'
 import { prisma } from '@/lib/prisma'
+import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { notify } from '@/lib/notifications/service'
@@ -88,33 +89,54 @@ async function loadTools(organizationId: string, providers: string[]) {
 
     for (const agent of agents) {
       const provider = String(agent.agentType).toLowerCase()
-      const available = await client.getServerTools(agent.mcpServerUrl)
-      for (const tool of available.slice(0, 20)) {
-        const name = toolName(provider, tool.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, { provider, serverUrl: agent.mcpServerUrl, toolName: tool.name, client })
-        tools.push({
-          name,
-          description: tool.description || `${tool.name} via ${provider}`,
-          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+      // C2 — a failing tool-discovery for one provider must not abort the run.
+      // Degrade gracefully: log + skip this provider, keep whatever else loaded.
+      try {
+        const available = await client.getServerTools(agent.mcpServerUrl)
+        for (const tool of available.slice(0, 20)) {
+          const name = toolName(provider, tool.name)
+          if (bindings.has(name)) continue
+          bindings.set(name, { provider, serverUrl: agent.mcpServerUrl, toolName: tool.name, client })
+          tools.push({
+            name,
+            description: tool.description || `${tool.name} via ${provider}`,
+            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+          })
+        }
+      } catch (error) {
+        apiLogger.warn('loadTools: Klavis tool discovery failed, skipping provider', {
+          provider,
+          organizationId,
+          error: error instanceof Error ? error.message : String(error),
         })
+        continue
       }
     }
   }
 
   // ---- Backstory MCP (OAuth 2.0 client-credentials or static bearer) ------
   if (hasBackstoryProvider && backstoryMcpConfigured()) {
-    const backstoryUrl = process.env.BACKSTORY_MCP_URL!
-    const backstoryClient = new BackstoryMcpClient()
-    const available = await backstoryClient.getServerTools(backstoryUrl)
-    for (const tool of available.slice(0, 20)) {
-      const name = toolName('backstory', tool.name)
-      if (bindings.has(name)) continue
-      bindings.set(name, { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient })
-      tools.push({
-        name,
-        description: tool.description || `${tool.name} via backstory`,
-        inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+    // C2 — isolate Backstory discovery so its failure degrades to fewer tools
+    // instead of aborting the run.
+    try {
+      const backstoryUrl = process.env.BACKSTORY_MCP_URL!
+      const backstoryClient = new BackstoryMcpClient()
+      const available = await backstoryClient.getServerTools(backstoryUrl)
+      for (const tool of available.slice(0, 20)) {
+        const name = toolName('backstory', tool.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient })
+        tools.push({
+          name,
+          description: tool.description || `${tool.name} via backstory`,
+          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+        })
+      }
+    } catch (error) {
+      apiLogger.warn('loadTools: Backstory MCP tool discovery failed, skipping provider', {
+        provider: 'backstory',
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
       })
     }
   }
@@ -387,7 +409,8 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       where: { id: execution.id },
       data: {
         status: 'failed',
-        error: message,
+        // M5 — cap persisted error strings so they can't bloat the row.
+        error: message.slice(0, 300),
         transcript: jsonValue(transcript),
         inputTokens: { increment: usage.inputTokens },
         outputTokens: { increment: usage.outputTokens },

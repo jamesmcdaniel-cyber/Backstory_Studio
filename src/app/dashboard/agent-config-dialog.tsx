@@ -40,6 +40,29 @@ type AgentDraft = {
   }
 }
 
+// ~10 common IANA timezones offered in the schedule picker.
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Berlin',
+  'Asia/Kolkata',
+  'Asia/Singapore',
+  'Australia/Sydney',
+] as const
+
+/** The browser's IANA timezone, falling back to UTC (e.g. during SSR). */
+function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
+
 const emptyDraft: AgentDraft = {
   title: '',
   description: '',
@@ -51,7 +74,7 @@ const emptyDraft: AgentDraft = {
   icon: '🤖',
   folder: '',
   visibility: 'shared',
-  schedule: { type: 'manual', timezone: 'UTC', isActive: false },
+  schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },
 }
 
 export function AgentConfigDialog({
@@ -94,7 +117,12 @@ export function AgentConfigDialog({
       folder: source.folder || '',
       visibility: source.visibility || 'shared',
       schedule: { ...emptyDraft.schedule, ...(source.schedule || {}) },
-    } : emptyDraft)
+    } : {
+      ...emptyDraft,
+      // When creating a fresh agent, default the schedule timezone to the
+      // browser's resolved zone so daily/weekly times match the user's clock.
+      schedule: { ...emptyDraft.schedule, timezone: browserTimezone() },
+    })
   }, [editingAgent, open, template])
 
   const submit = async () => {
@@ -185,6 +213,37 @@ export function AgentConfigDialog({
               </Select>
             </div>
           </div>
+          {(draft.schedule.type === 'daily' || draft.schedule.type === 'weekly') && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Time</Label>
+                <Input
+                  type="time"
+                  value={draft.schedule.time || '09:00'}
+                  onChange={(event) => setDraft({ ...draft, schedule: { ...draft.schedule, time: event.target.value } })}
+                />
+              </div>
+              <div>
+                <Label>Timezone</Label>
+                <Select
+                  value={draft.schedule.timezone}
+                  onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {/* Include the current zone first if it isn't one of the common ones,
+                        so a browser-detected zone outside the list still renders selected. */}
+                    {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
+                      <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
+                    )}
+                    {COMMON_TIMEZONES.map((tz) => (
+                      <SelectItem key={tz} value={tz}>{tz}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
           {draft.schedule.type === 'cron' && (
             <div>
               <Label>Cron expression</Label>
