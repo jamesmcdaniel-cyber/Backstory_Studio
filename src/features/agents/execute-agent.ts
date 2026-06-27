@@ -99,8 +99,8 @@ async function recordEvent(executionId: string, stepId: string | null, kind: str
   })
 }
 
-export async function executeAgentJob(job: Job<AgentExecutionJob>) {
-  const { agentId, organizationId, userId } = job.data
+export async function runAgentExecution(data: AgentExecutionJob) {
+  const { agentId, organizationId, userId } = data
   const agent = await prisma.agentTask.findFirst({
     where: { id: agentId, organizationId, status: 'ACTIVE' },
   })
@@ -110,18 +110,18 @@ export async function executeAgentJob(job: Job<AgentExecutionJob>) {
   const model = agentMetadata.model || DEFAULT_AGENT_MODEL
   const runner = createModelRunner(model)
 
-  const queuedExecution = job.data.executionId
+  const queuedExecution = data.executionId
     ? await prisma.agentExecution.findFirst({
         where: {
-          id: job.data.executionId,
+          id: data.executionId,
           agentTaskId: agentId,
           organizationId,
         },
       })
     : null
-  if (job.data.executionId && !queuedExecution) throw new Error('Queued execution does not match this tenant and agent')
+  if (data.executionId && !queuedExecution) throw new Error('Queued execution does not match this tenant and agent')
 
-  const resuming = Boolean(job.data.resume)
+  const resuming = Boolean(data.resume)
   if (resuming && !queuedExecution) throw new Error('Resume requested without an execution')
 
   let transcript: unknown[]
@@ -134,7 +134,7 @@ export async function executeAgentJob(job: Job<AgentExecutionJob>) {
       throw new Error('Execution is not waiting for input')
     }
     transcript = queuedExecution.transcript as unknown[]
-    const reply = job.data.reply?.trim() || 'The user did not provide an answer. Use your best judgment.'
+    const reply = data.reply?.trim() || 'The user did not provide an answer. Use your best judgment.'
     pendingResults = [
       ...(pending.collectedResults || []),
       { toolCallId: pending.toolCallId, content: reply },
@@ -147,7 +147,7 @@ export async function executeAgentJob(job: Job<AgentExecutionJob>) {
     }
     await recordEvent(queuedExecution.id, pending.stepId || null, 'user.replied', { answer: reply })
   } else {
-    transcript = runner.start(job.data.input || agent.objective)
+    transcript = runner.start(data.input || agent.objective)
   }
 
   const execution = queuedExecution
@@ -167,7 +167,7 @@ export async function executeAgentJob(job: Job<AgentExecutionJob>) {
           agentTaskId: agent.id,
           status: 'running',
           model: runner.model,
-          input: { prompt: job.data.input || agent.objective },
+          input: { prompt: data.input || agent.objective },
           trigger: { type: 'schedule' },
           metadata: { title: agentMetadata.title || agent.description },
           userId,
@@ -177,7 +177,7 @@ export async function executeAgentJob(job: Job<AgentExecutionJob>) {
 
   if (!resuming) {
     await prisma.executionMessage.create({
-      data: { executionId: execution.id, role: 'user', content: job.data.input || agent.objective },
+      data: { executionId: execution.id, role: 'user', content: data.input || agent.objective },
     })
   }
 
@@ -378,4 +378,8 @@ export async function executeAgentJob(job: Job<AgentExecutionJob>) {
     })
     throw error
   }
+}
+
+export async function executeAgentJob(job: Job<AgentExecutionJob>) {
+  return runAgentExecution(job.data)
 }

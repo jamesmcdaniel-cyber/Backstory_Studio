@@ -4,8 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { apiLogger } from '@/lib/logger'
 import { composeInstructions } from '@/lib/skills/compose'
+import { runAgentExecution } from '@/features/agents/execute-agent'
+import { inlineExecution } from '@/lib/queue/execution-mode'
 
 export const runtime = 'nodejs'
+export const maxDuration = 300
 
 function secretsMatch(provided: string, expected: string) {
   const a = Buffer.from(provided)
@@ -17,9 +20,6 @@ function secretsMatch(provided: string, expected: string) {
 // Authenticated by the per-agent secret instead of a Supabase session.
 export async function POST(request: NextRequest) {
   try {
-    if (!workersEnabled) {
-      return NextResponse.json({ success: false, error: 'Agent worker is disabled' }, { status: 503 })
-    }
     const id = request.nextUrl.pathname.split('/').at(-2)
     const provided =
       request.headers.get('x-trigger-secret') ||
@@ -61,16 +61,42 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    const queue = createQueue(QUEUE_NAMES.AGENT_EXECUTION)
-    await queue.add('execute-agent', {
-      executionId: execution.id,
-      agentId: agent.id,
-      organizationId: agent.organizationId,
-      userId: user.id,
-      input,
-    }, { jobId: execution.id })
+    if (inlineExecution) {
+      try {
+        const result = await runAgentExecution({
+          executionId: execution.id,
+          agentId: agent.id,
+          organizationId: agent.organizationId,
+          userId: user.id,
+          input,
+        })
+        return NextResponse.json({ success: true, executionId: execution.id, result })
+      } catch (error) {
+        await prisma.agentExecution.update({
+          where: { id: execution.id },
+          data: {
+            status: 'failed',
+            error: error instanceof Error ? error.message : String(error),
+            completedAt: new Date(),
+          },
+        })
+        return NextResponse.json({ success: false, error: 'Agent run failed' }, { status: 500 })
+      }
+    } else {
+      if (!workersEnabled) {
+        return NextResponse.json({ success: false, error: 'Agent worker is disabled' }, { status: 503 })
+      }
+      const queue = createQueue(QUEUE_NAMES.AGENT_EXECUTION)
+      await queue.add('execute-agent', {
+        executionId: execution.id,
+        agentId: agent.id,
+        organizationId: agent.organizationId,
+        userId: user.id,
+        input,
+      }, { jobId: execution.id })
 
-    return NextResponse.json({ success: true, executionId: execution.id, status: 'pending' })
+      return NextResponse.json({ success: true, executionId: execution.id, status: 'pending' })
+    }
   } catch (error) {
     apiLogger.error('Agent trigger failed', {
       error: error instanceof Error ? error.message : String(error),
