@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
+import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { notify } from '@/lib/notifications/service'
 import {
   createModelRunner,
@@ -135,6 +136,47 @@ async function loadTools(organizationId: string, providers: string[]) {
     } catch (error) {
       apiLogger.warn('loadTools: Backstory MCP tool discovery failed, skipping provider', {
         provider: 'backstory',
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // ---- Per-org MCP connections (all active connections, any authType) ------
+  // These are available to every agent in the org regardless of the providers
+  // list; a failing/unreachable server must NOT abort the run or block others.
+  const connections = await prisma.mcpConnection.findMany({
+    where: { organizationId, isActive: true },
+  })
+
+  for (const conn of connections) {
+    // Slug used as the provider prefix (e.g. "my salesforce" → "my_salesforce")
+    const slug = conn.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    try {
+      const client = new McpClient(mcpConfigFromConnection(conn))
+      const available = await client.getServerTools(conn.serverUrl)
+      for (const tool of available.slice(0, 20)) {
+        // Stop if we've hit the overall 64-tool cap
+        if (tools.length >= 64) break
+        const name = toolName(slug, tool.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, {
+          provider: slug,
+          serverUrl: conn.serverUrl,
+          toolName: tool.name,
+          client,
+        })
+        tools.push({
+          name,
+          description: tool.description || `${tool.name} via ${conn.name}`,
+          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+        })
+      }
+    } catch (error) {
+      apiLogger.warn('loadTools: org MCP connection tool discovery failed, skipping', {
+        connectionId: conn.id,
+        connectionName: conn.name,
+        serverUrl: conn.serverUrl,
         organizationId,
         error: error instanceof Error ? error.message : String(error),
       })
