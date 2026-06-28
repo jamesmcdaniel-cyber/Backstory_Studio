@@ -18,6 +18,7 @@ import {
   Plug,
   Plus,
   Search,
+  Server,
   Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -51,6 +52,7 @@ const navigation = [
   { name: 'Home', href: '/dashboard', icon: Brain },
   { name: 'Integrations', href: '/integrations', icon: Plug },
   { name: 'Explore', href: '/templates', icon: FileText },
+  { name: 'MCP Servers', href: '/connections', icon: Server },
 ]
 
 function planLabel(plan: string) {
