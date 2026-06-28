@@ -18,13 +18,14 @@ model Organization {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  users         User[]
-  agents        AgentTask[]
-  executions    AgentExecution[]
-  templates     AgentTemplate[]
-  integrations  Integration[]
-  mcpAgents     MCPAgent[]
-  notifications Notification[]
+  users          User[]
+  agents         AgentTask[]
+  executions     AgentExecution[]
+  templates      AgentTemplate[]
+  integrations   Integration[]
+  mcpAgents      MCPAgent[]
+  notifications  Notification[]
+  mcpConnections McpConnection[]
 
   @@map("organizations")
 }
@@ -262,6 +263,24 @@ model MCPAgent {
 
   @@unique([userId, organizationId, agentType])
   @@map("mcp_agents")
+}
+
+model McpConnection {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  name           String
+  description    String?
+  serverUrl      String
+  authType       String   @default("none")   // 'none' | 'api_key' | 'oauth2'
+  authConfig     Json     @default("{}")     // encrypted secret blob + non-secret fields
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, isActive])
+  @@map("mcp_connections")
 }
 
 enum Plan {
