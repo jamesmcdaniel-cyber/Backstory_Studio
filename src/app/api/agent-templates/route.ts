@@ -88,8 +88,7 @@ const builtInTemplates = [
     "integrations": [
       "Backstory MCP",
       "Slack",
-      "Email",
-      "SMTP"
+      "Email"
     ],
     "tags": [
       "recurring",
@@ -105,7 +104,7 @@ const builtInTemplates = [
     "instructions": "Provides AI-powered coaching insights for sales leaders by analyzing their team's open pipeline each week. Every Monday, the workflow pulls each leader's team pipeline from Backstory, filters for active deals, and uses the LLM to assess deal health — looking at engagement recency, stakeholder coverage, stage velocity, and risk indicators. The result is a per-leader coaching report delivered via email, highlighting deals that need attention and suggesting specific coaching actions.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
       "Backstory MCP",
-      "SMTP"
+      "Email"
     ],
     "tags": [
       "recurring",
@@ -121,9 +120,8 @@ const builtInTemplates = [
     "instructions": "Automates executive email triage by reading unread email messages, identifying those from customers or prospects, enriching them with CRM context from Backstory, and using AI to classify and route each message. The AI Agent analyzes the email content alongside account history to determine urgency, category (support escalation, deal progression, renewal, executive outreach, etc.), and the appropriate internal channel or person. Routed messages land in the right Messaging channel (Slack, Teams, or Email) or trigger follow-up workflows, ensuring nothing falls through the cracks.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
       "Backstory MCP",
-      "Email",
       "Slack",
-      "Project Management"
+      "Email"
     ],
     "tags": [
       "recurring",
@@ -350,8 +348,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Turns a customer workflow request and tool-stack intake into a reusable implementation blueprint that recommends the closest validated asset, the right orchestration recipe, and the connector substitutions required for CRM, delivery, and meeting-source differences.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Request intake source",
-      "Workflow library knowledge",
+      "Backstory MCP",
       "Slack",
       "Email"
     ],
@@ -367,8 +364,8 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Normalizes Salesforce, Dynamics 365, HubSpot, or custom CRM records into a canonical account, contact, opportunity, and activity payload so downstream Backstory workflows can be reused without forking business logic by CRM.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "CRM",
-      "Event sink"
+      "Backstory MCP",
+      "CRM"
     ],
     "tags": [
       "recurring",
@@ -383,6 +380,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Normalizes meetings, transcripts, attendees, and action items from Gong, Zoom, Teams, Otter, Fireflies, Fathom, and other note-taker systems into one reusable meeting-intelligence payload for prep, coaching, and QBR workflows.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
+      "Backstory MCP",
       "Calendar"
     ],
     "tags": [
@@ -398,8 +396,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Receives a ready-to-send insight payload, resolves whether it should land in Slack, Teams, email, or a webhook, adapts the format for that surface, and applies fallback routing without cloning the business logic for each tool.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Delivery credentials",
-      "Fallback sink"
+      "Backstory MCP"
     ],
     "tags": [
       "platform"
@@ -413,7 +410,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Resolves people, account, owner, and channel identities across CRM, messaging, and meeting systems into a canonical identity layer so downstream workflows stop breaking on duplicate humans, alias drift, and ambiguous account ownership.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Identity source access"
+      "Backstory MCP"
     ],
     "tags": [
       "platform"
@@ -427,9 +424,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Validates canonical payloads between workflow steps so schema drift, missing fields, enum changes, and connector-specific shape changes are caught before they break downstream automations.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Payload source",
-      "Contract registry",
-      "Quarantine sink"
+      "Backstory MCP"
     ],
     "tags": [
       "platform"
@@ -443,9 +438,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Audits a customer stack or internal workflow request against the current library to identify what is already validated, what only has recipe coverage, and what still needs productization work before rollout.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Audit intake source",
-      "Workflow library knowledge",
-      "Delivery or backlog surface"
+      "Backstory MCP"
     ],
     "tags": [
       "platform"
@@ -459,9 +452,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Transforms a validated workflow pattern plus source-tool implementation details into a migration plan for n8n, Make, Power Automate, Zapier, Workato, or custom code without losing workflow order, state handling, payload contracts, or delivery behavior.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Source workflow reference",
-      "Target orchestrator constraints",
-      "Workflow library knowledge"
+      "Backstory MCP"
     ],
     "tags": [
       "platform"
@@ -475,7 +466,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Replays golden payloads through CRM, meeting, identity, and delivery adapters to catch functional regressions before connector changes break reusable workflow patterns.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Adapter execution surfaces"
+      "Backstory MCP"
     ],
     "tags": [
       "recurring",
@@ -490,9 +481,7 @@ const builtInTemplates = [
     "category": "Platform Enablement",
     "instructions": "Scores whether a customer stack is actually ready for deployment by evaluating connector access, identity coverage, delivery routes, ownership, security prerequisites, and QA gates before a workflow goes live.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Readiness intake source",
-      "Workflow library knowledge",
-      "Security and ownership inputs"
+      "Backstory MCP"
     ],
     "tags": [
       "platform"
@@ -507,9 +496,8 @@ const builtInTemplates = [
     "instructions": "Reference-grade Digital Chief of Staff workflow that combines account-channel updates, executive briefing synthesis, and calendar task generation using shared n8n sub-workflows plus bounded MCP enrichment.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
       "Backstory MCP",
-      "Slack",
       "Calendar",
-      "Source system adapter"
+      "Slack"
     ],
     "tags": [
       "recurring",
@@ -524,7 +512,6 @@ const builtInTemplates = [
     "category": "Strategic Intelligence",
     "instructions": "Builds a weekly market-intelligence digest for target accounts by combining normalized external company-signal packets with Backstory relationship and opportunity context.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
-      "Market-intelligence source feed",
       "Backstory MCP",
       "Slack",
       "Email"
@@ -558,8 +545,7 @@ const builtInTemplates = [
     "instructions": "Takes an external revenue signal, builds a proposed CRM update plus owner message, and pauses for Slack approval before sending the approved action downstream.\n\nCarry this out as an AI agent: use the Backstory MCP to retrieve the relevant account, opportunity, and engagement data, reason over it, and deliver the result through the connected tools. Ask the user for anything you need (target account, thresholds, delivery channel) before running.",
     "integrations": [
       "Backstory MCP",
-      "Slack",
-      "n8n public callback URL"
+      "Slack"
     ],
     "tags": [
       "pipeline"
