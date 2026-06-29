@@ -1,9 +1,9 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertCircle, CheckCircle2, CircleDashed, HelpCircle, Loader2, Plus, Send, Sparkles, Wrench } from 'lucide-react'
+import { AlertCircle, CheckCircle2, CircleDashed, HelpCircle, Loader2, Plus, Send, Sparkles, Wrench, X } from 'lucide-react'
 import { AgentConfigDialog } from './agent-config-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -46,6 +46,13 @@ type RunDetails = {
   steps: Array<{ id: string; node: string; status: string; output?: any; error?: any }>
   events: Array<{ id: string; kind: string; payload?: any; ts: string }>
   messages: Array<{ id: string; role: string; content: string; createdAt: string }>
+}
+
+type GranolaNote = {
+  id: string
+  title: string
+  owner: { name: string; email: string } | null
+  created_at: string | null
 }
 
 const groupOrder = ['running', 'waiting_for_input', 'failed', 'completed'] as const
@@ -93,6 +100,11 @@ function AgentHQ() {
   const [runningId, setRunningId] = useState<string | null>(null)
   const [authError, setAuthError] = useState<string | null>(null)
   const [authStatus, setAuthStatus] = useState<number | null>(null)
+  const [granolaPickerOpen, setGranolaPickerOpen] = useState(false)
+  const [granolaFetchingList, setGranolaFetchingList] = useState(false)
+  const [granolaFetchingNote, setGranolaFetchingNote] = useState(false)
+  const [granolaNotes, setGranolaNotes] = useState<GranolaNote[]>([])
+  const granolaPickerRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
     const [agentResponse, activityResponse] = await Promise.all([
@@ -228,10 +240,49 @@ function AgentHQ() {
       }
       setDescribe('')
       notifyAgentsChanged()
-      toast.success(`Created “${data.draft?.title || 'agent'}”.`)
+      toast.success(`Created "${data.draft?.title || 'agent'}".`)
       await load()
     } finally {
       setBuilding(false)
+    }
+  }
+
+  const openGranolaPicker = async () => {
+    setGranolaFetchingList(true)
+    setGranolaNotes([])
+    try {
+      const response = await fetch('/api/granola/notes')
+      const data = await response.json().catch(() => ({}))
+      if (!data.success) {
+        toast.error(data.error || 'Granola not connected')
+        return
+      }
+      setGranolaNotes(data.notes || [])
+      setGranolaPickerOpen(true)
+    } catch {
+      toast.error('Could not reach Granola. Please try again.')
+    } finally {
+      setGranolaFetchingList(false)
+    }
+  }
+
+  const importGranolaNote = async (note: GranolaNote) => {
+    setGranolaFetchingNote(true)
+    try {
+      const response = await fetch(`/api/granola/notes/${encodeURIComponent(note.id)}`)
+      const data = await response.json().catch(() => ({}))
+      if (!data.success) {
+        toast.error(data.error || 'Could not load that meeting note.')
+        return
+      }
+      const { title, summary } = data.note as { id: string; title: string; summary: string }
+      const prefill = `Build an agent based on this meeting. Identify the workflow or task that was requested and create an agent that carries it out.\n\nMeeting: ${title}\n\n${summary}`
+      setDescribe(prefill.slice(0, 3800))
+      setGranolaPickerOpen(false)
+    } catch {
+      toast.error('Could not load that meeting note. Please try again.')
+    } finally {
+      setGranolaFetchingNote(false)
     }
   }
 
@@ -321,16 +372,67 @@ function AgentHQ() {
               <Sparkles className="h-4 w-4 shrink-0 text-indigo-500" />
               <input
                 className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
-                placeholder="Describe an agent to build — e.g. “Every Monday, summarize last week's GitHub activity and post it to Slack”"
+                placeholder={"Describe an agent to build — e.g. “Every Monday, summarize last week’s GitHub activity and post it to Slack”"}
                 value={describe}
                 disabled={building}
                 onChange={(event) => setDescribe(event.target.value)}
                 onKeyDown={(event) => event.key === 'Enter' && buildFromDescription()}
               />
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={granolaFetchingList || building}
+                onClick={openGranolaPicker}
+                title="Import from Granola"
+                className="shrink-0 gap-1.5 text-xs text-gray-500 hover:text-gray-700"
+              >
+                {granolaFetchingList ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="text-sm leading-none">🍏</span>}
+                Import
+              </Button>
               <Button size="sm" disabled={building || !describe.trim()} onClick={buildFromDescription}>
                 {building ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Build'}
               </Button>
             </div>
+            {/* Granola meeting picker */}
+            {granolaPickerOpen && (
+              <div
+                ref={granolaPickerRef}
+                className="relative mt-1 max-h-64 overflow-y-auto rounded-xl border bg-white shadow-lg"
+              >
+                <div className="sticky top-0 flex items-center justify-between border-b bg-white px-3 py-2">
+                  <span className="text-xs font-medium text-gray-600">Select a meeting to import</span>
+                  <button
+                    className="rounded p-0.5 text-gray-400 hover:text-gray-700"
+                    onClick={() => setGranolaPickerOpen(false)}
+                    aria-label="Close picker"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {granolaFetchingNote && (
+                  <div className="flex items-center justify-center p-6 text-sm text-gray-500">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading meeting…
+                  </div>
+                )}
+                {!granolaFetchingNote && granolaNotes.length === 0 && (
+                  <p className="p-4 text-sm text-gray-500">No recent meetings found in Granola.</p>
+                )}
+                {!granolaFetchingNote && granolaNotes.map((note) => (
+                  <button
+                    key={note.id}
+                    className="flex w-full flex-col gap-0.5 border-b px-3 py-2.5 text-left last:border-b-0 hover:bg-gray-50"
+                    onClick={() => importGranolaNote(note)}
+                  >
+                    <span className="truncate text-sm font-medium">{note.title}</span>
+                    <span className="truncate text-xs text-gray-400">
+                      {note.owner?.name || note.owner?.email || ''}
+                      {note.owner && note.created_at ? ' · ' : ''}
+                      {note.created_at ? new Date(note.created_at).toLocaleDateString() : ''}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {authError && (
             <div className="m-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
