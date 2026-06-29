@@ -4,6 +4,7 @@ import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
+import { GranolaToolClient, granolaConfigured, granolaTools } from '@/lib/integrations/granola'
 import { notify } from '@/lib/notifications/service'
 import {
   createModelRunner,
@@ -177,6 +178,31 @@ async function loadTools(organizationId: string, providers: string[]) {
         connectionId: conn.id,
         connectionName: conn.name,
         serverUrl: conn.serverUrl,
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // ---- Granola REST API (built-in; no Klavis / MCP server required) --------
+  // Gate: GRANOLA_API_KEY must be set AND the agent's providers list must
+  // include an entry matching /granola/i. A failure here must not abort the
+  // run or prevent other tools from loading.
+  const hasGranolaProvider = providers.some((p) => /granola/i.test(p))
+  if (granolaConfigured() && hasGranolaProvider) {
+    try {
+      const client = new GranolaToolClient()
+      const serverUrl = 'https://public-api.granola.ai/v1'
+      for (const def of granolaTools()) {
+        if (tools.length >= 64) break
+        const name = toolName('granola', def.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, { provider: 'granola', serverUrl, toolName: def.name, client })
+        tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+      }
+    } catch (error) {
+      apiLogger.warn('loadTools: Granola tool setup failed, skipping provider', {
+        provider: 'granola',
         organizationId,
         error: error instanceof Error ? error.message : String(error),
       })
