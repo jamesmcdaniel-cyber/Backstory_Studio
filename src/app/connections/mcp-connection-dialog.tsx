@@ -118,6 +118,20 @@ export function McpConnectionDialog({
 
   const canCreate = Boolean(draft.name.trim() && draft.description.trim() && draft.serverUrl.trim())
   const canTest = Boolean(draft.serverUrl.trim())
+  // SSO (authorization-code) flow only needs a name + server URL — the rest
+  // (client registration, tokens) is handled server-side after Okta login.
+  const canConnectSso = Boolean(draft.name.trim() && draft.serverUrl.trim())
+
+  // Full-page navigation so the browser follows the OAuth redirect chain
+  // (our /start route → Okta → /callback → back to /connections).
+  const connectWithSso = () => {
+    if (!canConnectSso) return
+    const params = new URLSearchParams({
+      serverUrl: draft.serverUrl.trim(),
+      name: draft.name.trim(),
+    })
+    window.location.href = `/api/mcp-connections/oauth/start?${params.toString()}`
+  }
 
   const testConnection = async () => {
     setTestResult({ status: 'testing' })
@@ -281,56 +295,74 @@ export function McpConnectionDialog({
           {/* Conditional: OAuth 2.0 fields */}
           {draft.authType === 'oauth2' && (
             <div className="space-y-3 rounded-lg border bg-gray-50 p-3">
-              <div>
-                <Label>Client ID</Label>
-                <Input
-                  value={draft.clientId}
-                  onChange={(e) => set({ clientId: e.target.value })}
-                  placeholder="your-client-id"
-                />
-              </div>
-              <div>
-                <Label>Client secret</Label>
-                <Input
-                  type="password"
-                  value={draft.clientSecret}
-                  onChange={(e) => set({ clientSecret: e.target.value })}
-                  placeholder={
-                    editingConnection?.auth.hasClientSecret
-                      ? 'Leave blank to keep current secret'
-                      : 'your-client-secret'
-                  }
-                  autoComplete="new-password"
-                />
-                {editingConnection?.auth.hasClientSecret && !draft.clientSecret && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Leave blank to keep the current secret.
-                  </p>
-                )}
-              </div>
-              <div>
-                <Label>Token URL (optional)</Label>
-                <Input
-                  value={draft.tokenUrl}
-                  onChange={(e) => set({ tokenUrl: e.target.value })}
-                  placeholder="https://auth.example.com/oauth/token"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Auto-discovered from the server if left blank.
-                </p>
-              </div>
-              <div>
-                <Label>Scopes (optional)</Label>
-                <Input
-                  value={draft.scopes}
-                  onChange={(e) => set({ scopes: e.target.value })}
-                  placeholder="read write"
-                />
-              </div>
+              {/* Primary path: user-consent / Okta SSO via authorization-code flow */}
+              <Button
+                type="button"
+                className="w-full"
+                disabled={!canConnectSso}
+                onClick={connectWithSso}
+              >
+                Connect with SSO
+              </Button>
               <p className="text-xs text-muted-foreground">
-                People.ai users authenticate via Okta SSO when connecting with the
-                user-consent OAuth flow (coming soon).
+                Connect with SSO redirects you to sign in (Okta), then returns
+                here. Fill in the server name and URL above first.
               </p>
+
+              {/* Advanced: pre-issued client credentials for servers that support it */}
+              <details className="rounded-md border bg-white p-2">
+                <summary className="cursor-pointer text-sm font-medium">
+                  Advanced: client credentials
+                </summary>
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <Label>Client ID</Label>
+                    <Input
+                      value={draft.clientId}
+                      onChange={(e) => set({ clientId: e.target.value })}
+                      placeholder="your-client-id"
+                    />
+                  </div>
+                  <div>
+                    <Label>Client secret</Label>
+                    <Input
+                      type="password"
+                      value={draft.clientSecret}
+                      onChange={(e) => set({ clientSecret: e.target.value })}
+                      placeholder={
+                        editingConnection?.auth.hasClientSecret
+                          ? 'Leave blank to keep current secret'
+                          : 'your-client-secret'
+                      }
+                      autoComplete="new-password"
+                    />
+                    {editingConnection?.auth.hasClientSecret && !draft.clientSecret && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Leave blank to keep the current secret.
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <Label>Token URL (optional)</Label>
+                    <Input
+                      value={draft.tokenUrl}
+                      onChange={(e) => set({ tokenUrl: e.target.value })}
+                      placeholder="https://auth.example.com/oauth/token"
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Auto-discovered from the server if left blank.
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Scopes (optional)</Label>
+                    <Input
+                      value={draft.scopes}
+                      onChange={(e) => set({ scopes: e.target.value })}
+                      placeholder="read write"
+                    />
+                  </div>
+                </div>
+              </details>
             </div>
           )}
 

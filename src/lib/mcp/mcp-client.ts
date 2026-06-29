@@ -12,6 +12,7 @@
  */
 
 import { decryptSecret } from '@/lib/crypto/secrets'
+import { refreshAccessToken } from '@/lib/mcp/oauth-authcode'
 
 // ---------------------------------------------------------------------------
 // Runtime config (constructor argument — secrets already decrypted)
@@ -23,11 +24,18 @@ export interface McpClientConfig {
   // api_key fields
   apiKey?: string
   headerName?: string
-  // oauth2 fields
+  // oauth2 (client-credentials) fields
   clientId?: string
   clientSecret?: string
   tokenUrl?: string
   scopes?: string
+  // oauth2 authorization-code flow fields ('flow' === 'authcode')
+  // Set when the connection was created via the user-consent / Okta SSO flow.
+  flow?: 'authcode'
+  tokenEndpoint?: string
+  accessToken?: string
+  refreshToken?: string
+  expiresAt?: number // ms since epoch — when the stored accessToken expires
 }
 
 // ---------------------------------------------------------------------------
@@ -177,11 +185,67 @@ export class McpClient {
   }
 
   // --------------------------------------------------------------------------
+  // OAuth token handling (authorization-code flow / Okta SSO)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Return a valid bearer token for an authorization-code (Okta SSO)
+   * connection. Uses the stored access token when it is still valid for >60s;
+   * otherwise exchanges the refresh token for a fresh access token (in-memory
+   * for this run only).
+   */
+  private async getAuthCodeToken(): Promise<string> {
+    const { accessToken, refreshToken, clientId, clientSecret, tokenEndpoint, expiresAt } =
+      this.config
+
+    // Use the stored access token if it has more than a 60s safety margin.
+    if (accessToken && typeof expiresAt === 'number' && expiresAt - Date.now() > 60_000) {
+      return accessToken
+    }
+
+    // Otherwise refresh. Coalesce concurrent refreshes into one request.
+    if (this.inFlightToken) return this.inFlightToken
+
+    if (!refreshToken || !clientId || !tokenEndpoint) {
+      throw new Error(
+        'MCP connection authcode: missing refreshToken/clientId/tokenEndpoint to refresh access token',
+      )
+    }
+
+    this.inFlightToken = (async () => {
+      const tokens = await refreshAccessToken(tokenEndpoint, {
+        clientId,
+        clientSecret,
+        refreshToken,
+      })
+      // In-memory only for this run.
+      // TODO persist refreshed token (and any rotated refresh_token) back to
+      // the McpConnection.authConfig so subsequent runs reuse it.
+      this.tokenCache = {
+        value: tokens.access_token,
+        expiresAt:
+          Date.now() +
+          (typeof tokens.expires_in === 'number' && tokens.expires_in > 0
+            ? Math.min(tokens.expires_in, MAX_TOKEN_TTL_S)
+            : 3600) *
+            1000,
+      }
+      return tokens.access_token
+    })()
+
+    try {
+      return await this.inFlightToken
+    } finally {
+      this.inFlightToken = null
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Auth header computation
   // --------------------------------------------------------------------------
 
   private async authHeaders(): Promise<Record<string, string>> {
-    const { authType, apiKey, headerName } = this.config
+    const { authType, apiKey, headerName, flow } = this.config
 
     if (authType === 'none') {
       return {}
@@ -202,6 +266,16 @@ export class McpClient {
     }
 
     if (authType === 'oauth2') {
+      // Authorization-code (Okta SSO) connections carry their own
+      // access/refresh tokens; client-credentials connections fetch one.
+      if (flow === 'authcode') {
+        // Prefer a token refreshed earlier in this run, if still valid.
+        if (this.tokenCache && this.tokenCache.expiresAt - Date.now() > 60_000) {
+          return { Authorization: `Bearer ${this.tokenCache.value}` }
+        }
+        const token = await this.getAuthCodeToken()
+        return { Authorization: `Bearer ${token}` }
+      }
       const token = await this.getOAuthToken()
       return { Authorization: `Bearer ${token}` }
     }
@@ -325,6 +399,12 @@ interface StoredAuthConfig {
   clientSecret?: string
   tokenUrl?: string
   scopes?: string
+  // authorization-code flow (Okta SSO) fields
+  flow?: 'authcode'
+  tokenEndpoint?: string
+  accessToken?: string // encrypted
+  refreshToken?: string // encrypted
+  expiresAt?: number
 }
 
 export interface McpConnectionRow {
@@ -355,6 +435,22 @@ export function mcpConfigFromConnection(conn: McpConnectionRow): McpClientConfig
   }
 
   if (authType === 'oauth2') {
+    // Authorization-code (Okta SSO) connection: decrypt the stored tokens so
+    // the client can present a valid bearer (and refresh when expired).
+    if (stored.flow === 'authcode') {
+      return {
+        serverUrl: conn.serverUrl,
+        authType: 'oauth2',
+        flow: 'authcode',
+        clientId: stored.clientId,
+        clientSecret: stored.clientSecret ? decryptSecret(stored.clientSecret) : undefined,
+        tokenEndpoint: stored.tokenEndpoint,
+        accessToken: stored.accessToken ? decryptSecret(stored.accessToken) : undefined,
+        refreshToken: stored.refreshToken ? decryptSecret(stored.refreshToken) : undefined,
+        expiresAt: stored.expiresAt,
+      }
+    }
+
     return {
       serverUrl: conn.serverUrl,
       authType: 'oauth2',
