@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2, Play } from 'lucide-react'
+import Link from 'next/link'
+import { Loader2, Play, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -18,6 +19,21 @@ type SkillSummary = {
   audience: string[]
   tags: string[]
   integrations: string[]
+}
+
+type BuiltinIntegration = {
+  label: string
+  configured: boolean
+}
+
+type ConnectionIntegration = {
+  id: string
+  name: string
+}
+
+type AvailableIntegrations = {
+  builtins: BuiltinIntegration[]
+  connections: ConnectionIntegration[]
 }
 
 type AgentDraft = {
@@ -96,14 +112,37 @@ export function AgentConfigDialog({
 }) {
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
-  const [availableSkills, setAvailableSkills] = useState<SkillSummary[]>([])
+  const [skillNames, setSkillNames] = useState<Record<string, string>>({})
+  const [availableIntegrations, setAvailableIntegrations] = useState<AvailableIntegrations | null>(null)
 
+  // Load skill names for compact skills display
   useEffect(() => {
     fetch('/api/skills')
       .then((res) => res.json())
-      .then((data) => { if (data.success) setAvailableSkills(data.skills) })
+      .then((data) => {
+        if (data.success) {
+          const map: Record<string, string> = {}
+          for (const s of data.skills as SkillSummary[]) {
+            map[s.id] = s.name
+          }
+          setSkillNames(map)
+        }
+      })
       .catch(() => {})
   }, [])
+
+  // Load available integrations when dialog opens
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/integrations/available')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setAvailableIntegrations({ builtins: data.builtins, connections: data.connections })
+        }
+      })
+      .catch(() => {})
+  }, [open])
 
   useEffect(() => {
     const source = editingAgent || template
@@ -124,6 +163,17 @@ export function AgentConfigDialog({
       schedule: { ...emptyDraft.schedule, timezone: browserTimezone() },
     })
   }, [editingAgent, open, template])
+
+  const toggleIntegration = (label: string) => {
+    const next = draft.integrations.includes(label)
+      ? draft.integrations.filter((i) => i !== label)
+      : [...draft.integrations, label]
+    setDraft({ ...draft, integrations: next })
+  }
+
+  const detachSkill = (skillId: string) => {
+    setDraft({ ...draft, skills: draft.skills.filter((id) => id !== skillId) })
+  }
 
   const submit = async () => {
     setSaving(true)
@@ -254,17 +304,81 @@ export function AgentConfigDialog({
               />
             </div>
           )}
+
+          {/* ── Connected tools picker ───────────────────────────────────── */}
           <div>
             <Label>Connected tools</Label>
-            <Input
-              placeholder="slack, github, linear"
-              value={draft.integrations.join(', ')}
-              onChange={(event) => setDraft({
-                ...draft,
-                integrations: event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
-              })}
-            />
+            {availableIntegrations ? (
+              <div className="mt-2 space-y-3">
+                {/* Built-in integrations */}
+                {availableIntegrations.builtins.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {availableIntegrations.builtins.map((b) => {
+                      const selected = draft.integrations.includes(b.label)
+                      return (
+                        <button
+                          key={b.label}
+                          type="button"
+                          onClick={() => toggleIntegration(b.label)}
+                          className={[
+                            'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors',
+                            selected
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
+                          ].join(' ')}
+                        >
+                          {b.label}
+                          {!b.configured && !selected && (
+                            <span className="text-[10px] opacity-60">not configured</span>
+                          )}
+                          {b.configured && !selected && (
+                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {/* MCP connections */}
+                {availableIntegrations.connections.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {availableIntegrations.connections.map((c) => {
+                      const selected = draft.integrations.includes(c.name)
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => toggleIntegration(c.name)}
+                          className={[
+                            'rounded-full border px-3 py-1 text-xs transition-colors',
+                            selected
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
+                          ].join(' ')}
+                        >
+                          {c.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Link
+                    href="/connections"
+                    className="text-xs font-medium text-primary hover:underline"
+                  >
+                    + Connect a tool
+                  </Link>
+                  <span className="text-xs text-muted-foreground">
+                    — add more in Connections.
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">Loading integrations…</p>
+            )}
           </div>
+
           <div className="flex items-center justify-between rounded-lg border p-3">
             <Label>Schedule enabled</Label>
             <Switch
@@ -272,38 +386,41 @@ export function AgentConfigDialog({
               onCheckedChange={(isActive) => setDraft({ ...draft, schedule: { ...draft.schedule, isActive } })}
             />
           </div>
-          {availableSkills.length > 0 && (
-            <div>
-              <Label>Skills</Label>
-              <p className="text-xs text-muted-foreground mb-2">Attach instruction packs that extend this agent at run time.</p>
-              <div className="flex flex-wrap gap-2">
-                {availableSkills.map((skill) => {
-                  const selected = draft.skills.includes(skill.id)
-                  return (
+
+          {/* ── Compact Skills display ───────────────────────────────────── */}
+          <div>
+            <Label>Skills</Label>
+            {draft.skills.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {draft.skills.map((skillId) => (
+                  <span
+                    key={skillId}
+                    className="flex items-center gap-1 rounded-full border border-border bg-muted px-3 py-1 text-xs text-foreground"
+                  >
+                    {skillNames[skillId] ?? skillId}
                     <button
-                      key={skill.id}
                       type="button"
-                      title={skill.description}
-                      onClick={() => {
-                        const next = selected
-                          ? draft.skills.filter((id) => id !== skill.id)
-                          : [...draft.skills, skill.id]
-                        setDraft({ ...draft, skills: next })
-                      }}
-                      className={[
-                        'rounded-full border px-3 py-1 text-xs transition-colors',
-                        selected
-                          ? 'border-primary bg-primary text-primary-foreground'
-                          : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
-                      ].join(' ')}
+                      aria-label={`Remove skill ${skillNames[skillId] ?? skillId}`}
+                      onClick={() => detachSkill(skillId)}
+                      className="ml-0.5 rounded-full p-0.5 hover:bg-border transition-colors"
                     >
-                      {skill.name}
+                      <X className="h-3 w-3" />
                     </button>
-                  )
-                })}
+                  </span>
+                ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">No skills attached.</p>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Add skills from the{' '}
+              <Link href="/templates" className="text-primary hover:underline">
+                Templates page
+              </Link>
+              .
+            </p>
+          </div>
+
           <div className="flex gap-2">
             {editingAgent && onRunAgent && (
               <Button
