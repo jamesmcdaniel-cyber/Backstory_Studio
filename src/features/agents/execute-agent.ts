@@ -5,6 +5,8 @@ import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { GranolaToolClient, granolaConfigured, granolaTools } from '@/lib/integrations/granola'
+import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
+import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
 import {
   createModelRunner,
@@ -203,6 +205,56 @@ async function loadTools(organizationId: string, providers: string[]) {
     } catch (error) {
       apiLogger.warn('loadTools: Granola tool setup failed, skipping provider', {
         provider: 'granola',
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // ---- Slack REST API (built-in; delivery integration) --------------------
+  // Gate: SLACK_BOT_TOKEN must be set AND the agent's providers list must
+  // include an entry matching /slack/i. A failure here must not abort the
+  // run or prevent other tools from loading.
+  const hasSlackProvider = providers.some((p) => /slack/i.test(p))
+  if (slackConfigured() && hasSlackProvider) {
+    try {
+      const client = new SlackToolClient()
+      const serverUrl = 'https://slack.com/api'
+      for (const def of slackTools()) {
+        if (tools.length >= 64) break
+        const name = toolName('slack', def.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, { provider: 'slack', serverUrl, toolName: def.name, client })
+        tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+      }
+    } catch (error) {
+      apiLogger.warn('loadTools: Slack tool setup failed, skipping provider', {
+        provider: 'slack',
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // ---- Email via Resend REST API (built-in; delivery integration) ----------
+  // Gate: RESEND_API_KEY must be set AND the agent's providers list must
+  // include an entry matching /email/i. A failure here must not abort the
+  // run or prevent other tools from loading.
+  const hasEmailProvider = providers.some((p) => /email/i.test(p))
+  if (emailConfigured() && hasEmailProvider) {
+    try {
+      const client = new EmailToolClient()
+      const serverUrl = 'https://api.resend.com'
+      for (const def of emailTools()) {
+        if (tools.length >= 64) break
+        const name = toolName('email', def.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, { provider: 'email', serverUrl, toolName: def.name, client })
+        tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+      }
+    } catch (error) {
+      apiLogger.warn('loadTools: Email tool setup failed, skipping provider', {
+        provider: 'email',
         organizationId,
         error: error instanceof Error ? error.message : String(error),
       })
