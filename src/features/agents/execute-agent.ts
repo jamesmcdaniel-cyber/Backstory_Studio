@@ -4,6 +4,7 @@ import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
+import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, granolaConfigured, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
@@ -152,10 +153,11 @@ async function loadTools(organizationId: string, providers: string[]) {
     where: { organizationId, isActive: true },
   })
 
-  for (const conn of connections) {
+  for (let conn of connections) {
     // Slug used as the provider prefix (e.g. "my salesforce" → "my_salesforce")
     const slug = conn.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
     try {
+      conn = await ensureFreshConnectionToken(conn)
       const client = new McpClient(mcpConfigFromConnection(conn))
       const available = await client.getServerTools(conn.serverUrl)
       for (const tool of available.slice(0, 20)) {
