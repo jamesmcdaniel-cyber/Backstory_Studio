@@ -45,7 +45,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
       return {
         id: agent.id,
         title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',
-        icon: metadata.icon || '🤖',
+        icon: metadata.icon || '',
         folder: agent.folder,
         visibility: agent.visibility,
       }

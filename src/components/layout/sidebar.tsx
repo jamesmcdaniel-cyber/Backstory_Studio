@@ -208,7 +208,9 @@ export function Sidebar() {
       onDragStart={(event) => event.dataTransfer.setData('text/agent-id', agent.id)}
       className="group flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-100 active:cursor-grabbing"
     >
-      <span className="w-5 text-center text-base leading-none">{agent.icon || '🤖'}</span>
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-graphite-100 text-[11px] font-semibold uppercase leading-none text-graphite-700">
+        {agent.icon || agent.title.trim().charAt(0) || 'A'}
+      </span>
       <button
         className="flex-1 truncate text-left text-sm"
         title={agent.description || agent.title}

@@ -115,7 +115,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               onMouseEnter={() => setActive(index)}
               onClick={() => select({ kind: 'agent', agent })}
             >
-              <span className="w-5 text-center">{agent.icon}</span>
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-graphite-100 text-[11px] font-semibold uppercase leading-none text-graphite-700">
+                {agent.icon || agent.title.trim().charAt(0) || 'A'}
+              </span>
               <span className="flex-1 truncate">{agent.title}</span>
               {agent.folder && <span className="text-xs text-gray-400">{agent.folder}</span>}
             </button>

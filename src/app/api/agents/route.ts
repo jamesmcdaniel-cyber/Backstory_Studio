@@ -34,7 +34,7 @@ function serializeAgent(agent: any) {
     model: metadata.model || 'claude-opus-4-8',
     integrations: metadata.integrations || [],
     skills: metadata.skills || [],
-    icon: metadata.icon || '🤖',
+    icon: metadata.icon || '',
     folder: agent.folder || null,
     visibility: agent.visibility || 'shared',
     status: agent.status.toLowerCase(),
@@ -85,7 +85,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         model: data.model,
         integrations: data.integrations,
         skills: data.skills,
-        icon: data.icon || '🤖',
+        icon: data.icon || '',
       },
     },
   })

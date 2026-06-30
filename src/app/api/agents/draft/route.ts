@@ -84,7 +84,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     ...(draft.schedule.cron ? { cron: draft.schedule.cron } : {}),
   }
 
-  const icon = draft.icon?.trim() || '🤖'
+  const icon = draft.icon?.trim() || ''
   const enrichedDraft = { ...draft, icon, schedule, model: DEFAULT_AGENT_MODEL, priority: 'medium', visibility: 'shared' as const, folder: null }
   if (!create) {
     return { success: true, draft: enrichedDraft }

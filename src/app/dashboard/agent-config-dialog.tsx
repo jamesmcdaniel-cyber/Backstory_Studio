@@ -87,7 +87,7 @@ const emptyDraft: AgentDraft = {
   priority: 'medium',
   integrations: [],
   skills: [],
-  icon: '🤖',
+  icon: '',
   folder: '',
   visibility: 'shared',
   schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },

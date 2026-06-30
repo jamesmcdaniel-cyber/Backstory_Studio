@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertCircle, CheckCircle2, CircleDashed, HelpCircle, Loader2, Plus, Send, Sparkles, Wrench, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plus, Send, Sparkles, Wrench, X } from 'lucide-react'
 import { AgentConfigDialog } from './agent-config-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -386,7 +386,7 @@ function AgentHQ() {
                 title="Import from Granola"
                 className="shrink-0 gap-1.5 text-xs text-gray-500 hover:text-gray-700"
               >
-                {granolaFetchingList ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <span className="text-sm leading-none">🍏</span>}
+                {granolaFetchingList ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
                 Import
               </Button>
               <Button size="sm" disabled={building || !describe.trim()} onClick={buildFromDescription}>
