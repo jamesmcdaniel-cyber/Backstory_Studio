@@ -102,6 +102,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       status: 'ACTIVE',
       visibility: 'shared',
       organizationId: auth.organizationId,
+      userId: auth.dbUser.id,
       metadata: {
         title: draft.title,
         description: draft.description,

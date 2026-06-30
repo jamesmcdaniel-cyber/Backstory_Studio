@@ -1,28 +1,55 @@
+@import './backstory-design.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* shadcn-style tokens, mapped to the Backstory palette. Every UI primitive
+   (button, card, badge, input, …) reads these, so the whole app inherits
+   Horizon (primary) + Graphite (neutrals) from here. */
 :root {
-  --background: 0 0% 100%;
-  --foreground: 222 47% 11%;
+  --background: 0 0% 100%;            /* white */
+  --foreground: 240 18% 11%;         /* graphite-900 #171721 */
   --card: 0 0% 100%;
-  --card-foreground: 222 47% 11%;
+  --card-foreground: 240 18% 11%;
   --popover: 0 0% 100%;
-  --popover-foreground: 222 47% 11%;
-  --primary: 243 75% 59%;
+  --popover-foreground: 240 18% 11%;
+  --primary: 197 37% 42%;            /* horizon-500 #447C93 */
   --primary-foreground: 0 0% 100%;
-  --secondary: 220 14% 96%;
-  --secondary-foreground: 222 47% 11%;
-  --muted: 220 14% 96%;
-  --muted-foreground: 220 9% 46%;
-  --accent: 220 14% 96%;
-  --accent-foreground: 222 47% 11%;
-  --destructive: 0 72% 51%;
+  --secondary: 225 17% 95%;          /* graphite-100 #F1F2F5 */
+  --secondary-foreground: 240 18% 11%;
+  --muted: 225 17% 95%;
+  --muted-foreground: 240 3% 46%;    /* graphite-600 #717178 */
+  --accent: 225 17% 95%;
+  --accent-foreground: 240 18% 11%;
+  --destructive: 1 77% 55%;          /* red-500 #E53935 */
   --destructive-foreground: 0 0% 100%;
-  --border: 220 13% 91%;
-  --input: 220 13% 91%;
-  --ring: 243 75% 59%;
-  --radius: 0.5rem;
+  --border: 240 2% 89%;              /* graphite-200 #E3E3E4 */
+  --input: 240 2% 89%;
+  --ring: 197 37% 42%;               /* horizon-500 */
+  --radius: 0.75rem;                 /* 12px — product cards (rounded-lg) */
+}
+
+.dark {
+  --background: 240 18% 11%;         /* graphite-900 */
+  --foreground: 225 17% 95%;
+  --card: 240 16% 13%;
+  --card-foreground: 225 17% 95%;
+  --popover: 240 16% 13%;
+  --popover-foreground: 225 17% 95%;
+  --primary: 197 41% 56%;            /* horizon-300/400 for contrast on dark */
+  --primary-foreground: 240 18% 11%;
+  --secondary: 240 12% 20%;
+  --secondary-foreground: 225 17% 95%;
+  --muted: 240 12% 20%;
+  --muted-foreground: 240 4% 64%;
+  --accent: 240 12% 20%;
+  --accent-foreground: 225 17% 95%;
+  --destructive: 1 77% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 240 10% 24%;
+  --input: 240 10% 24%;
+  --ring: 197 41% 56%;
 }
 
 * {
@@ -33,4 +60,5 @@ body {
   min-height: 100vh;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
+  font-family: var(--font-display), "Arimo", system-ui, sans-serif;
 }

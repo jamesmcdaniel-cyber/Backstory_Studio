@@ -1,4 +1,15 @@
 /** @type {import('tailwindcss').Config} */
+
+// Backstory brand scales (from the design system's colors_and_type.css).
+const horizon = {
+  50: '#EBF3F6', 100: '#DBEBF2', 200: '#99C1D1', 300: '#7DACC0', 400: '#6397AD',
+  500: '#447C93', 600: '#2B6178', 700: '#18485C', 800: '#0A2F3F', 900: '#021821', 950: '#01141C',
+}
+const graphite = {
+  50: '#FAFAFA', 100: '#F1F2F5', 200: '#E3E3E4', 300: '#C7C7C8', 400: '#ABABAD',
+  500: '#8E8E92', 600: '#717178', 700: '#55555E', 800: '#3C3C46', 900: '#171721', 950: '#0F0F17',
+}
+
 module.exports = {
   darkMode: 'class',
   content: [
@@ -9,6 +20,21 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // Brand scales, available by name.
+        horizon,
+        graphite,
+        // Bring existing utility classes onto brand with zero per-file churn:
+        // Graphite *is* the brand's neutral ("replaces gray"); Horizon is the
+        // single accent ("color reserved for signal"). Semantic red/green/amber
+        // keep Tailwind's defaults so signal colors stay distinct.
+        gray: graphite,
+        slate: graphite,
+        zinc: graphite,
+        neutral: graphite,
+        blue: horizon,
+        indigo: horizon,
+        sky: horizon,
+        // shadcn token aliases
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',
         ring: 'hsl(var(--ring))',
@@ -44,13 +70,29 @@ module.exports = {
         },
       },
       borderRadius: {
-        lg: 'var(--radius)',
-        md: 'calc(var(--radius) - 2px)',
-        sm: 'calc(var(--radius) - 4px)',
+        sm: 'var(--radius-sm)',   // 6px
+        md: 'var(--radius-md)',   // 8px
+        lg: 'var(--radius-lg)',   // 12px — product cards
+        xl: 'var(--radius-xl)',   // 16px
+        '2xl': 'var(--radius-2xl)', // 20px
+      },
+      boxShadow: {
+        1: 'var(--shadow-1)',
+        2: 'var(--shadow-2)',
+        3: 'var(--shadow-3)',
+        4: 'var(--shadow-4)',
+        popover: 'var(--shadow-popover)',
+      },
+      backgroundImage: {
+        'gradient-horizon': 'var(--gradient-horizon)',
+        'gradient-horizon-soft': 'var(--gradient-horizon-soft)',
+        'gradient-graphite': 'var(--gradient-graphite)',
+        'gradient-card-blue': 'var(--gradient-card-blue)',
       },
       fontFamily: {
-        sans: ['var(--font-inter)'],
-        mono: ['var(--font-geist-mono)'],
+        sans: ['var(--font-display)', 'Arimo', 'system-ui', 'sans-serif'],
+        display: ['var(--font-display)', 'Arimo', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-mono)', 'Anonymous Pro', 'ui-monospace', 'monospace'],
       },
     },
   },

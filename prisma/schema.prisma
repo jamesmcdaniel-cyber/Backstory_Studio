@@ -50,6 +50,7 @@ model User {
   templates    AgentTemplate[]
   integrations Integration[]
   mcpAgents    MCPAgent[]
+  ownedAgents  AgentTask[]
 
   @@index([organizationId])
   @@map("users")
@@ -68,6 +69,7 @@ model AgentTask {
   folder         String?
   visibility     String    @default("shared")
   organizationId String    @db.Uuid
+  userId         String?
   metadata       Json?
   lastExecutedAt DateTime?
   executionCount Int       @default(0)
@@ -76,9 +78,11 @@ model AgentTask {
   updatedAt      DateTime  @updatedAt
 
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
   executions   AgentExecution[]
 
   @@index([organizationId, status])
+  @@index([userId])
   @@map("agent_tasks")
 }
 

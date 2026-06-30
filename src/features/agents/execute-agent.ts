@@ -4,11 +4,12 @@ import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
-import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
+import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, granolaConfigured, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
+import { buildAgentSystemPrompt } from './system-prompt'
 import {
   createModelRunner,
   generateHeadline,
@@ -158,7 +159,18 @@ async function loadTools(organizationId: string, providers: string[]) {
     const slug = conn.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
     try {
       conn = await ensureFreshConnectionToken(conn)
-      const client = new McpClient(mcpConfigFromConnection(conn))
+      const config = mcpConfigFromConnection(conn)
+      // For authcode connections, let a mid-run token refresh persist the
+      // rotated tokens back to this row so the next run reuses them.
+      if (config.flow === 'authcode') {
+        const connectionId = conn.id
+        const baseAuthConfig = conn.authConfig as Record<string, unknown>
+        const fallbackRefresh = config.refreshToken ?? ''
+        config.persistTokens = async (tokens) => {
+          await persistRefreshedAuthcodeTokens(connectionId, baseAuthConfig, tokens, fallbackRefresh)
+        }
+      }
+      const client = new McpClient(config)
       const available = await client.getServerTools(conn.serverUrl)
       for (const tool of available.slice(0, 20)) {
         // Stop if we've hit the overall 64-tool cap
@@ -360,13 +372,9 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
   try {
     const providers = Array.isArray(agentMetadata.integrations) ? agentMetadata.integrations.map(String) : []
+    const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
     const { tools, bindings } = await loadTools(organizationId, providers)
-    const system = [
-      'You are an autonomous agent working on behalf of a user. Follow these instructions:',
-      agent.objective,
-      'Use the connected tools when needed. If you are blocked on a decision, missing information, or approval that only the user can provide, call the ask_user tool and wait for the reply; for minor choices, use your best judgment and note it.',
-      'When finished, report completed work, blockers, and errors factually. Only claim actions that are supported by tool results from this run.',
-    ].join('\n')
+    const system = buildAgentSystemPrompt(agent.objective, skillIds)
 
     if (pendingResults) runner.appendToolResults(transcript, pendingResults)
 

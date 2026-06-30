@@ -46,9 +46,18 @@ function serializeAgent(agent: any) {
   }
 }
 
+// A private agent is visible only to its owner; shared agents to the whole org.
+function visibilityScope(userId: string) {
+  return { OR: [{ visibility: { not: 'private' } }, { userId }] }
+}
+
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const agents = await prisma.agentTask.findMany({
-    where: { organizationId: auth.organizationId, status: { not: 'DELETED' } },
+    where: {
+      organizationId: auth.organizationId,
+      status: { not: 'DELETED' },
+      ...visibilityScope(auth.dbUser.id),
+    },
     orderBy: { updatedAt: 'desc' },
   })
   return { success: true, agents: agents.map(serializeAgent) }
@@ -69,6 +78,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       folder: data.folder || null,
       visibility: data.visibility,
       organizationId: auth.organizationId,
+      userId: auth.dbUser.id,
       metadata: {
         title: data.title,
         description: data.description,
@@ -84,7 +94,9 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
 export const PUT = withAuthenticatedApi(async (request, auth) => {
   const body = z.object({ id: z.string().min(1) }).merge(agentSchema.partial()).parse(await request.json())
-  const existing = await prisma.agentTask.findFirst({ where: { id: body.id, organizationId: auth.organizationId } })
+  const existing = await prisma.agentTask.findFirst({
+    where: { id: body.id, organizationId: auth.organizationId, ...visibilityScope(auth.dbUser.id) },
+  })
   if (!existing) throw new ApiError('Agent not found', 404, 'NOT_FOUND')
   const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata : {}
   const agent = await prisma.agentTask.update({
@@ -113,7 +125,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
 export const DELETE = withAuthenticatedApi(async (request, auth) => {
   const { id } = z.object({ id: z.string().min(1) }).parse(await request.json())
   const result = await prisma.agentTask.updateMany({
-    where: { id, organizationId: auth.organizationId },
+    where: { id, organizationId: auth.organizationId, ...visibilityScope(auth.dbUser.id) },
     data: { status: 'DELETED' },
   })
   if (!result.count) throw new ApiError('Agent not found', 404, 'NOT_FOUND')

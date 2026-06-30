@@ -4,7 +4,6 @@ import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { inlineExecution } from '@/lib/queue/execution-mode'
-import { composeInstructions } from '@/lib/skills/compose'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -14,13 +13,19 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   if (!id) throw new ApiError('Agent id is required')
   const { input } = z.object({ input: z.string().optional() }).parse(await request.json())
   const agent = await prisma.agentTask.findFirst({
-    where: { id, organizationId: auth.organizationId, status: 'ACTIVE' },
+    where: {
+      id,
+      organizationId: auth.organizationId,
+      status: 'ACTIVE',
+      // Private agents are runnable only by their owner.
+      OR: [{ visibility: { not: 'private' } }, { userId: auth.dbUser.id }],
+    },
   })
   if (!agent) throw new ApiError('Agent not found', 404, 'NOT_FOUND')
 
-  const skillIds = Array.isArray((agent.metadata as any)?.skills) ? (agent.metadata as any).skills : []
-  const objectiveWithSkills = composeInstructions(agent.objective, skillIds)
-  const runInput = input?.trim() || objectiveWithSkills
+  // Skills are composed into the system prompt inside runAgentExecution, shared
+  // by every trigger — pass the raw objective so they aren't applied twice.
+  const runInput = input?.trim() || agent.objective
 
   const execution = await prisma.agentExecution.create({
     data: {

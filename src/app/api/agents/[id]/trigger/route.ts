@@ -3,7 +3,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { apiLogger } from '@/lib/logger'
-import { composeInstructions } from '@/lib/skills/compose'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 
@@ -36,17 +35,23 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({})) as { input?: unknown }
-    const skillIds: string[] = Array.isArray(metadata.skills) ? (metadata.skills as string[]) : []
-    const objectiveWithSkills = composeInstructions(agent.objective, skillIds)
-    const input = typeof body.input === 'string' && body.input.trim() ? body.input.trim() : objectiveWithSkills
+    // Skills are composed into the system prompt inside runAgentExecution — pass
+    // the raw objective so attached skills aren't applied twice.
+    const input = typeof body.input === 'string' && body.input.trim() ? body.input.trim() : agent.objective
 
-    // I3 — AgentTask has no creator/owner field (only organizationId), so
-    // triggered runs are attributed to the first active user in the org. If an
-    // owner field is later added, attribute to that user instead.
-    const user = await prisma.user.findFirst({
-      where: { organizationId: agent.organizationId, isActive: true },
-      orderBy: { createdAt: 'asc' },
-    })
+    // Attribute the run to the agent's owner when set; otherwise fall back to
+    // the org's oldest active member (shared agents have no single owner).
+    const owner = agent.userId
+      ? await prisma.user.findFirst({
+          where: { id: agent.userId, organizationId: agent.organizationId, isActive: true },
+        })
+      : null
+    const user =
+      owner ||
+      (await prisma.user.findFirst({
+        where: { organizationId: agent.organizationId, isActive: true },
+        orderBy: { createdAt: 'asc' },
+      }))
     if (!user) {
       return NextResponse.json({ success: false, error: 'No active user in organization' }, { status: 409 })
     }

@@ -36,6 +36,15 @@ export interface McpClientConfig {
   accessToken?: string
   refreshToken?: string
   expiresAt?: number // ms since epoch — when the stored accessToken expires
+  // Optional sink called after an authcode refresh so rotated tokens can be
+  // persisted (e.g. back to the McpConnection row). Best-effort: failures here
+  // must not abort the run. Injected by the caller to keep this client free of
+  // any persistence/Prisma dependency.
+  persistTokens?: (tokens: {
+    access_token: string
+    refresh_token?: string
+    expires_in?: number
+  }) => Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -218,9 +227,6 @@ export class McpClient {
         clientSecret,
         refreshToken,
       })
-      // In-memory only for this run.
-      // TODO persist refreshed token (and any rotated refresh_token) back to
-      // the McpConnection.authConfig so subsequent runs reuse it.
       this.tokenCache = {
         value: tokens.access_token,
         expiresAt:
@@ -229,6 +235,17 @@ export class McpClient {
             ? Math.min(tokens.expires_in, MAX_TOKEN_TTL_S)
             : 3600) *
             1000,
+      }
+      // Persist the rotated tokens so the next run (and any later refresh in
+      // this run) reuse them. Best-effort — the in-memory token above already
+      // carries this run, so a persistence failure must not break the call.
+      if (this.config.persistTokens) {
+        try {
+          await this.config.persistTokens(tokens)
+        } catch (err) {
+          // Swallow: the run continues on the in-memory token.
+          void err
+        }
       }
       return tokens.access_token
     })()

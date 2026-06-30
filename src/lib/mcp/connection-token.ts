@@ -17,7 +17,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { encryptSecret, decryptSecret } from '@/lib/crypto/secrets'
-import { refreshAccessToken } from '@/lib/mcp/oauth-authcode'
+import { refreshAccessToken, type TokenResponse } from '@/lib/mcp/oauth-authcode'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,6 +49,36 @@ interface AuthcodeAuthConfig {
 // ---------------------------------------------------------------------------
 
 const inFlight = new Map<string, Promise<any>>()
+
+// ---------------------------------------------------------------------------
+// Shared persistence: encrypt refreshed tokens and write them back to the row.
+// Used by the pre-run helper below AND by McpClient's mid-run refresh callback,
+// so a rotated refresh_token is never lost (which would break the next run).
+// ---------------------------------------------------------------------------
+
+export async function persistRefreshedAuthcodeTokens(
+  connectionId: string,
+  currentAuthConfig: Record<string, unknown>,
+  tokens: TokenResponse,
+  fallbackRefreshToken: string,
+): Promise<Record<string, unknown>> {
+  const newAuthConfig: Record<string, unknown> = {
+    ...currentAuthConfig,
+    accessToken: encryptSecret(tokens.access_token),
+    // Keep the old refresh_token if the server didn't rotate it.
+    refreshToken: encryptSecret(tokens.refresh_token ?? fallbackRefreshToken),
+    expiresAt:
+      Date.now() +
+      (typeof tokens.expires_in === 'number' && tokens.expires_in > 0 ? tokens.expires_in : 3600) * 1000,
+  }
+
+  await prisma.mcpConnection.update({
+    where: { id: connectionId },
+    data: { authConfig: newAuthConfig as Prisma.InputJsonValue },
+  })
+
+  return newAuthConfig
+}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -155,26 +185,13 @@ async function _doRefresh<T extends McpConnectionLike>(
       refreshToken,
     })
 
-    // Build the updated authConfig (spread original to preserve all other fields)
-    const newAuthConfig: AuthcodeAuthConfig = {
-      ...cfg,
-      accessToken: encryptSecret(tokens.access_token),
-      refreshToken: encryptSecret(
-        tokens.refresh_token ?? refreshToken, // keep old refresh_token if server didn't rotate
-      ),
-      expiresAt:
-        Date.now() +
-        (typeof tokens.expires_in === 'number' && tokens.expires_in > 0
-          ? tokens.expires_in
-          : 3600) *
-          1000,
-    }
-
-    // Persist to DB
-    await prisma.mcpConnection.update({
-      where: { id: conn.id },
-      data: { authConfig: newAuthConfig as Prisma.InputJsonValue },
-    })
+    // Encrypt + persist the refreshed tokens (shared with the mid-run path).
+    const newAuthConfig = await persistRefreshedAuthcodeTokens(
+      conn.id,
+      cfg as Record<string, unknown>,
+      tokens,
+      refreshToken,
+    )
 
     // Return updated conn object so the caller's mcpConfigFromConnection() call
     // sees the fresh tokens without a second DB round-trip.

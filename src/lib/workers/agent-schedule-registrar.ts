@@ -39,12 +39,19 @@ export async function registerAgentSchedules() {
           continue
         }
 
-        // Scheduled runs execute as the org's oldest active member until
-        // agents carry an explicit owner.
-        const user = await prisma.user.findFirst({
-          where: { organizationId: agent.organizationId, isActive: true },
-          orderBy: { createdAt: 'asc' },
-        })
+        // Scheduled runs execute as the agent's owner when set; otherwise as the
+        // org's oldest active member (shared agents have no single owner).
+        const owner = agent.userId
+          ? await prisma.user.findFirst({
+              where: { id: agent.userId, organizationId: agent.organizationId, isActive: true },
+            })
+          : null
+        const user =
+          owner ||
+          (await prisma.user.findFirst({
+            where: { organizationId: agent.organizationId, isActive: true },
+            orderBy: { createdAt: 'asc' },
+          }))
         if (!user) continue
 
         await queue.upsertJobScheduler(schedulerId, repeat, {
