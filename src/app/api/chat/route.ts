@@ -2,7 +2,9 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
+import { DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+import { executionVisibilityScope } from '@/lib/server/visibility'
 
 const SYSTEM_PROMPT =
   'Answer questions about an AI agent run. Be precise about its output, tool calls, and errors. Do not claim actions not present in the run data.'
@@ -17,7 +19,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   }).parse(await request.json())
 
   const execution = await prisma.agentExecution.findFirst({
-    where: { id: executionId, organizationId: auth.organizationId },
+    where: { id: executionId, organizationId: auth.organizationId, ...executionVisibilityScope(auth.dbUser.id) },
     include: { workflowSteps: true, messages: { orderBy: { createdAt: 'asc' } } },
   })
   if (!execution) throw new ApiError('Execution not found', 404, 'NOT_FOUND')
@@ -26,10 +28,23 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const run = { ...execution, transcript: undefined }
   const prompt = JSON.stringify({ question, execution: run })
 
+  // Prefer OpenAI when configured; fall back to Anthropic.
+  if (process.env.OPENAI_API_KEY && !DEFAULT_SUMMARY_MODEL.startsWith('claude')) {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    const response = await client.chat.completions.create({
+      model: DEFAULT_SUMMARY_MODEL,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+    })
+    return { success: true, answer: response.choices[0]?.message?.content || 'No answer returned.' }
+  }
+
   if (process.env.ANTHROPIC_API_KEY) {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model: DEFAULT_SUMMARY_MODEL.startsWith('claude') ? DEFAULT_SUMMARY_MODEL : 'claude-haiku-4-5',
       max_tokens: 1024,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
@@ -42,6 +57,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     return { success: true, answer: answer || 'No answer returned.' }
   }
 
+  // Last resort: OpenAI even if SUMMARY_MODEL was a claude id (no Anthropic key).
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',

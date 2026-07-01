@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
+import { agentVisibilityScope, executionVisibilityScope } from '@/lib/server/visibility'
 
 function metadataOf(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {}
@@ -18,7 +19,10 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
       where: {
         organizationId: auth.organizationId,
         status: { not: 'DELETED' },
-        OR: [{ description: text }, { objective: text }, { folder: text }],
+        AND: [
+          { OR: [{ description: text }, { objective: text }, { folder: text }] },
+          agentVisibilityScope(auth.dbUser.id),
+        ],
       },
       orderBy: { updatedAt: 'desc' },
       take: 8,
@@ -26,10 +30,15 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     prisma.agentExecution.findMany({
       where: {
         organizationId: auth.organizationId,
-        OR: [
-          { error: text },
-          { agentType: text },
-          { agentTask: { is: { OR: [{ description: text }, { objective: text }] } } },
+        AND: [
+          {
+            OR: [
+              { error: text },
+              { agentType: text },
+              { agentTask: { is: { OR: [{ description: text }, { objective: text }] } } },
+            ],
+          },
+          executionVisibilityScope(auth.dbUser.id),
         ],
       },
       omit: { transcript: true },

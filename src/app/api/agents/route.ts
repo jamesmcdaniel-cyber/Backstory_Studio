@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
+import { DEFAULT_AGENT_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 
 const scheduleSchema = z.object({
@@ -14,7 +15,7 @@ const agentSchema = z.object({
   title: z.string().min(1),
   description: z.string().default(''),
   instructions: z.string().min(1),
-  model: z.string().default('claude-opus-4-8'),
+  model: z.string().default(DEFAULT_AGENT_MODEL),
   priority: z.string().default('medium'),
   integrations: z.array(z.string()).default([]),
   skills: z.array(z.string()).default([]),
@@ -31,7 +32,7 @@ function serializeAgent(agent: any) {
     title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',
     description: metadata.description || agent.description,
     instructions: agent.objective,
-    model: metadata.model || 'claude-opus-4-8',
+    model: metadata.model || DEFAULT_AGENT_MODEL,
     integrations: metadata.integrations || [],
     skills: metadata.skills || [],
     icon: metadata.icon || '',

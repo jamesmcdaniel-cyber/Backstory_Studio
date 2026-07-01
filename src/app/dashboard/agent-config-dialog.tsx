@@ -83,7 +83,7 @@ const emptyDraft: AgentDraft = {
   title: '',
   description: '',
   instructions: '',
-  model: 'claude-opus-4-8',
+  model: 'gpt-4o',
   priority: 'medium',
   integrations: [],
   skills: [],
@@ -238,11 +238,11 @@ export function AgentConfigDialog({
               <Select value={draft.model} onValueChange={(model) => setDraft({ ...draft, model })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="gpt-4o">GPT-4o</SelectItem>
+                  <SelectItem value="gpt-4o-mini">GPT-4o mini</SelectItem>
                   <SelectItem value="claude-opus-4-8">Claude Opus 4.8</SelectItem>
                   <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6</SelectItem>
                   <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5</SelectItem>
-                  <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-                  <SelectItem value="gpt-4o-mini">GPT-4o mini</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -174,30 +174,135 @@ class OpenAIRunner implements ModelRunner {
   }
 }
 
-export function createModelRunner(model: string): ModelRunner {
-  return model.startsWith('claude') ? new AnthropicRunner(model) : new OpenAIRunner(model)
+// ---------------------------------------------------------------------------
+// Default models. OpenAI is the default provider — override either via env.
+// AGENT_MODEL drives agent runs; SUMMARY_MODEL drives cheap surfaces (headlines,
+// run Q&A). Set a claude-* value (plus ANTHROPIC_API_KEY) to use Anthropic.
+// ---------------------------------------------------------------------------
+export const DEFAULT_AGENT_MODEL = process.env.AGENT_MODEL?.trim() || 'gpt-4o'
+export const DEFAULT_SUMMARY_MODEL = process.env.SUMMARY_MODEL?.trim() || 'gpt-4o-mini'
+const FALLBACK_CLAUDE_MODEL = 'claude-opus-4-8'
+
+const hasOpenAI = () => !!process.env.OPENAI_API_KEY
+const hasAnthropic = () => !!process.env.ANTHROPIC_API_KEY
+const isClaude = (model: string) => model.startsWith('claude')
+
+/**
+ * Build a runner for the requested model, falling back to whichever provider is
+ * actually configured. This means an agent saved with a claude-* model still
+ * runs when only OPENAI_API_KEY is set (and vice-versa) instead of hard-failing.
+ */
+export function createModelRunner(requested?: string): ModelRunner {
+  const model = requested?.trim() || DEFAULT_AGENT_MODEL
+
+  if (isClaude(model)) {
+    if (hasAnthropic()) return new AnthropicRunner(model)
+    if (hasOpenAI()) return new OpenAIRunner(DEFAULT_AGENT_MODEL)
+  } else {
+    if (hasOpenAI()) return new OpenAIRunner(model)
+    if (hasAnthropic()) return new AnthropicRunner(FALLBACK_CLAUDE_MODEL)
+  }
+  throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
 }
 
-// Cheap one-line summary for the activity feed. Best-effort: returns null
-// when Anthropic is not configured or the call fails.
+// Resolve which provider/model to use for a cheap "summary" call, honoring
+// SUMMARY_MODEL but falling back to whichever provider's key is present.
+function summaryTarget(): { provider: 'openai' | 'anthropic'; model: string } | null {
+  const wantsClaude = isClaude(DEFAULT_SUMMARY_MODEL)
+  if (wantsClaude && hasAnthropic()) return { provider: 'anthropic', model: DEFAULT_SUMMARY_MODEL }
+  if (!wantsClaude && hasOpenAI()) return { provider: 'openai', model: DEFAULT_SUMMARY_MODEL }
+  if (hasOpenAI()) return { provider: 'openai', model: 'gpt-4o-mini' }
+  if (hasAnthropic()) return { provider: 'anthropic', model: 'claude-haiku-4-5' }
+  return null
+}
+
+// Cheap one-line summary for the activity feed. Best-effort: returns null when
+// no provider is configured or the call fails.
 export async function generateHeadline(summary: string): Promise<string | null> {
-  if (!process.env.ANTHROPIC_API_KEY || !summary.trim()) return null
+  const target = summaryTarget()
+  if (!target || !summary.trim()) return null
+  const system =
+    'Summarize what an AI agent run accomplished in one short, friendly past-tense line of at most 10 words. Respond with the line only — no quotes, no preamble.'
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-    const response = await client.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 64,
-      system:
-        'Summarize what an AI agent run accomplished in one short, friendly past-tense line of at most 10 words. Respond with the line only — no quotes, no preamble.',
-      messages: [{ role: 'user', content: summary.slice(0, 4000) }],
-    })
-    const text = response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join(' ')
-      .trim()
+    let text = ''
+    if (target.provider === 'anthropic') {
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      const response = await client.messages.create({
+        model: target.model,
+        max_tokens: 64,
+        system,
+        messages: [{ role: 'user', content: summary.slice(0, 4000) }],
+      })
+      text = response.content
+        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+        .map((block) => block.text)
+        .join(' ')
+        .trim()
+    } else {
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+      const response = await client.chat.completions.create({
+        model: target.model,
+        max_tokens: 64,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: summary.slice(0, 4000) },
+        ],
+      })
+      text = (response.choices[0]?.message?.content || '').trim()
+    }
     return text ? text.split('\n')[0].slice(0, 120) : null
   } catch {
     return null
   }
+}
+
+/**
+ * One-shot structured-output completion against a JSON schema, used by the
+ * natural-language agent builder. Prefers OpenAI (strict json_schema) and falls
+ * back to Anthropic; throws only when neither provider is configured. Returns
+ * the raw JSON string (caller parses).
+ */
+export async function generateStructured(opts: {
+  system: string
+  user: string
+  schema: Record<string, unknown>
+  schemaName: string
+  maxTokens?: number
+}): Promise<string> {
+  const wantsClaude = isClaude(DEFAULT_AGENT_MODEL)
+  const useAnthropic = hasAnthropic() && (wantsClaude || !hasOpenAI())
+
+  if (useAnthropic) {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+    const response = await client.messages.create({
+      model: wantsClaude ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL,
+      max_tokens: opts.maxTokens ?? 4096,
+      system: opts.system,
+      messages: [{ role: 'user', content: opts.user }],
+      output_config: { format: { type: 'json_schema', schema: opts.schema } },
+    })
+    return response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map((block) => block.text)
+      .join('')
+  }
+
+  if (hasOpenAI()) {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    const response = await client.chat.completions.create({
+      model: wantsClaude ? 'gpt-4o' : DEFAULT_AGENT_MODEL,
+      max_tokens: opts.maxTokens ?? 4096,
+      messages: [
+        { role: 'system', content: opts.system },
+        { role: 'user', content: opts.user },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
+      },
+    })
+    return response.choices[0]?.message?.content || ''
+  }
+
+  throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
 }

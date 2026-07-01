@@ -1,8 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
-import { DEFAULT_AGENT_MODEL } from '@/features/agents/execute-agent'
+import { DEFAULT_AGENT_MODEL, generateStructured } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 
 const DRAFT_SCHEMA = {
@@ -49,30 +48,26 @@ type Draft = {
 // Den-style natural-language agent builder: describe the job, get a ready
 // agent config. Pass { create: true } to save it immediately.
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  if (!process.env.ANTHROPIC_API_KEY) throw new ApiError('ANTHROPIC_API_KEY is not configured', 503, 'AI_UNAVAILABLE')
+  if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+    throw new ApiError('No model provider is configured', 503, 'AI_UNAVAILABLE')
+  }
   const { description, create } = z.object({
     description: z.string().min(10).max(4000),
     create: z.boolean().default(false),
   }).parse(await request.json())
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  const response = await client.messages.create({
-    model: 'claude-opus-4-8',
-    max_tokens: 4096,
+  const text = await generateStructured({
+    schemaName: 'agent_draft',
+    schema: DRAFT_SCHEMA as unknown as Record<string, unknown>,
     system: [
       'You configure autonomous agents for a team workspace. Turn the user\'s plain-language description into an agent configuration.',
       `Available integrations: ${PROVIDERS.join(', ')}. Include only the ones the task needs; an agent with no integrations is fine.`,
       'Write instructions the agent can follow without further clarification: the goal, the steps, which tools to use, and what to include in the final report. If anything is genuinely ambiguous, instruct the agent to ask the user via its ask_user tool at run time.',
       'Set a schedule only when the user describes a recurring cadence; otherwise use type "manual" with isActive false.',
     ].join('\n'),
-    messages: [{ role: 'user', content: description }],
-    output_config: { format: { type: 'json_schema', schema: DRAFT_SCHEMA } },
+    user: description,
   })
 
-  const text = response.content
-    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-    .map((block) => block.text)
-    .join('')
   if (!text) throw new ApiError('The model returned no draft', 502, 'DRAFT_FAILED')
   const draft = JSON.parse(text) as Draft
 

@@ -13,6 +13,7 @@ import { buildAgentSystemPrompt } from './system-prompt'
 import {
   createModelRunner,
   generateHeadline,
+  DEFAULT_AGENT_MODEL,
   type ToolDefinition,
   type ToolResult,
 } from '@/lib/llm/model-runner'
@@ -46,8 +47,6 @@ type PendingQuestion = {
   stepId: string | null
   collectedResults: ToolResult[]
 }
-
-export const DEFAULT_AGENT_MODEL = 'claude-opus-4-8'
 
 const ASK_USER_TOOL: ToolDefinition = {
   name: 'ask_user',

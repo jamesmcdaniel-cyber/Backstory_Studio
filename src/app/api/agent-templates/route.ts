@@ -9,7 +9,7 @@ const templateSchema = z.object({
   instructions: z.string().min(1),
   integrations: z.array(z.string()).default([]),
   tags: z.array(z.string()).default([]),
-  model: z.string().default('claude-opus-4-8'),
+  model: z.string().default('gpt-4o'),
 })
 
 function serializeTemplate(template: any) {
@@ -22,7 +22,7 @@ function serializeTemplate(template: any) {
     instructions: config.instructions || template.description || '',
     integrations: config.integrations || [],
     tags: config.tags || [],
-    model: config.model || 'claude-opus-4-8',
+    model: config.model || 'gpt-4o',
     custom: true,
   }
 }
@@ -43,7 +43,7 @@ const builtInTemplates = [
       "recurring",
       "daily"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "02-meeting-brief",
@@ -60,7 +60,7 @@ const builtInTemplates = [
       "recurring",
       "daily"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "03-silence-contract-monitor",
@@ -77,7 +77,7 @@ const builtInTemplates = [
       "recurring",
       "account"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "04-opportunity-discovery",
@@ -94,7 +94,7 @@ const builtInTemplates = [
       "recurring",
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "05-forecast-coach",
@@ -110,7 +110,7 @@ const builtInTemplates = [
       "recurring",
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "06-executive-inbox",
@@ -127,7 +127,7 @@ const builtInTemplates = [
       "recurring",
       "account"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "07-churn-risk-scorecard",
@@ -145,7 +145,7 @@ const builtInTemplates = [
       "recurring",
       "customer"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "08-renewal-prep-brief",
@@ -163,7 +163,7 @@ const builtInTemplates = [
       "recurring",
       "customer"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "09-onboarding-pulse",
@@ -181,7 +181,7 @@ const builtInTemplates = [
       "recurring",
       "customer"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "10-activity-gap-detector",
@@ -198,7 +198,7 @@ const builtInTemplates = [
       "recurring",
       "coaching"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "11-deal-hygiene-audit",
@@ -216,7 +216,7 @@ const builtInTemplates = [
       "recurring",
       "coaching"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "12-win-loss-debrief",
@@ -233,7 +233,7 @@ const builtInTemplates = [
     "tags": [
       "coaching"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "13-competitive-displacement-alert",
@@ -251,7 +251,7 @@ const builtInTemplates = [
       "recurring",
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "14-territory-heat-map",
@@ -268,7 +268,7 @@ const builtInTemplates = [
       "recurring",
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "15-qbr-auto-prep",
@@ -287,7 +287,7 @@ const builtInTemplates = [
       "recurring",
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "16-executive-sponsor-tracker",
@@ -305,7 +305,7 @@ const builtInTemplates = [
       "recurring",
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "17-marketing-sales-handoff-scorer",
@@ -322,7 +322,7 @@ const builtInTemplates = [
     "tags": [
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "18-channel-pulse",
@@ -339,7 +339,7 @@ const builtInTemplates = [
       "recurring",
       "account"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "19-customer-stack-blueprint",
@@ -355,7 +355,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "20-crm-signal-normalizer",
@@ -371,7 +371,7 @@ const builtInTemplates = [
       "recurring",
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "21-meeting-intelligence-normalizer",
@@ -387,7 +387,7 @@ const builtInTemplates = [
       "recurring",
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "22-multi-channel-delivery-router",
@@ -401,7 +401,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "23-identity-resolution-hub",
@@ -415,7 +415,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "24-workflow-contract-validator",
@@ -429,7 +429,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "25-implementation-gap-audit",
@@ -443,7 +443,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "26-orchestrator-migration-planner",
@@ -457,7 +457,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "27-adapter-regression-monitor",
@@ -472,7 +472,7 @@ const builtInTemplates = [
       "recurring",
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "28-rollout-readiness-scorecard",
@@ -486,7 +486,7 @@ const builtInTemplates = [
     "tags": [
       "platform"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "29-digital-chief-of-staff",
@@ -503,7 +503,7 @@ const builtInTemplates = [
       "recurring",
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "30-market-research-brief",
@@ -520,7 +520,7 @@ const builtInTemplates = [
       "recurring",
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "31-deal-inspection",
@@ -535,7 +535,7 @@ const builtInTemplates = [
     "tags": [
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "32-revenue-orchestration",
@@ -550,7 +550,7 @@ const builtInTemplates = [
     "tags": [
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "33-prospecting-brief",
@@ -565,7 +565,7 @@ const builtInTemplates = [
     "tags": [
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "34-manager-coaching-brief",
@@ -580,7 +580,7 @@ const builtInTemplates = [
     "tags": [
       "coaching"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "35-grounded-follow-up",
@@ -595,7 +595,7 @@ const builtInTemplates = [
     "tags": [
       "coaching"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "36-pipeline-forecast-digest",
@@ -610,7 +610,7 @@ const builtInTemplates = [
     "tags": [
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "37-deal-risk-next-actions",
@@ -625,7 +625,7 @@ const builtInTemplates = [
     "tags": [
       "pipeline"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   },
   {
     "id": "38-account-planning-strategy",
@@ -640,7 +640,7 @@ const builtInTemplates = [
     "tags": [
       "strategic"
     ],
-    "model": "claude-opus-4-8"
+    "model": "gpt-4o"
   }
 ]
 

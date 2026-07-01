@@ -4,6 +4,7 @@ import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { inlineExecution } from '@/lib/queue/execution-mode'
+import { executionVisibilityScope } from '@/lib/server/visibility'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -14,7 +15,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const { message } = z.object({ message: z.string().min(1).max(8000) }).parse(await request.json())
 
   const execution = await prisma.agentExecution.findFirst({
-    where: { id, organizationId: auth.organizationId },
+    where: { id, organizationId: auth.organizationId, ...executionVisibilityScope(auth.dbUser.id) },
   })
   if (!execution) throw new ApiError('Execution not found', 404, 'NOT_FOUND')
   if (execution.status !== 'waiting_for_input' || !execution.agentTaskId) {
