@@ -1,23 +1,23 @@
-# SprintIQ
+# Backstory Studio
 
-SprintIQ is a focused AI-agent workspace modeled after Den: create agents, connect tools, run tasks, inspect live tool calls and errors, ask follow-up questions about an execution, and build operational dashboards.
+Backstory Studio is a focused AI-agent workspace: create agents, connect tools, run tasks, inspect live tool calls and errors, and ask follow-up questions about an execution.
 
 ## Product Surface
 
-- `/dashboard`: agent list, grouped run activity, output, tool calls, errors, and follow-up chat
-- `/dashboard/custom`: dashboards composed from activity, error, and integration widgets
+- `/dashboard`: agent list, grouped run activity, output, tool calls, errors, per-agent run history, and follow-up chat
 - `/integrations`: Klavis MCP tool connections and Pipedream embedded integrations
-- `/templates`: reusable agent templates
+- `/connections`: custom per-org MCP server connections
+- `/templates`: reusable agent templates and skills
 
 ## Architecture
 
 - Next.js App Router owns the UI and authenticated API routes.
 - Supabase owns user authentication.
-- Prisma/PostgreSQL stores tenants, agents, executions, tool events, templates, dashboards, and connection state.
+- Prisma/PostgreSQL stores tenants, agents, executions, tool events, templates, and connection state.
 - One Fastify/BullMQ worker runtime executes manual and scheduled agents.
 - Klavis provides MCP tool servers called by agents.
 - Pipedream provides embedded integration account connections.
-- OpenAI plans tool calls and answers follow-up questions about completed runs.
+- OpenAI (default) or Anthropic plans tool calls and answers follow-up questions about completed runs.
 
 ## Local Setup
 

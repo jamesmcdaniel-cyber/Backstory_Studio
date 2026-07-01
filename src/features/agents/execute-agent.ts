@@ -84,7 +84,7 @@ async function loadTools(organizationId: string, providers: string[]) {
   const klavisProviders = providers.filter((p) => !/backstory/i.test(p))
 
   if (process.env.KLAVIS_API_KEY && klavisProviders.length > 0) {
-    const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'sprintiq' })
+    const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'backstory' })
     const agents = await prisma.mCPAgent.findMany({
       where: {
         organizationId,
@@ -99,6 +99,11 @@ async function loadTools(organizationId: string, providers: string[]) {
       // Degrade gracefully: log + skip this provider, keep whatever else loaded.
       try {
         const available = await client.getServerTools(agent.mcpServerUrl)
+        if (available.length > 20) {
+          apiLogger.warn('loadTools: per-provider tool cap reached; some tools not exposed to the agent', {
+            provider, organizationId, discovered: available.length, cap: 20, dropped: available.length - 20,
+          })
+        }
         for (const tool of available.slice(0, 20)) {
           const name = toolName(provider, tool.name)
           if (bindings.has(name)) continue
@@ -275,6 +280,11 @@ async function loadTools(organizationId: string, providers: string[]) {
     }
   }
 
+  if (tools.length > 64) {
+    apiLogger.warn('loadTools: global tool cap reached; some discovered tools are not available to the agent', {
+      organizationId, discovered: tools.length, cap: 64, dropped: tools.length - 64,
+    })
+  }
   return { tools: tools.slice(0, 64), bindings }
 }
 

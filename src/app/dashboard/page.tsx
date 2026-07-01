@@ -41,9 +41,19 @@ type Activity = {
   completedAt?: string | null
 }
 
+type RunStep = {
+  id: string
+  node: string
+  status: string
+  input?: any
+  output?: any
+  error?: any
+  startedAt?: string | null
+  completedAt?: string | null
+}
 type RunDetails = {
   execution: Activity
-  steps: Array<{ id: string; node: string; status: string; output?: any; error?: any }>
+  steps: RunStep[]
   events: Array<{ id: string; kind: string; payload?: any; ts: string }>
   messages: Array<{ id: string; role: string; content: string; createdAt: string }>
 }
@@ -186,10 +196,18 @@ function AgentHQ() {
       setRunDetails(null)
       return
     }
-    fetch(`/api/workflows/executions?executionId=${selectedRun.id}`, { cache: 'no-store' })
-      .then((response) => response.json())
-      .then((data) => setRunDetails(data.items?.[0] || null))
-      .catch(() => setRunDetails(null))
+    let cancelled = false
+    const fetchDetails = () =>
+      fetch(`/api/workflows/executions?executionId=${selectedRun.id}`, { cache: 'no-store' })
+        .then((response) => response.json())
+        .then((data) => { if (!cancelled) setRunDetails(data.items?.[0] || null) })
+        .catch(() => { if (!cancelled) setRunDetails(null) })
+    fetchDetails()
+    // While a run is active, poll its detail so tool calls and output stream in
+    // without a full-page refetch.
+    const isActive = ['running', 'pending', 'waiting_for_input'].includes(activityStatus(selectedRun))
+    const timer = isActive ? window.setInterval(fetchDetails, 2500) : undefined
+    return () => { cancelled = true; if (timer) window.clearInterval(timer) }
   }, [selectedRun])
 
   const grouped = useMemo(() => Object.fromEntries(groupOrder.map((status) => [
@@ -541,17 +559,19 @@ function AgentHQ() {
                   </div>
                 )}
                 <div>
-                  <h3 className="mb-2 text-sm font-semibold">Output</h3>
-                  <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm leading-6">{resultText(selectedRun) || 'Agent is still running.'}</pre>
+                  <h3 className="eyebrow mb-2">Output</h3>
+                  {resultText(selectedRun)
+                    ? <div className="rounded-lg border bg-gray-50 p-4"><Markdown>{resultText(selectedRun)}</Markdown></div>
+                    : <p className="flex items-center gap-2 rounded-lg border bg-gray-50 p-4 text-sm text-gray-500">
+                        {activityStatus(selectedRun) === 'running' && <Loader2 className="h-4 w-4 animate-spin" />}
+                        {activityStatus(selectedRun) === 'running' ? 'Agent is working…' : 'No output yet.'}
+                      </p>}
                 </div>
                 <div>
-                  <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold"><Wrench className="h-4 w-4" /> Tool calls</h3>
+                  <h3 className="eyebrow mb-2 flex items-center gap-2"><Wrench className="h-4 w-4" /> Tool calls {runDetails?.steps?.length ? `· ${runDetails.steps.length}` : ''}</h3>
                   <div className="space-y-2">
                     {runDetails?.steps?.map((step) => (
-                      <div key={step.id} className="rounded-lg border p-3 text-sm">
-                        <div className="flex justify-between gap-3"><span className="font-medium">{step.node}</span><Badge variant="outline">{step.status}</Badge></div>
-                        {step.error && <pre className="mt-2 whitespace-pre-wrap text-xs text-red-600">{JSON.stringify(step.error, null, 2)}</pre>}
-                      </div>
+                      <ToolCallCard key={step.id} step={step} />
                     ))}
                     {!runDetails?.steps?.length && <p className="text-sm text-gray-500">No tool calls recorded.</p>}
                   </div>

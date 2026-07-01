@@ -47,7 +47,7 @@ export class KlavisClient {
   constructor(private readonly options: KlavisClientOptions) {
     if (!options.apiKey) throw new Error('KlavisClient requires an API key')
     this.baseUrl = options.baseUrl || 'https://api.klavis.ai'
-    this.platformName = options.platformName || 'sprintiq'
+    this.platformName = options.platformName || 'backstory'
   }
 
   async createServerInstance(provider: string, userId: string): Promise<KlavisServer> {
@@ -92,7 +92,7 @@ export class KlavisClient {
     const response = await this.rpc(serverUrl, 'initialize', {
       protocolVersion: '2024-11-05',
       capabilities: { tools: {} },
-      clientInfo: { name: 'SprintIQ', version: '1.0.0' },
+      clientInfo: { name: 'Backstory', version: '1.0.0' },
     })
     if (response.error) throw new Error(response.error.message || 'Unable to initialize MCP server')
     await this.rpc(serverUrl, 'notifications/initialized', undefined, true)

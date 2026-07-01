@@ -42,7 +42,7 @@ type Organization = { id: string; name: string; slug: string; plan: string }
 type Usage = { executions: number; inputTokens: number; outputTokens: number }
 
 const CREDIT_TOKENS = 1_000_000
-export const AGENTS_CHANGED_EVENT = 'sprintiq:agents-changed'
+export const AGENTS_CHANGED_EVENT = 'backstory:agents-changed'
 
 export function notifyAgentsChanged() {
   window.dispatchEvent(new CustomEvent(AGENTS_CHANGED_EVENT))

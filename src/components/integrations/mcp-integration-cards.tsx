@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { AlertCircle, Loader2, Plug } from 'lucide-react'
+import { AlertCircle, ChevronDown, Loader2, Plug, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
+type Tool = { name: string; description?: string }
 
 type Connection = {
   provider: string
@@ -12,12 +14,18 @@ type Connection = {
   oauthUrl?: string
   toolCount?: number
   capabilities?: { description?: string; verbs?: string[] }
+  tools?: Tool[]
+}
+
+function toolLabel(name: string) {
+  return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 export function MCPIntegrationCards() {
   const [connections, setConnections] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const load = async () => {
@@ -66,24 +74,54 @@ export function MCPIntegrationCards() {
     <div className="space-y-4">
       {error && <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"><AlertCircle className="h-4 w-4" /> {error}</div>}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {connections.map((connection) => (
-          <Card key={connection.provider}>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between text-base capitalize">
-                <span className="flex items-center gap-2"><Plug className="h-4 w-4" />{connection.provider}</span>
-                <Badge variant="outline">{connection.status.replace('_', ' ')}</Badge>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <p className="text-gray-500">{connection.capabilities?.description || 'Klavis MCP connection'}</p>
-              {connection.status === 'active'
-                ? <p>{connection.toolCount || 0} tools available</p>
-                : <Button className="w-full" disabled={connecting === connection.provider} onClick={() => connect(connection.provider)}>
+        {connections.map((connection) => {
+          const isOpen = expanded === connection.provider
+          const tools = connection.tools ?? []
+          const isActive = connection.status === 'active'
+          return (
+            <Card key={connection.provider}>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between text-base capitalize">
+                  <span className="flex items-center gap-2"><Plug className="h-4 w-4" />{connection.provider}</span>
+                  <Badge variant="outline">{connection.status.replace('_', ' ')}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <p className="text-gray-500">{connection.capabilities?.description || 'Klavis MCP connection'}</p>
+
+                {tools.length > 0 && (
+                  <div className="rounded-lg border">
+                    <button
+                      type="button"
+                      aria-expanded={isOpen}
+                      onClick={() => setExpanded(isOpen ? null : connection.provider)}
+                      className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-gray-600 hover:bg-gray-50"
+                    >
+                      <span className="flex items-center gap-1.5"><Wrench className="h-3.5 w-3.5" /> {tools.length} {tools.length === 1 ? 'tool' : 'tools'}{isActive ? '' : ' available'}</span>
+                      <ChevronDown className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOpen && (
+                      <ul className="space-y-2 border-t px-3 py-2">
+                        {tools.map((tool) => (
+                          <li key={tool.name}>
+                            <p className="font-medium text-gray-800">{toolLabel(tool.name)}</p>
+                            {tool.description && <p className="text-xs text-gray-500">{tool.description}</p>}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {!isActive && (
+                  <Button className="w-full" disabled={connecting === connection.provider} onClick={() => connect(connection.provider)}>
                     {connecting === connection.provider ? 'Connecting...' : 'Connect with Klavis'}
-                  </Button>}
-            </CardContent>
-          </Card>
-        ))}
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
       {!connections.length && <p className="text-sm text-gray-500">No Klavis providers are configured.</p>}
     </div>

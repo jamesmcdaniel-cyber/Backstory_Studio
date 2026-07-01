@@ -72,40 +72,29 @@ export default function SignUpPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-horizon p-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="flex items-center justify-center space-x-3 mb-4">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-6 w-6 text-white">
-                <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
-                <path d="M18 17V9"></path>
-                <path d="M13 17V5"></path>
-                <path d="M8 17v-3"></path>
-              </svg>
-            </div>
-            <span className="text-3xl font-bold text-white">SprintIQ</span>
-          </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Join SprintIQ</h1>
-          <p className="text-gray-300">Create your account to get started</p>
+        <div className="mb-8 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/backstory-logo-white.svg" alt="Backstory" className="mx-auto mb-6 h-7" />
+          <h1 className="text-2xl font-semibold text-white">Create your account</h1>
+          <p className="mt-1 text-white/70">Get started with Backstory.</p>
         </div>
 
-        <Card className="bg-white/10 backdrop-blur-sm border-white/20">
+        <Card className="shadow-3">
           <CardHeader>
-            <CardTitle className="text-white">Create Account</CardTitle>
-            <CardDescription className="text-gray-300">
-              Enter your details to create your account
-            </CardDescription>
+            <CardTitle>Create account</CardTitle>
+            <CardDescription>Enter your details to create your workspace.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {error && (
-              <div className="p-3 text-sm text-red-200 bg-red-500/20 border border-red-500/30 rounded-md">
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 {error}
               </div>
             )}
 
             {success && (
-              <div className="p-3 text-sm text-green-200 bg-green-500/20 border border-green-500/30 rounded-md">
+              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
                 {success}
               </div>
             )}
@@ -113,7 +102,7 @@ export default function SignUpPage() {
             <form onSubmit={handleEmailSignUp} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="firstName" className="text-white">First Name</Label>
+                  <Label htmlFor="firstName">First name</Label>
                   <Input
                     id="firstName"
                     type="text"
@@ -121,11 +110,10 @@ export default function SignUpPage() {
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
                     required
-                    className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="lastName" className="text-white">Last Name</Label>
+                  <Label htmlFor="lastName">Last name</Label>
                   <Input
                     id="lastName"
                     type="text"
@@ -133,13 +121,12 @@ export default function SignUpPage() {
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
                     required
-                    className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                   />
                 </div>
               </div>
-              
+
               <div className="space-y-2">
-                <Label htmlFor="organizationName" className="text-white">Organization Name</Label>
+                <Label htmlFor="organizationName">Organization name</Label>
                 <Input
                   id="organizationName"
                   type="text"
@@ -147,12 +134,11 @@ export default function SignUpPage() {
                   value={organizationName}
                   onChange={(e) => setOrganizationName(e.target.value)}
                   required
-                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                 />
               </div>
-              
+
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-white">Email</Label>
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   type="email"
@@ -160,11 +146,10 @@ export default function SignUpPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password" className="text-white">Password</Label>
+                <Label htmlFor="password">Password</Label>
                 <Input
                   id="password"
                   type="password"
@@ -173,11 +158,10 @@ export default function SignUpPage() {
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   minLength={6}
-                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword" className="text-white">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">Confirm password</Label>
                 <Input
                   id="confirmPassword"
                   type="password"
@@ -186,22 +170,17 @@ export default function SignUpPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
                   minLength={6}
-                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                 />
               </div>
-              <Button 
-                type="submit" 
-                className="w-full bg-purple-600 hover:bg-purple-700 text-white"
-                disabled={loading}
-              >
-                {loading ? 'Creating account...' : 'Create Account'}
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? 'Creating account…' : 'Create account'}
               </Button>
             </form>
 
             <div className="text-center">
-              <p className="text-gray-300 text-sm">
+              <p className="text-sm text-muted-foreground">
                 Already have an account?{' '}
-                <Link href="/auth/login" className="text-purple-400 hover:text-purple-300 font-medium">
+                <Link href="/auth/login" className="font-medium text-primary hover:underline">
                   Sign in
                 </Link>
               </p>

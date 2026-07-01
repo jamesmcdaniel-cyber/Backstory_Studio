@@ -76,51 +76,40 @@ export default function LoginPage() {
   // Show loading spinner while checking auth state
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
-        <div className="flex items-center space-x-2 text-white">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-          <span>Loading...</span>
+      <div className="flex min-h-screen items-center justify-center bg-gradient-horizon p-4">
+        <div className="flex items-center gap-2 text-white">
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-white motion-reduce:animate-none" />
+          <span>Loading…</span>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-horizon p-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="flex items-center justify-center space-x-3 mb-4">
-            <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-purple-400 to-pink-400 flex items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-6 w-6 text-white">
-                <path d="M3 3v16a2 2 0 0 0 2 2h16"></path>
-                <path d="M18 17V9"></path>
-                <path d="M13 17V5"></path>
-                <path d="M8 17v-3"></path>
-              </svg>
-            </div>
-            <span className="text-3xl font-bold text-white">SprintIQ</span>
-          </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Welcome back</h1>
-          <p className="text-gray-300">Sign in to your SprintIQ account</p>
+        <div className="mb-8 text-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/backstory-logo-white.svg" alt="Backstory" className="mx-auto mb-6 h-7" />
+          <h1 className="text-2xl font-semibold text-white">Welcome back</h1>
+          <p className="mt-1 text-white/70">Sign in to your Backstory workspace.</p>
         </div>
 
-        <Card className="bg-white/10 backdrop-blur-sm border-white/20">
+        <Card className="shadow-3">
           <CardHeader>
-            <CardTitle className="text-white">Sign In</CardTitle>
-            <CardDescription className="text-gray-300">
-              Enter your credentials to access your account
-            </CardDescription>
+            <CardTitle>Sign in</CardTitle>
+            <CardDescription>Enter your credentials to access your workspace.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {error && (
-              <div className="p-3 text-sm text-red-200 bg-red-500/20 border border-red-500/30 rounded-md">
+              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 {error}
               </div>
             )}
 
             <form onSubmit={handleEmailLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-white">Email</Label>
+                <Label htmlFor="email">Email</Label>
                 <Input
                   id="email"
                   type="email"
@@ -128,11 +117,10 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password" className="text-white">Password</Label>
+                <Label htmlFor="password">Password</Label>
                 <Input
                   id="password"
                   type="password"
@@ -140,22 +128,17 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  className="bg-white/10 border-white/20 text-white placeholder-gray-400"
                 />
               </div>
-              <Button 
-                type="submit" 
-                className="w-full bg-purple-600 hover:bg-purple-700 text-white"
-                disabled={loading}
-              >
-                {loading ? 'Signing in...' : 'Sign In'}
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? 'Signing in…' : 'Sign in'}
               </Button>
             </form>
 
             <div className="text-center">
-              <p className="text-gray-300 text-sm">
-                Don't have an account?{' '}
-                <Link href="/auth/signup" className="text-purple-400 hover:text-purple-300 font-medium">
+              <p className="text-sm text-muted-foreground">
+                Don&apos;t have an account?{' '}
+                <Link href="/auth/signup" className="font-medium text-primary hover:underline">
                   Sign up
                 </Link>
               </p>

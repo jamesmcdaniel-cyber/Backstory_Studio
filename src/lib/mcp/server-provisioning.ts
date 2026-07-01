@@ -14,7 +14,7 @@ export type ServerCreationResult = {
 
 function client() {
   if (!process.env.KLAVIS_API_KEY) throw new Error('KLAVIS_API_KEY is not configured')
-  return new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'sprintiq' })
+  return new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'backstory' })
 }
 
 function connectionStatus(server: KlavisServer): Exclude<ConnectionStatus, 'not_connected'> {
@@ -152,7 +152,7 @@ export async function getConnectionStatuses(
         oauthUrl = server.oauthUrl
         // The GET response omits serverUrl; reuse the one stored at create time.
         if (status === 'active' && connection.mcpServerUrl) {
-          const fetched = await klavis.getServerTools(connection.mcpServerUrl)
+          const fetched = (await klavis.getServerTools(connection.mcpServerUrl)) as McpToolInfo[]
           tools = fetched.map((tool) => ({ name: tool.name, description: tool.description }))
           toolCount = tools.length
         }
