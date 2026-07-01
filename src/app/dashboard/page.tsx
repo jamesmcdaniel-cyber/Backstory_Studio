@@ -3,43 +3,18 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertCircle, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plus, Send, Sparkles, Wrench, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, CircleDashed, FileText, HelpCircle, Loader2, Plus, Send, Sparkles, Wrench, X } from 'lucide-react'
 import { AgentConfigDialog } from './agent-config-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Markdown } from '@/components/ui/markdown'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
 import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
 
-type Agent = {
-  id: string
-  title: string
-  description: string
-  instructions: string
-  model: string
-  integrations: string[]
-  icon: string
-  folder: string | null
-  visibility: 'shared' | 'private'
-  status: string
-  priority: string
-  schedule: { type: string; isActive: boolean }
-}
-
-type Activity = {
-  id: string
-  agentTaskId?: string | null
-  agentType: string
-  status: string
-  input: any
-  output?: any
-  error?: string | null
-  metadata?: any
-  startedAt: string
-  completedAt?: string | null
-}
+import type { Agent, Activity } from '@/lib/types'
 
 type RunStep = {
   id: string
@@ -87,6 +62,65 @@ function resultText(activity?: Activity | null) {
   if (activity.error) return activity.error
   const value = activity.output?.summary ?? activity.output?.response ?? activity.output
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+function stepDuration(step: RunStep): string | null {
+  if (!step.startedAt || !step.completedAt) return null
+  const ms = new Date(step.completedAt).getTime() - new Date(step.startedAt).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return null
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+}
+
+function asJson(value: unknown): string {
+  if (value == null) return ''
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+// One tool call: header always visible; inputs/outputs expand on click so a
+// successful call's data is inspectable, not hidden behind a bare status badge.
+function ToolCallCard({ step }: { step: RunStep }) {
+  const [open, setOpen] = useState(false)
+  const duration = stepDuration(step)
+  const failed = step.status === 'failed'
+  const input = asJson(step.input)
+  const output = asJson(step.error ?? step.output)
+  const hasDetail = Boolean(input || output)
+  return (
+    <div className="rounded-lg border text-sm">
+      <button
+        type="button"
+        aria-expanded={open}
+        disabled={!hasDetail}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left disabled:cursor-default"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {hasDetail && <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />}
+          <span className="truncate font-mono text-xs">{step.node}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          {duration && <span className="text-xs text-gray-500">{duration}</span>}
+          <Badge variant="outline" className={failed ? 'border-red-200 text-red-600' : undefined}>{step.status}</Badge>
+        </span>
+      </button>
+      {open && hasDetail && (
+        <div className="space-y-2 border-t px-3 py-2">
+          {input && (
+            <div>
+              <p className="mono-label mb-1">Input</p>
+              <pre className="overflow-x-auto rounded bg-gray-50 p-2 text-xs">{input}</pre>
+            </div>
+          )}
+          {output && (
+            <div>
+              <p className="mono-label mb-1">{failed ? 'Error' : 'Output'}</p>
+              <pre className={`overflow-x-auto rounded p-2 text-xs ${failed ? 'bg-red-50 text-red-700' : 'bg-gray-50'}`}>{output}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function AgentHQ() {
@@ -190,6 +224,14 @@ function AgentHQ() {
       .catch(() => undefined)
       .finally(() => router.replace('/dashboard'))
   }, [searchParams, activities, loading, router])
+
+  // Escape closes the Granola meeting picker (keyboard parity with the close button).
+  useEffect(() => {
+    if (!granolaPickerOpen) return
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setGranolaPickerOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [granolaPickerOpen])
 
   useEffect(() => {
     if (!selectedRun) {
@@ -379,7 +421,7 @@ function AgentHQ() {
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <h1 className="text-xl font-semibold">Activity</h1>
-                <p className="truncate text-sm text-gray-500">Hey, {user?.firstName || 'there'}. {greeting}</p>
+                <p className="truncate text-sm text-gray-500" aria-live="polite">Hey, {user?.firstName || 'there'}. {greeting}</p>
               </div>
               <Button variant="outline" onClick={() => { setEditingAgent(null); setShowAgentDialog(true) }}>
                 <Plus className="mr-1.5 h-4 w-4" /> New agent

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { DEFAULT_AGENT_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
+import { readAgentMetadata } from '@/lib/agents/metadata'
 
 const scheduleSchema = z.object({
   type: z.enum(['manual', 'hourly', 'daily', 'weekly', 'cron']).default('manual'),
@@ -27,7 +28,7 @@ const agentSchema = z.object({
 })
 
 function serializeAgent(agent: any) {
-  const metadata = agent.metadata && typeof agent.metadata === 'object' ? agent.metadata : {}
+  const metadata = readAgentMetadata(agent.metadata)
   return {
     id: agent.id,
     title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',

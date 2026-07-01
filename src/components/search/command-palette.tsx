@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation'
 import { AlertCircle, CheckCircle2, CircleDashed, HelpCircle, Loader2, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import type { Agent } from '@/lib/types'
 
-type AgentResult = { id: string; title: string; icon: string; folder: string | null }
+type AgentResult = Pick<Agent, 'id' | 'title' | 'icon' | 'folder'>
 type RunResult = { id: string; title: string; headline: string | null; status: string; startedAt: string }
 type Result =
   | { kind: 'agent'; agent: AgentResult }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Loader2, Play, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -110,10 +111,24 @@ export function AgentConfigDialog({
   template?: any
   runningId?: string | null
 }) {
+  const router = useRouter()
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
   const [skillNames, setSkillNames] = useState<Record<string, string>>({})
   const [availableIntegrations, setAvailableIntegrations] = useState<AvailableIntegrations | null>(null)
+  const [runs, setRuns] = useState<any[]>([])
+  const [runsLoading, setRunsLoading] = useState(false)
+
+  // Load this agent's recent runs when editing.
+  useEffect(() => {
+    if (!open || !editingAgent?.id) { setRuns([]); return }
+    setRunsLoading(true)
+    fetch(`/api/workflows/executions?agentId=${editingAgent.id}&limit=8`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setRuns(Array.isArray(data.items) ? data.items.map((item: any) => item.execution) : []))
+      .catch(() => setRuns([]))
+      .finally(() => setRunsLoading(false))
+  }, [open, editingAgent])
 
   // Load skill names for compact skills display
   useEffect(() => {
@@ -420,6 +435,32 @@ export function AgentConfigDialog({
               .
             </p>
           </div>
+
+          {editingAgent && (
+            <div>
+              <p className="eyebrow mb-2">Recent runs</p>
+              {runsLoading ? (
+                <p className="text-sm text-gray-500"><Loader2 className="inline h-3.5 w-3.5 animate-spin" /> Loading…</p>
+              ) : runs.length === 0 ? (
+                <p className="text-sm text-gray-500">No runs yet.</p>
+              ) : (
+                <ul className="divide-y rounded-lg border">
+                  {runs.map((run) => (
+                    <li key={run.id}>
+                      <button
+                        type="button"
+                        onClick={() => { onOpenChange(false); router.push(`/dashboard?run=${run.id}`) }}
+                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-gray-50"
+                      >
+                        <span className="truncate text-gray-700">{run.metadata?.headline || run.error || run.status}</span>
+                        <span className="shrink-0 text-xs text-gray-500">{new Date(run.startedAt).toLocaleString()}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-2">
             {editingAgent && onRunAgent && (

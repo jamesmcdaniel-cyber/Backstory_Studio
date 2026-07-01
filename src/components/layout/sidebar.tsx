@@ -27,16 +27,9 @@ import { NotificationBell } from '@/components/notifications/notification-bell'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { cn } from '@/lib/utils'
+import type { Agent as AgentType } from '@/lib/types'
 
-type Agent = {
-  id: string
-  title: string
-  description: string
-  instructions: string
-  icon: string
-  folder: string | null
-  visibility: 'shared' | 'private'
-}
+type Agent = Pick<AgentType, 'id' | 'title' | 'description' | 'instructions' | 'icon' | 'folder' | 'visibility'>
 
 type Organization = { id: string; name: string; slug: string; plan: string }
 type Usage = { executions: number; inputTokens: number; outputTokens: number }

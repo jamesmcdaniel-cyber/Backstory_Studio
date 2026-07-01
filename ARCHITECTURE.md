@@ -31,3 +31,10 @@ All tenant data queries must include `organizationId`. The only session-less API
 ## Core Data
 
 `prisma/schema.prisma` intentionally contains only organizations, users, agents, executions, execution messages, workflow steps/events, templates, integrations, and Klavis MCP connections. Executions carry the resumable model transcript, token counts, and the model that ran them.
+
+## Known follow-ups (tracked tech debt)
+
+- **MCP transport consolidation.** There are three near-duplicate MCP clients — `klavis-client.ts`, `mcp-client.ts`, and `backstory-mcp.ts` — each reimplementing JSON-RPC, SSE parsing, session handling, and the initialize handshake. They should collapse into one transport with pluggable auth (none / api-key / oauth2-client-credentials / oauth2-authcode / static-bearer). The `MCPAgent` (Klavis, per-user) vs `McpConnection` (custom, per-org) model split is the same divide surfacing in the schema.
+- **Per-org credentials for built-in tools.** Slack, Granola, and Email are keyed to single global env vars, so every organization shares one account — acceptable single-tenant, blocking for multi-tenant. The per-user `Integration` table already exists and should hold these.
+- **Tool-discovery caching.** `loadTools` runs `initialize` + `tools/list` against every server on every run (drops past the per-server 20 / global 64 caps are now logged). Cache the discovered tool lists (the Klavis path already persists them for the capability cards) and run discovery in parallel.
+- **Frontend data layer.** Pages fetch with raw `fetch` + `useState` + `setInterval`; shared domain types now live in `src/lib/types.ts`, but a query cache (e.g. TanStack Query) would remove the hand-rolled polling, refetch-everything mutations, and the `AGENTS_CHANGED_EVENT` window-event bus.
