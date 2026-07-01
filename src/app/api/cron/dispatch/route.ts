@@ -16,7 +16,6 @@
 import { timingSafeEqual } from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
-import { composeInstructions } from '@/lib/skills/compose'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
 
@@ -118,13 +117,19 @@ export async function GET(request: Request) {
             ? (agent.metadata as Record<string, unknown>)
             : {}
 
-        // I3 — AgentTask has no creator/owner field (only organizationId), so
-        // scheduled runs are attributed to the first active user in the org.
-        // If an owner field is later added, attribute to that user instead.
-        const user = await prisma.user.findFirst({
-          where: { organizationId: agent.organizationId, isActive: true },
-          orderBy: { createdAt: 'asc' },
-        })
+        // Attribute the run to the agent's owner when set; otherwise the org's
+        // oldest active member (shared agents have no single owner).
+        const owner = agent.userId
+          ? await prisma.user.findFirst({
+              where: { id: agent.userId, organizationId: agent.organizationId, isActive: true },
+            })
+          : null
+        const user =
+          owner ||
+          (await prisma.user.findFirst({
+            where: { organizationId: agent.organizationId, isActive: true },
+            orderBy: { createdAt: 'asc' },
+          }))
 
         if (!user) {
           apiLogger.error('cron/dispatch: no active user found, skipping agent', {
@@ -134,10 +139,9 @@ export async function GET(request: Request) {
           continue
         }
 
-        const skillIds: string[] = Array.isArray(metadata.skills)
-          ? (metadata.skills as string[])
-          : []
-        const input = composeInstructions(agent.objective, skillIds)
+        // Pass the raw objective — runAgentExecution composes skills into the
+        // system prompt itself, so composing here too would double-apply them.
+        const input = agent.objective
 
         // Create the execution row in pending state
         const execution = await prisma.agentExecution.create({

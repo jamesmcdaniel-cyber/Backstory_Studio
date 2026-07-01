@@ -21,21 +21,28 @@ function connectionStatus(server: KlavisServer): Exclude<ConnectionStatus, 'not_
   return server.isAuthenticated ? 'active' : 'pending_auth'
 }
 
+export type McpToolInfo = { name: string; description?: string }
+
 async function saveConnection(
   provider: MCPProvider,
   userId: string,
   organizationId: string,
   server: KlavisServer,
+  tools?: McpToolInfo[],
 ) {
   const status = connectionStatus(server)
   const existing = await prisma.mCPAgent.findFirst({
     where: { userId, organizationId, agentType: provider.toUpperCase() },
   })
   const configuration = { provider, verbs: PROVIDER_CAPABILITIES[provider].verbs }
+  const existingMetadata = (existing?.metadata as Record<string, any> | null) || {}
   const metadata = {
     instanceId: server.instanceId,
     oauthUrl: server.oauthUrl ?? null,
     status,
+    // Cache the live tool list (name + description) for the capability cards.
+    // Preserve a previously cached list when this save didn't fetch one.
+    tools: tools ?? (Array.isArray(existingMetadata.tools) ? existingMetadata.tools : undefined),
   }
 
   if (existing) {
@@ -108,18 +115,24 @@ export async function createServersForTenant(
   return results
 }
 
-export async function getConnectionStatuses(organizationId: string, userId: string) {
+export type ConnectionStatusInfo = {
+  provider: MCPProvider
+  status: ConnectionStatus
+  oauthUrl?: string
+  toolCount?: number
+  tools?: McpToolInfo[]
+}
+
+export async function getConnectionStatuses(
+  organizationId: string,
+  userId: string,
+): Promise<ConnectionStatusInfo[]> {
   const connections = await prisma.mCPAgent.findMany({
     where: { organizationId, userId },
     orderBy: { updatedAt: 'desc' },
   })
   const klavis = process.env.KLAVIS_API_KEY ? client() : null
-  const byProvider = new Map<string, {
-    provider: MCPProvider
-    status: ConnectionStatus
-    oauthUrl?: string
-    toolCount?: number
-  }>()
+  const byProvider = new Map<string, ConnectionStatusInfo>()
 
   for (const connection of connections) {
     const provider = connection.agentType.toLowerCase() as MCPProvider
@@ -128,6 +141,9 @@ export async function getConnectionStatuses(organizationId: string, userId: stri
     let status = (metadata.status || (connection.isActive ? 'active' : 'pending_auth')) as ConnectionStatus
     let oauthUrl = metadata.oauthUrl as string | undefined
     let toolCount: number | undefined
+    // Start from any previously cached tool list so the card still has detail
+    // when Klavis is momentarily unreachable.
+    let tools: McpToolInfo[] | undefined = Array.isArray(metadata.tools) ? metadata.tools : undefined
 
     if (klavis && metadata.instanceId) {
       try {
@@ -136,18 +152,21 @@ export async function getConnectionStatuses(organizationId: string, userId: stri
         oauthUrl = server.oauthUrl
         // The GET response omits serverUrl; reuse the one stored at create time.
         if (status === 'active' && connection.mcpServerUrl) {
-          toolCount = (await klavis.getServerTools(connection.mcpServerUrl)).length
+          const fetched = await klavis.getServerTools(connection.mcpServerUrl)
+          tools = fetched.map((tool) => ({ name: tool.name, description: tool.description }))
+          toolCount = tools.length
         }
         await saveConnection(provider, userId, organizationId, {
           ...server,
           serverUrl: server.serverUrl ?? connection.mcpServerUrl,
-        })
+        }, tools)
       } catch {
         status = 'error'
       }
     }
 
-    byProvider.set(provider, { provider, status, oauthUrl, toolCount })
+    if (tools && toolCount === undefined) toolCount = tools.length
+    byProvider.set(provider, { provider, status, oauthUrl, toolCount, tools })
   }
 
   return PROVIDERS.map((provider) => byProvider.get(provider) || { provider, status: 'not_connected' as const })

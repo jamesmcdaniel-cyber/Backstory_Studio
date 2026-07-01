@@ -27,6 +27,24 @@ function getDerivedKey(): Buffer | null {
   return crypto.createHash('sha256').update(raw).digest()
 }
 
+// ── One-way token hashing (webhook trigger secrets) ────────────────────────
+
+/**
+ * SHA-256 hex digest of a token. Used to store webhook trigger secrets so the
+ * plaintext is never persisted — the secret is shown once at creation/rotation
+ * and validated by hashing the presented value. Compare with timingSafeEqualHex.
+ */
+export function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex')
+}
+
+/** Constant-time compare of two hex digests (returns false on length mismatch). */
+export function timingSafeEqualHex(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'hex')
+  const bufB = Buffer.from(b, 'hex')
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB)
+}
+
 // ── Encryption ────────────────────────────────────────────────────────────
 
 export function encryptSecret(plaintext: string): string {

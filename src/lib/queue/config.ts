@@ -24,15 +24,21 @@ export function getRedisConnection() {
 
 export const workerConfig = {
   concurrency: Number(process.env.AGENT_WORKER_CONCURRENCY) || 3,
-  lockDuration: 120_000,
+  // Agent runs are long (multi-turn) and have external side effects (emails,
+  // Slack posts). Hold the lock long enough that a live run isn't declared
+  // stalled, and never re-run a stalled job — a half-finished run must not be
+  // replayed from the top. runAgentExecution is also idempotent per execution.
+  lockDuration: 300_000,
+  maxStalledCount: 0,
 } satisfies Partial<WorkerOptions>
 
 export function createQueue(name: string, overrides: Partial<QueueOptions> = {}) {
   return new Queue(name, {
     connection: getRedisConnection(),
     defaultJobOptions: {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5_000 },
+      // No automatic retries: a retry replays the whole tool loop and re-fires
+      // side effects. Failures surface in the UI where a user can re-run.
+      attempts: 1,
       removeOnComplete: 100,
       removeOnFail: 100,
     },

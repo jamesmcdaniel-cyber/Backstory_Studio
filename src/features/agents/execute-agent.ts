@@ -9,6 +9,7 @@ import { GranolaToolClient, granolaConfigured, granolaTools } from '@/lib/integr
 import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
+import { checkMonthlyTokenBudget } from '@/lib/usage/budget'
 import { buildAgentSystemPrompt } from './system-prompt'
 import {
   createModelRunner,
@@ -308,6 +309,14 @@ export async function runAgentExecution(data: AgentExecutionJob) {
   const resuming = Boolean(data.resume)
   if (resuming && !queuedExecution) throw new Error('Resume requested without an execution')
 
+  // Idempotency guard: a fresh run may only start from a `pending` row. If a
+  // duplicate delivery or (despite maxStalledCount:0) a re-queue hands us an
+  // execution that already started, finished, or failed, do not replay it —
+  // that would re-fire every side effect from the top.
+  if (queuedExecution && !resuming && queuedExecution.status !== 'pending') {
+    return { status: queuedExecution.status, skipped: true as const }
+  }
+
   let transcript: unknown[]
   let pendingResults: ToolResult[] | null = null
 
@@ -370,6 +379,14 @@ export async function runAgentExecution(data: AgentExecutionJob) {
   const usage = { inputTokens: 0, outputTokens: 0 }
 
   try {
+    // Enforce the workspace's monthly token ceiling before doing any model work.
+    const budget = await checkMonthlyTokenBudget(organizationId)
+    if (budget.over) {
+      throw new Error(
+        `Monthly token budget reached for this workspace (${budget.used.toLocaleString()}/${budget.limit.toLocaleString()} tokens). Raise AGENT_MONTHLY_TOKEN_LIMIT or wait for the next cycle.`,
+      )
+    }
+
     const providers = Array.isArray(agentMetadata.integrations) ? agentMetadata.integrations.map(String) : []
     const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
     const { tools, bindings } = await loadTools(organizationId, providers)

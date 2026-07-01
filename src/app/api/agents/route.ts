@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { DEFAULT_AGENT_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+import { agentVisibilityScope } from '@/lib/server/visibility'
 
 const scheduleSchema = z.object({
   type: z.enum(['manual', 'hourly', 'daily', 'weekly', 'cron']).default('manual'),
@@ -47,17 +48,12 @@ function serializeAgent(agent: any) {
   }
 }
 
-// A private agent is visible only to its owner; shared agents to the whole org.
-function visibilityScope(userId: string) {
-  return { OR: [{ visibility: { not: 'private' } }, { userId }] }
-}
-
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const agents = await prisma.agentTask.findMany({
     where: {
       organizationId: auth.organizationId,
       status: { not: 'DELETED' },
-      ...visibilityScope(auth.dbUser.id),
+      ...agentVisibilityScope(auth.dbUser.id),
     },
     orderBy: { updatedAt: 'desc' },
   })
@@ -96,7 +92,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 export const PUT = withAuthenticatedApi(async (request, auth) => {
   const body = z.object({ id: z.string().min(1) }).merge(agentSchema.partial()).parse(await request.json())
   const existing = await prisma.agentTask.findFirst({
-    where: { id: body.id, organizationId: auth.organizationId, ...visibilityScope(auth.dbUser.id) },
+    where: { id: body.id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
   if (!existing) throw new ApiError('Agent not found', 404, 'NOT_FOUND')
   const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata : {}
@@ -126,7 +122,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
 export const DELETE = withAuthenticatedApi(async (request, auth) => {
   const { id } = z.object({ id: z.string().min(1) }).parse(await request.json())
   const result = await prisma.agentTask.updateMany({
-    where: { id, organizationId: auth.organizationId, ...visibilityScope(auth.dbUser.id) },
+    where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
     data: { status: 'DELETED' },
   })
   if (!result.count) throw new ApiError('Agent not found', 404, 'NOT_FOUND')

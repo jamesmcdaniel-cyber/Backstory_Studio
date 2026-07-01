@@ -28,13 +28,20 @@ function asApiError(error: unknown): never {
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const statuses = await getConnectionStatuses(auth.organizationId, auth.dbUser.id)
   const byProvider = new Map(statuses.map((status) => [status.provider, status]))
-  const connections = PROVIDERS.map((provider) => ({
-    provider,
-    status: byProvider.get(provider)?.status || 'not_connected',
-    oauthUrl: byProvider.get(provider)?.oauthUrl,
-    toolCount: byProvider.get(provider)?.toolCount,
-    capabilities: PROVIDER_CAPABILITIES[provider],
-  }))
+  const connections = PROVIDERS.map((provider) => {
+    const status = byProvider.get(provider)
+    const capability = PROVIDER_CAPABILITIES[provider]
+    return {
+      provider,
+      status: status?.status || 'not_connected',
+      oauthUrl: status?.oauthUrl,
+      toolCount: status?.toolCount,
+      capabilities: capability,
+      // Prefer the live tool list (real descriptions from the server); fall back
+      // to the curated catalog so cards always explain what each tool does.
+      tools: status?.tools?.length ? status.tools : capability.tools,
+    }
+  })
   return { success: true, connections }
 })
 
