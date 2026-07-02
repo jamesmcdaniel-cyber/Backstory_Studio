@@ -9,6 +9,7 @@ import {
   HelpCircle,
   Loader2,
   Send,
+  Sparkles,
   Wrench,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -76,15 +77,18 @@ function asJson(value: unknown): string {
 
 // One tool call: header always visible; inputs/outputs expand on click so a
 // successful call's data is inspectable, not hidden behind a bare status badge.
+// A call still in flight shows a live spinner ("Calling…") rather than a badge.
 function ToolCallCard({ step }: { step: RunStep }) {
   const [open, setOpen] = useState(false)
   const duration = stepDuration(step)
   const failed = step.status === 'failed'
+  const running = step.status === 'running'
+  const waiting = step.status === 'waiting'
   const input = asJson(step.input)
   const output = asJson(step.error ?? step.output)
   const hasDetail = Boolean(input || output)
   return (
-    <div className="rounded-lg border bg-white text-sm">
+    <div className={cn('rounded-lg border bg-white text-sm', running && 'border-blue-200')}>
       <button
         type="button"
         aria-expanded={open}
@@ -93,12 +97,21 @@ function ToolCallCard({ step }: { step: RunStep }) {
         className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors duration-150 hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent"
       >
         <span className="flex min-w-0 items-center gap-2">
-          {hasDetail && <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform duration-200', open && 'rotate-180')} />}
+          <Wrench className={cn('h-3.5 w-3.5 shrink-0', running ? 'text-blue-500' : 'text-gray-400')} />
           <span className="truncate font-mono text-xs">{step.node}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
           {duration && <span className="text-xs text-gray-500">{duration}</span>}
-          <Badge variant="outline" className={failed ? 'border-red-200 text-red-600' : undefined}>{step.status}</Badge>
+          {running ? (
+            <span className="flex items-center gap-1.5 text-xs font-medium text-blue-600">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Calling…
+            </span>
+          ) : waiting ? (
+            <Badge variant="outline" className="border-amber-200 text-amber-600">waiting</Badge>
+          ) : (
+            <Badge variant="outline" className={failed ? 'border-red-200 text-red-600' : undefined}>{step.status}</Badge>
+          )}
+          {hasDetail && <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform duration-200', open && 'rotate-180')} />}
         </span>
       </button>
       {open && hasDetail && (
@@ -121,6 +134,39 @@ function ToolCallCard({ step }: { step: RunStep }) {
   )
 }
 
+// The agent's narration for one turn, shown as a reasoning step in the timeline.
+function ThinkingCard({ text }: { text: string }) {
+  return (
+    <div className="rounded-lg border border-dashed bg-white/60 px-3 py-2">
+      <p className="mono-label mb-1 flex items-center gap-1.5 text-gray-400">
+        <Sparkles className="h-3 w-3" /> Thinking
+      </p>
+      <div className="text-sm text-gray-600"><Markdown>{text}</Markdown></div>
+    </div>
+  )
+}
+
+// Merge thinking events and tool-call steps into one chronological process
+// timeline, so the log reads as the agent's reasoning interleaved with its calls.
+type TimelineItem =
+  | { key: string; ts: number; kind: 'thinking'; text: string }
+  | { key: string; ts: number; kind: 'tool'; step: RunStep }
+
+function buildTimeline(details: RunDetails | null): TimelineItem[] {
+  if (!details) return []
+  const items: TimelineItem[] = []
+  for (const event of details.events ?? []) {
+    if (event.kind === 'agent.thinking' && event.payload?.text) {
+      items.push({ key: `t-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'thinking', text: String(event.payload.text) })
+    }
+  }
+  for (const step of details.steps ?? []) {
+    const ts = step.startedAt ? new Date(step.startedAt).getTime() : 0
+    items.push({ key: `s-${step.id}`, ts, kind: 'tool', step })
+  }
+  return items.sort((a, b) => a.ts - b.ts)
+}
+
 function RunRow({
   activity,
   expanded,
@@ -136,6 +182,8 @@ function RunRow({
   const [reply, setReply] = useState('')
   const [replying, setReplying] = useState(false)
   const status = activityStatus(activity)
+  const isActive = ['running', 'pending', 'waiting_for_input'].includes(status)
+  const timeline = buildTimeline(details)
 
   useEffect(() => {
     if (!expanded) {
@@ -149,12 +197,11 @@ function RunRow({
         .then((data) => { if (!cancelled) setDetails(data.items?.[0] || null) })
         .catch(() => { if (!cancelled) setDetails(null) })
     fetchDetails()
-    // While a run is active, poll its detail so tool calls and output stream in
-    // without a full-page refetch.
-    const isActive = ['running', 'pending', 'waiting_for_input'].includes(status)
-    const timer = isActive ? window.setInterval(fetchDetails, 2500) : undefined
+    // While a run is active, poll its detail so thinking and tool calls stream in
+    // (near-real-time) without a full-page refetch.
+    const timer = isActive ? window.setInterval(fetchDetails, 2000) : undefined
     return () => { cancelled = true; if (timer) window.clearInterval(timer) }
-  }, [expanded, activity.id, status])
+  }, [expanded, activity.id, status, isActive])
 
   const sendReply = async () => {
     if (!reply.trim() || replying) return
@@ -217,45 +264,38 @@ function RunRow({
             </div>
           )}
 
-          {(details?.messages?.length ?? 0) > 0 && (
+          {/* Process timeline: the agent's reasoning interleaved with its tool
+              calls, streaming in while the run is active. Conversation with the
+              agent lives in the assistant pane on the right, not here. */}
+          <div>
+            <h4 className="eyebrow mb-2 flex items-center gap-2">
+              <Wrench className="h-4 w-4" /> Process
+              {timeline.length ? <span className="text-gray-400">· {timeline.length}</span> : null}
+            </h4>
+            <div className="space-y-2">
+              {timeline.map((item) => (
+                item.kind === 'thinking'
+                  ? <ThinkingCard key={item.key} text={item.text} />
+                  : <ToolCallCard key={item.key} step={item.step} />
+              ))}
+              {isActive && (
+                <p className="flex items-center gap-2 px-1 text-sm text-blue-600">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Agent is working…
+                </p>
+              )}
+              {!details && <p className="text-sm text-gray-500"><Loader2 className="inline h-3.5 w-3.5 animate-spin" /> Loading run detail…</p>}
+              {details && !timeline.length && !isActive && <p className="text-sm text-gray-500">No steps recorded for this run.</p>}
+            </div>
+          </div>
+
+          {(resultText(activity) || !isActive) && (
             <div>
-              <h4 className="eyebrow mb-2">Conversation</h4>
-              <div className="space-y-2">
-                {(details?.messages ?? []).map((message) => (
-                  <div
-                    key={message.id}
-                    className={cn(
-                      'whitespace-pre-wrap rounded-lg p-3 text-sm',
-                      message.role === 'user' ? 'ml-8 bg-indigo-50' : 'mr-8 border bg-white',
-                    )}
-                  >
-                    {message.content}
-                  </div>
-                ))}
-              </div>
+              <h4 className="eyebrow mb-2">Output</h4>
+              {resultText(activity)
+                ? <div className="rounded-lg border bg-white p-3"><Markdown>{resultText(activity)}</Markdown></div>
+                : <p className="rounded-lg border bg-white p-3 text-sm text-gray-500">No output yet.</p>}
             </div>
           )}
-
-          <div>
-            <h4 className="eyebrow mb-2">Output</h4>
-            {resultText(activity)
-              ? <div className="rounded-lg border bg-white p-3"><Markdown>{resultText(activity)}</Markdown></div>
-              : <p className="flex items-center gap-2 rounded-lg border bg-white p-3 text-sm text-gray-500">
-                  {status === 'running' && <Loader2 className="h-4 w-4 animate-spin" />}
-                  {status === 'running' ? 'Agent is working…' : 'No output yet.'}
-                </p>}
-          </div>
-
-          <div>
-            <h4 className="eyebrow mb-2 flex items-center gap-2"><Wrench className="h-4 w-4" /> Tool calls {details?.steps?.length ? `· ${details.steps.length}` : ''}</h4>
-            <div className="space-y-2">
-              {details?.steps?.map((step) => (
-                <ToolCallCard key={step.id} step={step} />
-              ))}
-              {!details && <p className="text-sm text-gray-500"><Loader2 className="inline h-3.5 w-3.5 animate-spin" /> Loading run detail…</p>}
-              {details && !details.steps?.length && <p className="text-sm text-gray-500">No tool calls recorded.</p>}
-            </div>
-          </div>
         </div>
       )}
     </div>

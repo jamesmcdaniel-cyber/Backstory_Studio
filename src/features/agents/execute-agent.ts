@@ -421,6 +421,13 @@ export async function runAgentExecution(data: AgentExecutionJob) {
         break
       }
 
+      // Capture the assistant's narration that accompanies a tool-calling turn so
+      // the activity log can show the agent's reasoning as it works, interleaved
+      // with the tool calls it makes.
+      if (turnResult.text && turnResult.text.trim()) {
+        await recordEvent(execution.id, null, 'agent.thinking', { text: turnResult.text.trim() })
+      }
+
       const results: ToolResult[] = []
       let pendingAsk: { toolCallId: string; question: string } | null = null
 
