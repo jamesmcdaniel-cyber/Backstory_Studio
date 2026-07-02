@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
@@ -11,6 +11,7 @@ import {
   ChevronsUpDown,
   FileText,
   Folder,
+  ImagePlus,
   Loader2,
   Lock,
   LogOut,
@@ -31,7 +32,40 @@ import type { Agent as AgentType } from '@/lib/types'
 
 type Agent = Pick<AgentType, 'id' | 'title' | 'description' | 'instructions' | 'icon' | 'folder' | 'visibility'>
 
-type Organization = { id: string; name: string; slug: string; plan: string }
+type Organization = { id: string; name: string; slug: string; plan: string; logoUrl?: string | null }
+
+/** Default workspace avatar — the Backstory mark, until an org uploads its own. */
+const DEFAULT_ORG_LOGO = '/backstory-mark-blue.svg'
+
+/**
+ * Downscale an uploaded image to a small square PNG data URL so the logo can
+ * be stored inline (no object storage) and still render crisply at 32px.
+ */
+function resizeImageToDataUrl(file: File, size = 128): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => {
+      URL.revokeObjectURL(url)
+      const canvas = document.createElement('canvas')
+      canvas.width = size
+      canvas.height = size
+      const context = canvas.getContext('2d')
+      if (!context) return reject(new Error('Canvas unavailable'))
+      // Cover-fit: crop the shorter axis so logos stay centered and square.
+      const scale = Math.max(size / image.width, size / image.height)
+      const width = image.width * scale
+      const height = image.height * scale
+      context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Could not read that image'))
+    }
+    image.src = url
+  })
+}
 type Usage = { executions: number; inputTokens: number; outputTokens: number }
 
 const CREDIT_TOKENS = 1_000_000
@@ -61,6 +95,8 @@ export function Sidebar() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [orgMenuOpen, setOrgMenuOpen] = useState(false)
   const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const logoInputRef = useRef<HTMLInputElement>(null)
   const [activeOrgId, setActiveOrgId] = useState<string | null>(null)
   const [agents, setAgents] = useState<Agent[]>([])
   const [usage, setUsage] = useState<Usage | null>(null)
@@ -116,6 +152,37 @@ export function Sidebar() {
   }, [pathname])
 
   const activeOrg = organizations.find((org) => org.id === activeOrgId) || organizations[0] || null
+
+  const saveOrgLogo = async (logoUrl: string | null) => {
+    setUploadingLogo(true)
+    try {
+      const response = await fetch('/api/organizations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logoUrl }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast.error(data.error || 'Could not update the workspace logo.')
+        return
+      }
+      setOrganizations((previous) =>
+        previous.map((org) => (org.id === data.organization?.id ? { ...org, logoUrl: data.organization.logoUrl } : org)),
+      )
+      toast.success(logoUrl ? 'Workspace logo updated.' : 'Workspace logo removed.')
+    } finally {
+      setUploadingLogo(false)
+    }
+  }
+
+  const uploadOrgLogo = async (file: File) => {
+    try {
+      const logoUrl = await resizeImageToDataUrl(file)
+      await saveOrgLogo(logoUrl)
+    } catch {
+      toast.error('Could not read that image — try a PNG or JPEG.')
+    }
+  }
 
   const sections = useMemo(() => {
     const shared = agents.filter((agent) => agent.visibility !== 'private')
@@ -247,10 +314,14 @@ export function Sidebar() {
           <button
             className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-100"
             onClick={() => setOrgMenuOpen((open) => !open)}
+            aria-label={`Workspace: ${activeOrg?.name || 'Workspace'}`}
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-sm font-bold text-white">
-              {(activeOrg?.name || 'W').charAt(0).toUpperCase()}
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={activeOrg?.logoUrl || DEFAULT_ORG_LOGO}
+              alt=""
+              className="h-8 w-8 rounded-lg object-cover"
+            />
             <span className="flex-1 truncate text-left text-sm font-semibold">{activeOrg?.name || 'Workspace'}</span>
             <ChevronsUpDown className="h-4 w-4 text-gray-400" />
           </button>
@@ -264,11 +335,42 @@ export function Sidebar() {
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-100"
                     onClick={() => setOrgMenuOpen(false)}
                   >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={org.logoUrl || DEFAULT_ORG_LOGO} alt="" className="h-5 w-5 rounded object-cover" />
                     <span className="flex-1 truncate text-left">{org.name}</span>
                     <span className="text-xs text-gray-400">{planLabel(org.plan)}</span>
                     {org.id === activeOrg?.id && <Check className="h-4 w-4 text-indigo-600" />}
                   </button>
                 ))}
+                <div className="my-1 border-t" />
+                <button
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                  disabled={uploadingLogo}
+                  onClick={() => logoInputRef.current?.click()}
+                >
+                  {uploadingLogo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                  {activeOrg?.logoUrl ? 'Change workspace logo' : 'Upload workspace logo'}
+                </button>
+                {activeOrg?.logoUrl && (
+                  <button
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                    disabled={uploadingLogo}
+                    onClick={() => saveOrgLogo(null)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Remove logo
+                  </button>
+                )}
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ''
+                    if (file) uploadOrgLogo(file)
+                  }}
+                />
                 <div className="my-1 border-t" />
                 <div className="truncate px-2 py-1 text-xs text-gray-400">{user?.emailAddress}</div>
                 <button

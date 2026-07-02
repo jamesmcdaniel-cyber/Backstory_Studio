@@ -12,6 +12,9 @@ model Organization {
   id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name             String
   slug             String    @unique
+  // Workspace avatar shown in the org switcher — a small data URL (client
+  // resizes to 128px before upload) so no external storage is required.
+  logoUrl          String?
   plan             Plan      @default(TRIAL)
   trialStartDate   DateTime  @default(now()) @db.Timestamptz(6)
   trialEndDate     DateTime? @db.Timestamptz(6)
