@@ -150,7 +150,9 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   await requireAgent(agentId, auth)
   const rows = await prisma.agentChatMessage.findMany({
     where: { agentTaskId: agentId, userId: auth.dbUser.id },
-    orderBy: { createdAt: 'desc' },
+    // Secondary id sort keeps user/assistant pairs stable when both rows land
+    // in the same millisecond (cuids are creation-ordered within a process).
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 100,
   })
   return { success: true, messages: rows.reverse().map(serializeMessage) }
@@ -170,23 +172,13 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     buildAssistantContext(agent),
     prisma.agentChatMessage.findMany({
       where: { agentTaskId: agentId, userId: auth.dbUser.id },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 20,
     }),
   ])
   const conversation = historyRows
     .reverse()
     .map((row) => ({ role: row.role, content: row.content.slice(0, 2000) }))
-
-  const userMessage = await prisma.agentChatMessage.create({
-    data: {
-      agentTaskId: agentId,
-      organizationId: auth.organizationId,
-      userId: auth.dbUser.id,
-      role: 'user',
-      content: message,
-    },
-  })
 
   let reply = ''
   let proposal: Record<string, unknown> | null = null
@@ -206,6 +198,17 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   }
   if (!reply) reply = proposal ? 'Here is the proposed configuration change.' : 'No answer returned.'
 
+  // Persist only after the model answered, so a failed call leaves no
+  // half-thread behind (the client restores the input for a retry).
+  const userMessage = await prisma.agentChatMessage.create({
+    data: {
+      agentTaskId: agentId,
+      organizationId: auth.organizationId,
+      userId: auth.dbUser.id,
+      role: 'user',
+      content: message,
+    },
+  })
   const assistantMessage = await prisma.agentChatMessage.create({
     data: {
       agentTaskId: agentId,
