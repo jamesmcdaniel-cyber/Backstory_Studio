@@ -1,7 +1,5 @@
-import { granolaConfigured } from '@/lib/integrations/granola'
+import { getGranolaApiKey, GRANOLA_BASE_URL } from '@/lib/integrations/granola'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
-
-const GRANOLA_BASE_URL = 'https://public-api.granola.ai/v1'
 
 export type GranolaNoteSummary = {
   id: string
@@ -10,8 +8,9 @@ export type GranolaNoteSummary = {
   created_at: string | null
 }
 
-export const GET = withAuthenticatedApi(async () => {
-  if (!granolaConfigured()) {
+export const GET = withAuthenticatedApi(async (_request, auth) => {
+  const resolved = await getGranolaApiKey(auth.organizationId)
+  if (!resolved) {
     return { success: false, error: 'Granola is not connected', notes: [] }
   }
 
@@ -20,7 +19,7 @@ export const GET = withAuthenticatedApi(async () => {
     const response = await fetch(`${GRANOLA_BASE_URL}/notes`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${process.env.GRANOLA_API_KEY}`,
+        Authorization: `Bearer ${resolved.apiKey}`,
         Accept: 'application/json',
       },
       signal: AbortSignal.timeout(30_000),

@@ -18,14 +18,16 @@ model Organization {
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
   updatedAt        DateTime  @updatedAt @db.Timestamptz(6)
 
-  users          User[]
-  agents         AgentTask[]
-  executions     AgentExecution[]
-  templates      AgentTemplate[]
-  integrations   Integration[]
-  mcpAgents      MCPAgent[]
-  notifications  Notification[]
-  mcpConnections McpConnection[]
+  users              User[]
+  agents             AgentTask[]
+  executions         AgentExecution[]
+  templates          AgentTemplate[]
+  integrations       Integration[]
+  mcpAgents          MCPAgent[]
+  notifications      Notification[]
+  mcpConnections     McpConnection[]
+  nangoConnections   NangoConnection[]
+  integrationSecrets IntegrationSecret[]
 
   @@map("organizations")
 }
@@ -77,13 +79,33 @@ model AgentTask {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  owner        User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner        User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   executions   AgentExecution[]
+  chatMessages AgentChatMessage[]
 
   @@index([organizationId, status])
   @@index([userId])
   @@map("agent_tasks")
+}
+
+// Agent-scoped assistant chat (persistent per agent + user, not per execution).
+// Additive: new table only. `metadata` carries assistant proposals and their
+// applied-at marker, mirroring the JSON grab-bag pattern used elsewhere.
+model AgentChatMessage {
+  id             String   @id @default(cuid())
+  agentTaskId    String
+  organizationId String   @db.Uuid
+  userId         String
+  role           String
+  content        String   @db.Text
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  agentTask AgentTask @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
+
+  @@index([agentTaskId, userId, createdAt])
+  @@map("agent_chat_messages")
 }
 
 model AgentExecution {
@@ -285,6 +307,47 @@ model McpConnection {
 
   @@index([organizationId, isActive])
   @@map("mcp_connections")
+}
+
+// Mirror of a Nango connected account, scoped per-organization. Nango owns
+// the credentials; we only persist connection ids and health for listing.
+model NangoConnection {
+  id                String   @id @default(cuid())
+  organizationId    String   @db.Uuid
+  userId            String?
+  connectionId      String
+  providerConfigKey String
+  provider          String?
+  status            String   @default("connected")
+  lastError         String?  @db.Text
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, connectionId])
+  @@index([organizationId, providerConfigKey])
+  @@map("nango_connections")
+}
+
+// Per-organization secret for built-in integrations (e.g. the Granola API
+// key). authConfig holds the encrypted blob produced by buildAuthConfig().
+model IntegrationSecret {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  provider       String
+  authType       String   @default("api_key") // 'none' | 'api_key' | 'oauth2'
+  authConfig     Json     @default("{}") // encrypted secret blob + non-secret fields
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, provider])
+  @@index([organizationId, isActive])
+  @@map("integration_secrets")
 }
 
 enum Plan {

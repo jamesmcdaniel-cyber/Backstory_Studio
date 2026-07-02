@@ -5,7 +5,7 @@ import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
-import { GranolaToolClient, granolaConfigured, granolaTools } from '@/lib/integrations/granola'
+import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
@@ -206,20 +206,24 @@ async function loadTools(organizationId: string, providers: string[]) {
   }
 
   // ---- Granola REST API (built-in; no Klavis / MCP server required) --------
-  // Gate: GRANOLA_API_KEY must be set AND the agent's providers list must
-  // include an entry matching /granola/i. A failure here must not abort the
-  // run or prevent other tools from loading.
+  // Gate: a Granola key must resolve for this org (saved key first, then the
+  // GRANOLA_API_KEY env fallback) AND the agent's providers list must include
+  // an entry matching /granola/i. A failure here must not abort the run or
+  // prevent other tools from loading.
   const hasGranolaProvider = providers.some((p) => /granola/i.test(p))
-  if (granolaConfigured() && hasGranolaProvider) {
+  if (hasGranolaProvider) {
     try {
-      const client = new GranolaToolClient()
-      const serverUrl = 'https://public-api.granola.ai/v1'
-      for (const def of granolaTools()) {
-        if (tools.length >= 64) break
-        const name = toolName('granola', def.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, { provider: 'granola', serverUrl, toolName: def.name, client })
-        tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+      const granolaKey = await getGranolaApiKey(organizationId)
+      if (granolaKey) {
+        const client = new GranolaToolClient(granolaKey.apiKey)
+        const serverUrl = 'https://public-api.granola.ai/v1'
+        for (const def of granolaTools()) {
+          if (tools.length >= 64) break
+          const name = toolName('granola', def.name)
+          if (bindings.has(name)) continue
+          bindings.set(name, { provider: 'granola', serverUrl, toolName: def.name, client })
+          tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+        }
       }
     } catch (error) {
       apiLogger.warn('loadTools: Granola tool setup failed, skipping provider', {

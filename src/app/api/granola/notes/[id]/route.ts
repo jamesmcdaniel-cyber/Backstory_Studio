@@ -1,11 +1,10 @@
 import { NextRequest } from 'next/server'
-import { granolaConfigured } from '@/lib/integrations/granola'
+import { getGranolaApiKey, GRANOLA_BASE_URL } from '@/lib/integrations/granola'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 
-const GRANOLA_BASE_URL = 'https://public-api.granola.ai/v1'
-
-export const GET = withAuthenticatedApi(async (request: NextRequest) => {
-  if (!granolaConfigured()) {
+export const GET = withAuthenticatedApi(async (request: NextRequest, auth) => {
+  const resolved = await getGranolaApiKey(auth.organizationId)
+  if (!resolved) {
     throw new ApiError('Granola is not connected', 503, 'INTEGRATION_UNAVAILABLE')
   }
 
@@ -20,7 +19,7 @@ export const GET = withAuthenticatedApi(async (request: NextRequest) => {
     const response = await fetch(url, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${process.env.GRANOLA_API_KEY}`,
+        Authorization: `Bearer ${resolved.apiKey}`,
         Accept: 'application/json',
       },
       signal: AbortSignal.timeout(30_000),

@@ -5,6 +5,10 @@ import { Bot, Cable, ScrollText } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import './landing.css'
 
+// Rendered per-request: the try/catch around the Supabase auth check would
+// otherwise swallow the dynamic-usage signal and bake a static page at build.
+export const dynamic = 'force-dynamic'
+
 export const metadata: Metadata = {
   title: 'Backstory — agents that show their work',
   description:
@@ -100,8 +104,15 @@ function ProductShot() {
 }
 
 export default async function Home() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  // Signed-in visitors go straight to the app; everyone else sees the landing.
+  // If Supabase isn't configured, the public page still renders.
+  let user = null
+  try {
+    const supabase = await createClient()
+    user = (await supabase.auth.getUser()).data.user
+  } catch {
+    user = null
+  }
   if (user) redirect('/dashboard')
 
   return (
