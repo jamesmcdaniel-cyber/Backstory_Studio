@@ -223,39 +223,42 @@ export function AssistantPanel({
     }
   }
 
-  if (!agent) {
-    return (
-      <div className="flex h-full flex-col">
-        <div className="border-b p-4">
-          <p className="eyebrow">Assistant</p>
-          <h2 className="mt-1 font-semibold">No agent selected</h2>
-        </div>
-        <div className="m-auto max-w-xs p-6 text-center text-sm text-gray-500">
-          Select an agent to ask about its runs, debug errors, or change its configuration.
-        </div>
-      </div>
-    )
-  }
+  const suggestions = agent
+    ? [
+        'What did the last run do?',
+        ...(hasFailedRun ? ['Why did the last run fail?'] : []),
+        'Change the schedule to run daily at 9am.',
+      ]
+    : []
 
-  const suggestions = [
-    'What did the last run do?',
-    ...(hasFailedRun ? ['Why did the last run fail?'] : []),
-    'Change the schedule to run daily at 9am.',
-  ]
-
+  // Always a chat window: header, scrollable transcript, composer pinned to the
+  // bottom. Before an agent is picked the composer stays visible but disabled so
+  // the pane reads as a chat surface rather than an empty placeholder.
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b p-4">
         <p className="eyebrow">Assistant</p>
-        <h2 className="mt-1 truncate font-semibold">{agent.title}</h2>
-        <p className="text-xs text-gray-500">Ask about run output, debug errors, or change configuration in plain language.</p>
+        <h2 className="mt-1 truncate font-semibold">{agent ? agent.title : 'No agent selected'}</h2>
+        <p className="text-xs text-gray-500">
+          {agent
+            ? 'Ask about run output, debug errors, or change configuration in plain language.'
+            : 'Pick an agent to ask about its runs, debug errors, or change its configuration.'}
+        </p>
       </div>
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-        {loading && (
+        {!agent && (
+          <div className="mx-auto mt-8 max-w-sm text-center">
+            <MessageSquare className="mx-auto h-6 w-6 text-gray-300" />
+            <p className="mt-2 text-sm text-gray-500">
+              This is where you talk to your agents — ask what a run did, walk through an error, or describe a change. Select an agent to begin.
+            </p>
+          </div>
+        )}
+        {agent && loading && (
           <div className="p-6 text-center text-gray-500"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
         )}
-        {!loading && messages.length === 0 && (
+        {agent && !loading && messages.length === 0 && (
           <div className="mx-auto mt-8 max-w-sm text-center">
             <MessageSquare className="mx-auto h-6 w-6 text-gray-300" />
             <p className="mt-2 text-sm text-gray-500">
@@ -276,7 +279,7 @@ export function AssistantPanel({
             </div>
           </div>
         )}
-        {messages.map((message) => (
+        {agent && messages.map((message) => (
           <div
             key={message.id}
             className={cn(
@@ -296,7 +299,7 @@ export function AssistantPanel({
             )}
           </div>
         ))}
-        {sending && (
+        {agent && sending && (
           <div className="mr-8 flex items-center gap-2 rounded-lg border bg-gray-50 p-3 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
           </div>
@@ -309,10 +312,10 @@ export function AssistantPanel({
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => event.key === 'Enter' && send()}
-            placeholder={`Ask about ${agent.title}...`}
-            disabled={sending}
+            placeholder={agent ? `Ask about ${agent.title}...` : 'Select an agent to start chatting…'}
+            disabled={!agent || sending}
           />
-          <Button size="icon" disabled={sending || !input.trim()} onClick={() => send()} aria-label="Send message">
+          <Button size="icon" disabled={!agent || sending || !input.trim()} onClick={() => send()} aria-label="Send message">
             {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
           </Button>
         </div>
