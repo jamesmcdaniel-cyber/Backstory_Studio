@@ -1,6 +1,21 @@
-import { test } from 'node:test'
+import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { evaluateEntitlement, entitlementFresh, ENTITLEMENT_TTL_MS } from '../entitlement'
+import { evaluateEntitlement, entitlementFresh, ENTITLEMENT_TTL_MS, salesAiNativeMode } from '../entitlement'
+
+const ORIGINAL_ENV = { ...process.env }
+beforeEach(() => {
+  process.env = { ...ORIGINAL_ENV }
+  delete process.env.PEOPLE_AI_SERVICE_CLIENT_ID
+  delete process.env.PEOPLE_AI_SERVICE_CLIENT_SECRET
+})
+
+test('salesAiNativeMode: true only when both service credentials are set', () => {
+  assert.equal(salesAiNativeMode(), false)
+  process.env.PEOPLE_AI_SERVICE_CLIENT_ID = 'id'
+  assert.equal(salesAiNativeMode(), false)
+  process.env.PEOPLE_AI_SERVICE_CLIENT_SECRET = 'secret'
+  assert.equal(salesAiNativeMode(), true)
+})
 
 test('org with an active Sales AI connection is entitled', () => {
   const result = evaluateEntitlement({

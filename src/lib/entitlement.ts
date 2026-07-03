@@ -24,6 +24,17 @@ export interface EntitlementResult {
   status: EntitlementStatus
 }
 
+/**
+ * Native Sales AI mode: the platform is exclusively for People.ai Sales AI
+ * customers, so when an org-level service credential is configured, every
+ * workspace is assumed entitled and Sales AI works out of the box — no per-user
+ * People.ai connection required. Per-user connections remain an optional,
+ * higher-fidelity upgrade (rep-scoped reads/actions).
+ */
+export function salesAiNativeMode(): boolean {
+  return Boolean(process.env.PEOPLE_AI_SERVICE_CLIENT_ID && process.env.PEOPLE_AI_SERVICE_CLIENT_SECRET)
+}
+
 interface ConnectionShape {
   status: string
   membershipId: string | null
@@ -58,6 +69,12 @@ export function entitlementFresh(
  * fresh; otherwise re-evaluates from connections and persists the snapshot.
  */
 export async function resolveEntitlement(organizationId: string): Promise<EntitlementResult> {
+  // Native mode short-circuits: with a service credential, Sales AI is a native
+  // platform capability and every workspace is entitled without a connection.
+  if (salesAiNativeMode()) {
+    return { entitled: true, tier: 'sales_ai', status: 'entitled' }
+  }
+
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: {
