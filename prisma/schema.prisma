@@ -39,6 +39,7 @@ model Organization {
   mcpConnections     McpConnection[]
   nangoConnections   NangoConnection[]
   integrationSecrets IntegrationSecret[]
+  peopleAiConnections PeopleAiConnection[]
 
   @@map("organizations")
 }
@@ -67,6 +68,7 @@ model User {
   integrations Integration[]
   mcpAgents    MCPAgent[]
   ownedAgents  AgentTask[]
+  peopleAiConnections PeopleAiConnection[]
 
   @@index([organizationId])
   @@map("users")
@@ -303,6 +305,30 @@ model MCPAgent {
 
   @@unique([userId, organizationId, agentType])
   @@map("mcp_agents")
+}
+
+// Per-user People.ai Sales AI connection: encrypted mcp_* tokens from the
+// mcp.people.ai OAuth flow, plus the team/membership identity they resolve to.
+// One connection per user per workspace; agents read People.ai as this user.
+model PeopleAiConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @db.Uuid
+  userId         String
+  teamId         String?
+  membershipId   String?
+  scope          String?
+  accessToken    String // encrypted (src/lib/crypto/secrets.ts)
+  refreshToken   String? // encrypted
+  status         String    @default("active") // 'active' | 'refresh_failed' | 'revoked'
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("people_ai_connections")
 }
 
 model McpConnection {
