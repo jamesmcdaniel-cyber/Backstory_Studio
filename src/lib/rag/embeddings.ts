@@ -27,9 +27,14 @@ export interface EmbedOptions {
   model?: string
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
 /**
- * Embed a batch of texts. Returns one vector per input, in order. Throws a
- * status-tagged error on failure so callers can classify (auth/quota vs bug).
+ * Embed a batch of texts. Returns one vector per input, in order. Retries on
+ * rate limits (429) and provider outages (5xx) with backoff honoring
+ * Retry-After — Voyage's free tier is a few requests/minute, so indexing bursts
+ * (backfill, signal storms) would otherwise 429. Non-retryable errors (bad key,
+ * bad request) throw immediately, status-tagged.
  */
 export async function embedTexts(texts: string[], options: EmbedOptions = {}): Promise<number[][]> {
   if (texts.length === 0) return []
@@ -37,20 +42,33 @@ export async function embedTexts(texts: string[], options: EmbedOptions = {}): P
   if (!apiKey) throw new Error('VOYAGE_API_KEY is not configured')
 
   const fetchImpl = options.fetchImpl ?? fetch
-  const response = await fetchImpl(VOYAGE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: options.model || process.env.VOYAGE_EMBED_MODEL || DEFAULT_MODEL,
-      input: texts,
-      input_type: options.inputType ?? 'document',
-    }),
-    signal: AbortSignal.timeout(30_000),
-  })
+  const maxAttempts = options.fetchImpl ? 1 : 6 // tests inject fetch and don't want real waits
 
-  if (!response.ok) {
-    const error = new Error(`Voyage embeddings request failed (${response.status})`) as Error & { status?: number }
-    error.status = response.status
+  let response: Response | undefined
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    response = await fetchImpl(VOYAGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: options.model || process.env.VOYAGE_EMBED_MODEL || DEFAULT_MODEL,
+        input: texts,
+        input_type: options.inputType ?? 'document',
+      }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (response.ok) break
+    const retryable = response.status === 429 || response.status >= 500
+    if (!retryable || attempt === maxAttempts) break
+    const retryAfter = Number(response.headers.get('retry-after'))
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? retryAfter * 1000
+      : Math.min(1000 * 2 ** (attempt - 1), 20_000) // 1s,2s,4s,8s,16s,20s
+    await sleep(waitMs)
+  }
+
+  if (!response || !response.ok) {
+    const error = new Error(`Voyage embeddings request failed (${response?.status ?? 'no response'})`) as Error & { status?: number }
+    error.status = response?.status
     throw error
   }
 

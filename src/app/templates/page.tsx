@@ -4,11 +4,17 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
+import {
+  Sparkles, TrendingUp, CalendarClock, ShieldAlert, Target,
+  Inbox, LineChart, Bell, Plus,
+} from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
+import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { cn } from '@/lib/utils'
 
 interface TemplateItem {
   id: string
@@ -34,6 +40,77 @@ interface AgentItem {
   id: string
   title: string
   skills: string[]
+}
+
+// ── Card styling helpers ──────────────────────────────────────────────────
+// A small palette of accents; a category is deterministically hashed to one so
+// the same category always gets the same color, but cards stay varied and alive.
+const ACCENTS = [
+  { bar: 'from-sky-500 to-cyan-400',       tile: 'bg-sky-100 text-sky-600 dark:bg-sky-500/15 dark:text-sky-300',           badge: 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300',           ring: 'hover:ring-sky-300/70 dark:hover:ring-sky-500/40' },
+  { bar: 'from-violet-500 to-fuchsia-400', tile: 'bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300', badge: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300', ring: 'hover:ring-violet-300/70 dark:hover:ring-violet-500/40' },
+  { bar: 'from-emerald-500 to-teal-400',   tile: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300', badge: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300', ring: 'hover:ring-emerald-300/70 dark:hover:ring-emerald-500/40' },
+  { bar: 'from-amber-500 to-orange-400',   tile: 'bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-300',     badge: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',     ring: 'hover:ring-amber-300/70 dark:hover:ring-amber-500/40' },
+  { bar: 'from-rose-500 to-pink-400',      tile: 'bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-300',         badge: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300',         ring: 'hover:ring-rose-300/70 dark:hover:ring-rose-500/40' },
+  { bar: 'from-indigo-500 to-blue-400',    tile: 'bg-indigo-100 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-300', badge: 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300', ring: 'hover:ring-indigo-300/70 dark:hover:ring-indigo-500/40' },
+] as const
+
+function hashIndex(seed: string, mod: number): number {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  return h % mod
+}
+
+function accentFor(category: string) {
+  return ACCENTS[hashIndex(category || 'default', ACCENTS.length)]
+}
+
+function categoryIcon(category: string) {
+  const c = (category || '').toLowerCase()
+  if (c.includes('meet')) return CalendarClock
+  if (c.includes('risk') || c.includes('monitor') || c.includes('contract')) return ShieldAlert
+  if (c.includes('forecast')) return LineChart
+  if (c.includes('pipeline') || c.includes('discov') || c.includes('opportun')) return Target
+  if (c.includes('inbox') || c.includes('productiv') || c.includes('exec')) return Inbox
+  if (c.includes('sales') || c.includes('digest') || c.includes('revenue')) return TrendingUp
+  if (c.includes('alert') || c.includes('notif') || c.includes('signal')) return Bell
+  return Sparkles
+}
+
+// Map an integration display name ("Slack", "Email", "Backstory MCP") to a
+// Simple Icons slug so IntegrationLogo can render the real brand mark. Anything
+// unmapped (Backstory MCP, custom tools) falls through to its initial tile.
+function integrationSlug(name: string): string | null {
+  const n = name.toLowerCase()
+  if (n.includes('slack')) return 'slack'
+  if (n.includes('salesforce')) return 'salesforce'
+  if (n.includes('hubspot')) return 'hubspot'
+  if (n.includes('gmail') || n.includes('email') || n.includes('mail')) return 'gmail'
+  if (n.includes('notion')) return 'notion'
+  if (n.includes('jira')) return 'jira'
+  if (n.includes('linear')) return 'linear'
+  if (n.includes('github')) return 'github'
+  if (n.includes('asana')) return 'asana'
+  if (n.includes('zendesk')) return 'zendesk'
+  if (n.includes('airtable')) return 'airtable'
+  if (n.includes('monday')) return 'monday'
+  if (n.includes('teams')) return 'microsoftteams'
+  if (n.includes('zoom')) return 'zoom'
+  if (n.includes('calendar')) return 'googlecalendar'
+  if (n.includes('sheet')) return 'googlesheets'
+  if (n.includes('drive')) return 'googledrive'
+  if (n.includes('confluence')) return 'confluence'
+  if (n.includes('clickup')) return 'clickup'
+  if (n.includes('trello')) return 'trello'
+  return null
+}
+
+function IntegrationChip({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 py-1 pl-1 pr-2.5 text-xs font-medium text-foreground/80">
+      <IntegrationLogo name={name} slug={integrationSlug(name)} className="h-4 w-4" />
+      {name}
+    </span>
+  )
 }
 
 function ExplorePage() {
@@ -149,38 +226,53 @@ function ExplorePage() {
               <p className="text-sm text-muted-foreground">No templates available yet.</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {templates.map((t) => (
-                  <Link key={t.id} href={`/templates/${t.id}`} className="block">
-                    <Card className="h-full hover:shadow-md transition-shadow">
-                      <CardHeader className="space-y-2">
-                        <div className="flex items-start justify-between">
-                          <CardTitle className="text-lg">{t.name}</CardTitle>
-                          <Badge variant="secondary">{t.category}</Badge>
-                        </div>
-                        {t.tags && t.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {t.tags.slice(0, 3).map(tag => (
-                              <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
-                            ))}
+                {templates.map((t) => {
+                  const accent = accentFor(t.category)
+                  const Icon = categoryIcon(t.category)
+                  return (
+                    <Link key={t.id} href={`/templates/${t.id}`} className="block">
+                      <Card className={cn(
+                        'group relative h-full overflow-hidden border-border/60 transition-all duration-200',
+                        'hover:-translate-y-0.5 hover:shadow-lg hover:ring-1',
+                        accent.ring,
+                      )}>
+                        {/* colored accent bar that brightens on hover */}
+                        <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
+                        <CardHeader className="space-y-2.5 pt-5">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
+                                <Icon className="h-[18px] w-[18px]" />
+                              </span>
+                              <CardTitle className="text-base leading-snug">{t.name}</CardTitle>
+                            </div>
+                            <Badge variant="outline" className={cn('shrink-0 text-xs font-medium', accent.badge)}>{t.category}</Badge>
                           </div>
-                        )}
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        <p className="text-sm text-muted-foreground line-clamp-3">{t.description}</p>
-                        {t.integrations && t.integrations.length > 0 && (
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Requires</p>
+                          {t.tags && t.tags.length > 0 && (
                             <div className="flex flex-wrap gap-1">
-                              {t.integrations.map((i) => (
-                                <Badge key={i} variant="outline" className="text-xs">{i}</Badge>
+                              {t.tags.slice(0, 3).map(tag => (
+                                <Badge key={tag} variant="outline" className="text-xs text-muted-foreground">{tag}</Badge>
                               ))}
                             </div>
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  </Link>
-                ))}
+                          )}
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <p className="text-sm text-muted-foreground line-clamp-3">{t.description}</p>
+                          {t.integrations && t.integrations.length > 0 && (
+                            <div className="space-y-1.5">
+                              <p className="text-xs font-medium text-muted-foreground">Requires</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {t.integrations.map((i) => (
+                                  <IntegrationChip key={i} name={i} />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </Link>
+                  )
+                })}
               </div>
             )}
           </TabsContent>
@@ -196,23 +288,44 @@ function ExplorePage() {
               <p className="text-sm text-muted-foreground">No skills available yet.</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {skills.map((skill) => (
-                  <Card key={skill.id} className="h-full flex flex-col">
-                    <CardHeader className="space-y-2">
+                {skills.map((skill) => {
+                  const accent = accentFor(skill.category)
+                  const Icon = categoryIcon(skill.category)
+                  return (
+                  <Card key={skill.id} className={cn(
+                    'group relative h-full flex flex-col overflow-hidden border-border/60 transition-all duration-200',
+                    'hover:-translate-y-0.5 hover:shadow-lg hover:ring-1',
+                    accent.ring,
+                  )}>
+                    <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
+                    <CardHeader className="space-y-2.5 pt-5">
                       <div className="flex items-start justify-between gap-2">
-                        <CardTitle className="text-base leading-snug">{skill.name}</CardTitle>
-                        <Badge variant="secondary" className="shrink-0 text-xs">{skill.category}</Badge>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
+                            <Icon className="h-[18px] w-[18px]" />
+                          </span>
+                          <CardTitle className="text-base leading-snug">{skill.name}</CardTitle>
+                        </div>
+                        <Badge variant="outline" className={cn('shrink-0 text-xs font-medium', accent.badge)}>{skill.category}</Badge>
                       </div>
                       {skill.tags && skill.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1">
                           {skill.tags.slice(0, 3).map((tag) => (
-                            <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
+                            <Badge key={tag} variant="outline" className="text-xs text-muted-foreground">{tag}</Badge>
                           ))}
                         </div>
                       )}
                     </CardHeader>
                     <CardContent className="flex flex-col flex-1 space-y-3">
                       <p className="text-sm text-muted-foreground line-clamp-3 flex-1">{skill.description}</p>
+
+                      {skill.integrations && skill.integrations.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {skill.integrations.map((i) => (
+                            <IntegrationChip key={i} name={i} />
+                          ))}
+                        </div>
+                      )}
 
                       {/* Add to agent control */}
                       <div className="relative" ref={openSkillMenu === skill.id ? menuRef : null}>
@@ -228,6 +341,7 @@ function ExplorePage() {
                             setOpenSkillMenu(openSkillMenu === skill.id ? null : skill.id)
                           }}
                         >
+                          <Plus className="mr-1.5 h-3.5 w-3.5" />
                           Add to agent
                         </Button>
 
@@ -252,7 +366,8 @@ function ExplorePage() {
                       </div>
                     </CardContent>
                   </Card>
-                ))}
+                  )
+                })}
               </div>
             )}
           </TabsContent>

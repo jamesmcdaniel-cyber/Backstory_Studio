@@ -16,7 +16,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { getPeopleAiServiceClient } from '@/lib/peopleai/client'
 import { enrichAccount, enrichOpportunity, extractMcpText } from '@/lib/peopleai/salesai-facts'
-import { commitGraph, indexAgent, indexExecution, indexSignal, nodeIds, type PendingNode } from './indexer'
+import { commitGraph, nodeIds, type PendingNode } from './indexer'
 import { ragEnabled } from './get-store'
 import type { GraphEdge } from './store'
 
@@ -46,20 +46,22 @@ interface TopAccount {
   }>
 }
 
-/** Pull the org's Sales AI book (accounts + opportunities) and index it, enriched. */
-async function indexSalesAiBook(organizationId: string): Promise<{ accounts: number; opportunities: number }> {
+const clip = (text: string, max = 1500) => (text.length > max ? text.slice(0, max) : text)
+const safe = (value: unknown) => { try { return typeof value === 'string' ? value : JSON.stringify(value ?? {}) } catch { return '' } }
+
+/** Build the org's Sales AI book (accounts + opportunities) as nodes/edges, enriched. */
+async function buildSalesAiBook(organizationId: string): Promise<{ nodes: PendingNode[]; edges: GraphEdge[]; accounts: number; opportunities: number }> {
   const client = getPeopleAiServiceClient()
-  if (!client) return { accounts: 0, opportunities: 0 }
+  if (!client) return { nodes: [], edges: [], accounts: 0, opportunities: 0 }
 
   let records: TopAccount[] = []
   try {
-    const result = await client.callTool('top_records', {})
-    records = JSON.parse(extractMcpText(result)) as TopAccount[]
+    records = JSON.parse(extractMcpText(await client.callTool('top_records', {}))) as TopAccount[]
   } catch (error) {
     apiLogger.warn('backfill.top_records failed', { error: error instanceof Error ? error.message : String(error) })
-    return { accounts: 0, opportunities: 0 }
+    return { nodes: [], edges: [], accounts: 0, opportunities: 0 }
   }
-  if (!Array.isArray(records)) return { accounts: 0, opportunities: 0 }
+  if (!Array.isArray(records)) return { nodes: [], edges: [], accounts: 0, opportunities: 0 }
 
   const nodes: PendingNode[] = []
   const edges: GraphEdge[] = []
@@ -72,15 +74,13 @@ async function indexSalesAiBook(organizationId: string): Promise<{ accounts: num
     const acctKey = String(acctId)
     const facts = await enrichAccount(client, acctId).catch(() => null)
     nodes.push({
-      id: nodeIds.account(acctKey),
-      type: 'account',
+      id: nodeIds.account(acctKey), type: 'account',
       text: facts?.text
         ? `Account: ${account.name ?? acctKey} (${account.domain ?? ''}). Sales AI status: ${facts.text}`
         : `Account: ${account.name ?? acctKey} (${account.domain ?? ''})`,
       props: { peopleaiAccountId: acctId, name: account.name, domain: account.domain },
     })
     accounts++
-
     for (const opp of (account.opportunities ?? []).slice(0, CAPS.oppsPerAccount)) {
       const oppId = opp.peopleai_opportunity_id
       if (oppId == null) continue
@@ -88,8 +88,7 @@ async function indexSalesAiBook(organizationId: string): Promise<{ accounts: num
       const oppFacts = await enrichOpportunity(client, oppId).catch(() => null)
       const base = `Opportunity: ${opp.opportunity_name ?? oppKey} — $${opp.amount ?? '?'}, closes ${opp.close_date ?? '?'}, engagement ${opp.engagement_level ?? '?'}, owner ${opp.owner?.name ?? '?'}`
       nodes.push({
-        id: nodeIds.opportunity(oppKey),
-        type: 'opportunity',
+        id: nodeIds.opportunity(oppKey), type: 'opportunity',
         text: oppFacts?.text ? `${base}. Sales AI status: ${oppFacts.text}` : base,
         props: {
           peopleaiOpportunityId: oppId, name: opp.opportunity_name, amount: opp.amount,
@@ -100,61 +99,70 @@ async function indexSalesAiBook(organizationId: string): Promise<{ accounts: num
       opportunities++
     }
   }
-
-  // Embed + persist in chunks so one huge batch doesn't blow the embeddings request.
-  for (let i = 0; i < nodes.length; i += 64) {
-    await commitGraph(organizationId, nodes.slice(i, i + 64), [])
-  }
-  if (edges.length) await commitGraph(organizationId, [], edges)
-
-  return { accounts, opportunities }
+  return { nodes, edges, accounts, opportunities }
 }
 
+/**
+ * Backfill collects ALL nodes across the Sales AI book + existing agents/runs/
+ * signals and embeds them in a few batched requests (not one-per-item), so it
+ * stays within the embeddings provider's rate limit. Idempotent; re-runnable.
+ */
 export async function backfillOrganization(organizationId: string): Promise<BackfillResult> {
   if (!ragEnabled()) {
     return { accounts: 0, opportunities: 0, agents: 0, executions: 0, signals: 0, skipped: 'rag-disabled' }
   }
 
-  const book = await indexSalesAiBook(organizationId)
+  const book = await buildSalesAiBook(organizationId)
+  const nodes: PendingNode[] = [...book.nodes]
+  const edges: GraphEdge[] = [...book.edges]
 
   const agents = await prisma.agentTask.findMany({
-    where: { organizationId, status: { not: 'DELETED' } },
-    take: CAPS.agents,
-    orderBy: { createdAt: 'desc' },
+    where: { organizationId, status: { not: 'DELETED' } }, take: CAPS.agents, orderBy: { createdAt: 'desc' },
   })
   for (const agent of agents) {
     const meta = (agent.metadata && typeof agent.metadata === 'object' ? agent.metadata : {}) as Record<string, unknown>
-    await indexAgent({
-      id: agent.id, organizationId, objective: agent.objective, description: agent.description,
-      title: (meta.title as string) || agent.description?.split('\n')[0] || 'Untitled agent',
+    const title = (meta.title as string) || agent.description?.split('\n')[0] || 'Untitled agent'
+    nodes.push({
+      id: nodeIds.agent(agent.id), type: 'agent',
+      text: clip(`Agent "${title}". ${agent.description ?? ''} Objective: ${agent.objective ?? ''}`, 1200),
+      props: { agentId: agent.id, title },
     })
   }
 
   const executions = await prisma.agentExecution.findMany({
-    where: { organizationId, status: 'completed' },
-    take: CAPS.executions,
-    orderBy: { startedAt: 'desc' },
-    omit: { transcript: true },
+    where: { organizationId, status: 'completed' }, take: CAPS.executions, orderBy: { startedAt: 'desc' }, omit: { transcript: true },
   })
   for (const execution of executions) {
-    await indexExecution({
-      id: execution.id, organizationId, agentTaskId: execution.agentTaskId,
-      signalId: execution.signalId, input: execution.input, output: execution.output, status: execution.status,
+    nodes.push({
+      id: nodeIds.run(execution.id), type: 'run',
+      text: clip(`Agent run (${execution.status}). Output: ${safe(execution.output)}`, 1500),
+      props: { status: execution.status, agentTaskId: execution.agentTaskId },
     })
+    if (execution.agentTaskId) edges.push({ organizationId, from: nodeIds.run(execution.id), to: nodeIds.agent(execution.agentTaskId), rel: 'ran_agent' })
+    if (execution.signalId) edges.push({ organizationId, from: nodeIds.signal(execution.signalId), to: nodeIds.run(execution.id), rel: 'triggered_run' })
   }
 
-  const signals = await prisma.signal.findMany({
-    where: { organizationId },
-    take: CAPS.signals,
-    orderBy: { receivedAt: 'desc' },
-  })
+  const signals = await prisma.signal.findMany({ where: { organizationId }, take: CAPS.signals, orderBy: { receivedAt: 'desc' } })
   for (const signal of signals) {
-    await indexSignal({
-      id: signal.id, organizationId, type: signal.type,
-      accountId: signal.accountId, opportunityId: signal.opportunityId, stakeholderId: signal.stakeholderId,
-      payload: signal.payload,
+    nodes.push({
+      id: nodeIds.signal(signal.id), type: 'signal',
+      text: clip(`Sales AI signal: ${signal.type}. ${safe(signal.payload)}`, 1500),
+      props: { signalType: signal.type, accountId: signal.accountId, opportunityId: signal.opportunityId },
     })
+    if (signal.accountId) edges.push({ organizationId, from: nodeIds.signal(signal.id), to: nodeIds.account(signal.accountId), rel: 'about_account' })
+    if (signal.opportunityId) edges.push({ organizationId, from: nodeIds.signal(signal.id), to: nodeIds.opportunity(signal.opportunityId), rel: 'about_opportunity' })
   }
+
+  // Dedupe nodes by id (book entities win over signal-derived stubs).
+  const byId = new Map<string, PendingNode>()
+  for (const node of nodes) if (!byId.has(node.id)) byId.set(node.id, node)
+  const deduped = [...byId.values()]
+
+  // Embed + persist in batches of 64 so we make few embeddings requests.
+  for (let i = 0; i < deduped.length; i += 64) {
+    await commitGraph(organizationId, deduped.slice(i, i + 64), [])
+  }
+  if (edges.length) await commitGraph(organizationId, [], edges)
 
   const result: BackfillResult = {
     accounts: book.accounts, opportunities: book.opportunities,
