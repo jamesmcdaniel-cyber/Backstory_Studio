@@ -8,6 +8,11 @@ async function freshEnv() {
 
 const ORIGINAL_ENV = { ...process.env }
 
+// Next's types mark NODE_ENV readonly; tests legitimately vary it.
+function setNodeEnv(value: string) {
+  Object.assign(process.env, { NODE_ENV: value })
+}
+
 const FULL_PROD_ENV = {
   NODE_ENV: 'production',
   DATABASE_URL: 'postgresql://u:p@h:6543/db',
@@ -61,7 +66,7 @@ test('production with no model key: throws mentioning both options', async () =>
 })
 
 test('development with nothing set: does not throw (dev ergonomics)', async () => {
-  process.env.NODE_ENV = 'development'
+  setNodeEnv('development')
   for (const key of Object.keys(FULL_PROD_ENV)) {
     if (key !== 'NODE_ENV') delete process.env[key]
   }

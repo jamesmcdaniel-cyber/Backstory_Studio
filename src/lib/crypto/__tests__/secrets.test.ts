@@ -10,20 +10,25 @@ async function freshSecrets() {
 
 const ORIGINAL_ENV = { ...process.env }
 
+// Next's types mark NODE_ENV readonly; tests legitimately vary it.
+function setNodeEnv(value: string) {
+  Object.assign(process.env, { NODE_ENV: value })
+}
+
 beforeEach(() => {
   process.env = { ...ORIGINAL_ENV }
 })
 
 test('production without ENCRYPTION_KEY: encryptSecret throws', async () => {
   delete process.env.ENCRYPTION_KEY
-  process.env.NODE_ENV = 'production'
+  setNodeEnv('production')
   const { encryptSecret } = await freshSecrets()
   assert.throws(() => encryptSecret('top-secret'), /ENCRYPTION_KEY is required in production/)
 })
 
 test('production without ENCRYPTION_KEY: decrypting a b64 legacy payload throws', async () => {
   delete process.env.ENCRYPTION_KEY
-  process.env.NODE_ENV = 'production'
+  setNodeEnv('production')
   const { decryptSecret } = await freshSecrets()
   // Legacy b64 payloads decode without a key in dev, but production must not
   // silently run in unencrypted mode.
@@ -32,7 +37,7 @@ test('production without ENCRYPTION_KEY: decrypting a b64 legacy payload throws'
 
 test('with ENCRYPTION_KEY set: encrypt/decrypt round-trips', async () => {
   process.env.ENCRYPTION_KEY = 'unit-test-key'
-  process.env.NODE_ENV = 'production'
+  setNodeEnv('production')
   const { encryptSecret, decryptSecret } = await freshSecrets()
   const payload = encryptSecret('grn_abc123')
   assert.match(payload, /^v1:/)
@@ -41,7 +46,7 @@ test('with ENCRYPTION_KEY set: encrypt/decrypt round-trips', async () => {
 
 test('development without ENCRYPTION_KEY: falls back to reversible b64', async () => {
   delete process.env.ENCRYPTION_KEY
-  process.env.NODE_ENV = 'development'
+  setNodeEnv('development')
   const { encryptSecret, decryptSecret } = await freshSecrets()
   const payload = encryptSecret('dev-secret')
   assert.match(payload, /^b64:/)
