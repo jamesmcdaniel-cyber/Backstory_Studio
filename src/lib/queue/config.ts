@@ -4,6 +4,10 @@ import { Queue, type QueueOptions, type WorkerOptions } from 'bullmq'
 export const QUEUE_NAMES = {
   AGENT_EXECUTION: 'agent-execution',
   SCHEDULED_AGENT_EXECUTION: 'scheduled-agent-execution',
+  // Poison jobs land here after their single attempt fails, so a failed run is
+  // durably inspectable (and re-runnable by an operator) instead of vanishing.
+  // We do NOT auto-retry: agent runs have external side effects.
+  DEAD_LETTER: 'agent-dead-letter',
 } as const
 
 const buildPhase = process.env.NEXT_PHASE === 'phase-production-build'

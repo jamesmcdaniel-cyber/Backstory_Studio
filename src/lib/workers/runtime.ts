@@ -3,6 +3,7 @@ import Fastify from 'fastify'
 import { Worker } from 'bullmq'
 import { executeAgentJob } from '@/features/agents/execute-agent'
 import { getRedisConnection, QUEUE_NAMES, workerConfig } from '@/lib/queue/config'
+import { deadLetterFromJob } from '@/lib/queue/dead-letter'
 import { registerAgentSchedules } from '@/lib/workers/agent-schedule-registrar'
 
 class WorkerRuntime {
@@ -19,6 +20,9 @@ class WorkerRuntime {
       workers: ['agent-execution', 'scheduled-agent-execution'],
       uptime: process.uptime(),
     }))
+    // Failed jobs (single attempt — no side-effect replay) are dead-lettered.
+    const queues = [QUEUE_NAMES.AGENT_EXECUTION, QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION]
+    this.workers.forEach((worker, index) => worker.on('failed', deadLetterFromJob(queues[index])))
     this.setupShutdown()
   }
 
