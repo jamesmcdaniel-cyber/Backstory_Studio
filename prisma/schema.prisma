@@ -167,8 +167,10 @@ model Signal {
   opportunityId  String?
   stakeholderId  String?
   payload        Json
-  // Replay guard: provider event id (or a content hash fallback).
-  dedupeKey      String    @unique
+  // Replay guard: provider event id (or a content hash fallback). Unique PER
+  // ORG (see @@unique below), not globally — a raw provider event id from one
+  // tenant must never dedupe-drop another tenant's signal.
+  dedupeKey      String
   provenanceUrl  String?
   receivedAt     DateTime  @default(now())
   processedAt    DateTime?
@@ -176,6 +178,7 @@ model Signal {
   organization  Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   subscriptionRuns AgentExecution[]
 
+  @@unique([organizationId, dedupeKey])
   @@index([organizationId, receivedAt])
   @@index([organizationId, type])
   @@map("signals")

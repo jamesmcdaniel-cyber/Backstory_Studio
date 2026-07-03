@@ -4,7 +4,7 @@ import { DEFAULT_AGENT_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { readAgentMetadata } from '@/lib/agents/metadata'
-import { indexAgent } from '@/lib/rag/indexer'
+import { indexAgent, removeAgentFromGraph } from '@/lib/rag/indexer'
 
 /** Best-effort graph-RAG indexing of an agent node (gated on embeddings). */
 function indexAgentRow(agent: { id: string; organizationId: string; objective: string; description: string; metadata: unknown; userId?: string | null; visibility?: string }): Promise<void> {
@@ -145,5 +145,8 @@ export const DELETE = withAuthenticatedApi(async (request, auth) => {
     data: { status: 'DELETED' },
   })
   if (!result.count) throw new ApiError('Agent not found', 404, 'NOT_FOUND')
+  // Purge the agent + its run nodes from the graph so deleted content can't
+  // resurface in retrieval. Fire-and-forget; best-effort.
+  void removeAgentFromGraph(auth.organizationId, id).catch(() => undefined)
   return { success: true }
 })

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { executionVisibilityScope } from '@/lib/server/visibility'
+import { removeExecutionFromGraph } from '@/lib/rag/indexer'
 
 export const DELETE = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-1)
@@ -10,5 +11,7 @@ export const DELETE = withAuthenticatedApi(async (request, auth) => {
     where: { id, organizationId: auth.organizationId, ...executionVisibilityScope(auth.dbUser.id) },
   })
   if (!result.count) throw new ApiError('Execution not found', 404, 'NOT_FOUND')
+  // Drop the run's graph node so it can't resurface in retrieval. Best-effort.
+  void removeExecutionFromGraph(auth.organizationId, id).catch(() => undefined)
   return { success: true }
 })

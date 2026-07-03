@@ -90,6 +90,26 @@ test('search hides private nodes from non-owners, shows shared to everyone', asy
   assert.deepEqual(asNull.map((h) => h.node.id), ['shared'])
 })
 
+test('deleteNodes removes nodes + edges; deleteByOwner removes only that rep', async () => {
+  const store = new MemoryGraphStore()
+  await store.upsertNodes([
+    ownedNode('shared', null, 'shared'),
+    ownedNode('repA-private', 'repA', 'private'),
+    ownedNode('repB-private', 'repB', 'private'),
+  ])
+  await store.upsertEdges([{ organizationId: 'org1', from: 'shared', to: 'repA-private', rel: 'about_account' }])
+
+  await store.deleteNodes('org1', ['shared'])
+  assert.equal((await store.search('org1', null, [1, 0], 10)).some((h) => h.node.id === 'shared'), false)
+  // The edge from the deleted node is gone too.
+  assert.deepEqual(await store.expand('org1', 'repA', ['shared'], 1), [])
+
+  await store.deleteByOwner('org1', 'repA')
+  assert.equal((await store.search('org1', 'repA', [1, 0], 10)).some((h) => h.node.id === 'repA-private'), false)
+  // Another rep's private node is untouched.
+  assert.equal((await store.search('org1', 'repB', [1, 0], 10)).some((h) => h.node.id === 'repB-private'), true)
+})
+
 test('expand never surfaces another rep\'s private neighbor', async () => {
   const store = new MemoryGraphStore()
   await store.upsertNodes([

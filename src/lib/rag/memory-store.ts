@@ -68,6 +68,31 @@ export class MemoryGraphStore implements GraphRagStore {
     return result
   }
 
+  async deleteNodes(organizationId: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return
+    const idSet = new Set(ids)
+    for (const id of ids) {
+      const node = this.nodes.get(id)
+      if (node && node.organizationId === organizationId) this.nodes.delete(id)
+    }
+    this.edges = this.edges.filter(
+      (e) => !(e.organizationId === organizationId && (idSet.has(e.from) || idSet.has(e.to))),
+    )
+  }
+
+  async deleteByOwner(organizationId: string, ownerUserId: string): Promise<void> {
+    const removed = new Set<string>()
+    for (const [id, node] of this.nodes) {
+      if (node.organizationId === organizationId && node.ownerUserId === ownerUserId) {
+        this.nodes.delete(id)
+        removed.add(id)
+      }
+    }
+    this.edges = this.edges.filter(
+      (e) => !(e.organizationId === organizationId && (removed.has(e.from) || removed.has(e.to))),
+    )
+  }
+
   async clear(organizationId: string): Promise<void> {
     for (const [id, node] of this.nodes) if (node.organizationId === organizationId) this.nodes.delete(id)
     this.edges = this.edges.filter((e) => e.organizationId !== organizationId)

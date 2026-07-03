@@ -13,11 +13,12 @@
  * swallowed (logged) and never propagate to the triggering request/run.
  */
 
+import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { getPeopleAiReadClient } from '@/lib/peopleai/client'
 import { enrichAccount, enrichOpportunity } from '@/lib/peopleai/salesai-facts'
 import { embedTexts } from './embeddings'
-import { getGraphRagStore, ragEnabled } from './get-store'
+import { getGraphRagStore, graphRagPersistent, ragEnabled } from './get-store'
 import type { EdgeRelation, GraphEdge, GraphNode, NodeType, NodeVisibility } from './store'
 
 // ── Node id scheme (stable, so re-indexing upserts in place) ─────────────────
@@ -287,6 +288,34 @@ export async function indexCustomSignalResult(params: {
     await commitGraph(params.organizationId, nodes, edges)
   } catch (error) {
     warn('indexCustomSignalResult', error)
+  }
+}
+
+/**
+ * Remove an agent and its run nodes from the graph when the agent is deleted,
+ * so its (possibly stale) content can't resurface in retrieval or LLM context.
+ * Best-effort; only meaningful for the persistent (Neo4j) store.
+ */
+export async function removeAgentFromGraph(organizationId: string, agentId: string): Promise<void> {
+  if (!graphRagPersistent()) return
+  try {
+    const execs = await prisma.agentExecution.findMany({
+      where: { organizationId, agentTaskId: agentId }, select: { id: true },
+    })
+    const ids = [nid.agent(agentId), ...execs.map((e) => nid.run(e.id))]
+    await getGraphRagStore().deleteNodes(organizationId, ids)
+  } catch (error) {
+    warn('removeAgentFromGraph', error)
+  }
+}
+
+/** Remove a single run node when its execution is deleted. Best-effort. */
+export async function removeExecutionFromGraph(organizationId: string, executionId: string): Promise<void> {
+  if (!graphRagPersistent()) return
+  try {
+    await getGraphRagStore().deleteNodes(organizationId, [nid.run(executionId)])
+  } catch (error) {
+    warn('removeExecutionFromGraph', error)
   }
 }
 

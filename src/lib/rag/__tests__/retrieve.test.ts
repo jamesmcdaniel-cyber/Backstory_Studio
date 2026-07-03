@@ -63,6 +63,7 @@ test('retrieveContext never throws when the store search fails', async () => {
     upsertNodes: async () => {}, upsertEdges: async () => {},
     search: async () => { throw new Error('store down') },
     expand: async () => { throw new Error('store down') },
+    deleteNodes: async () => {}, deleteByOwner: async () => {},
   }
   const ctx = await retrieveContext(brokenStore, { organizationId: 'org1', query: 'risk', embed: fakeEmbed })
   assert.deepEqual(ctx, { hits: [], related: [] })

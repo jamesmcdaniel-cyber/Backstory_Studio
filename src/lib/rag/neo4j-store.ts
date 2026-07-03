@@ -153,6 +153,23 @@ export class Neo4jGraphStore implements GraphRagStore {
     )
     return records.map((r) => hydrate(r.get('node'))).filter((n): n is GraphNode => n !== null)
   }
+
+  async deleteNodes(organizationId: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return
+    const driver = await this.driver()
+    await driver.executeQuery(
+      'MATCH (e:Entity) WHERE e.organizationId = $org AND e.id IN $ids DETACH DELETE e',
+      { org: organizationId, ids },
+    )
+  }
+
+  async deleteByOwner(organizationId: string, ownerUserId: string): Promise<void> {
+    const driver = await this.driver()
+    await driver.executeQuery(
+      'MATCH (e:Entity) WHERE e.organizationId = $org AND e.ownerUserId = $owner DETACH DELETE e',
+      { org: organizationId, owner: ownerUserId },
+    )
+  }
 }
 
 function toRaw(node: GraphNode) {

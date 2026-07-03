@@ -92,6 +92,13 @@ export interface GraphRagStore {
    * `hops` edges, scoped to what `viewerUserId` may see.
    */
   expand(organizationId: string, viewerUserId: string | null, nodeIds: string[], hops: number): Promise<GraphNode[]>
-  /** For tests/cleanup. */
+  /**
+   * Delete specific nodes (and their edges) within an org — keeps the graph in
+   * step with Postgres deletes so removed data can't re-enter LLM context.
+   */
+  deleteNodes(organizationId: string, ids: string[]): Promise<void>
+  /** Delete all nodes owned by a rep (user teardown / GDPR erasure). */
+  deleteByOwner(organizationId: string, ownerUserId: string): Promise<void>
+  /** For tests/cleanup and org teardown. */
   clear?(organizationId: string): Promise<void>
 }
