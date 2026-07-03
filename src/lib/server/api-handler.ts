@@ -30,7 +30,7 @@ export function withAuthenticatedApi(handler: AuthenticatedHandler) {
     } catch (error) {
       if (error instanceof AuthContextError) {
         return NextResponse.json(
-          { success: false, error: error.message, code: 'AUTH_ERROR' },
+          { success: false, error: error.message, code: error.code },
           { status: error.status },
         )
       }

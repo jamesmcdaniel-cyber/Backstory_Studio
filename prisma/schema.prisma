@@ -16,6 +16,14 @@ model Organization {
   // resizes to 128px before upload) so no external storage is required.
   logoUrl          String?
   plan             Plan      @default(TRIAL)
+  // People.ai tenant binding: one Studio workspace per People.ai team. Set on
+  // first People.ai connection; every rep from that team lands in this org.
+  peopleAiTeamId       String?   @unique
+  // Entitlement snapshot, derived from an active People.ai Sales AI
+  // connection and revalidated on a TTL (see src/lib/entitlement.ts).
+  entitlementTier      String?
+  entitlementStatus    String    @default("unknown")
+  entitlementCheckedAt DateTime? @db.Timestamptz(6)
   trialStartDate   DateTime  @default(now()) @db.Timestamptz(6)
   trialEndDate     DateTime? @db.Timestamptz(6)
   createdAt        DateTime  @default(now()) @db.Timestamptz(6)
@@ -31,6 +39,7 @@ model Organization {
   mcpConnections     McpConnection[]
   nangoConnections   NangoConnection[]
   integrationSecrets IntegrationSecret[]
+  peopleAiConnections PeopleAiConnection[]
 
   @@map("organizations")
 }
@@ -41,6 +50,9 @@ model User {
   email          String?
   name           String?
   imageUrl       String?
+  // People.ai membership id from the MCP OAuth context — the delegated
+  // identity used for user-scoped People.ai tool calls.
+  peopleAiMembershipId String?
   role           UserRole  @default(USER)
   organizationId String?   @db.Uuid
   isActive       Boolean   @default(true)
@@ -56,6 +68,7 @@ model User {
   integrations Integration[]
   mcpAgents    MCPAgent[]
   ownedAgents  AgentTask[]
+  peopleAiConnections PeopleAiConnection[]
 
   @@index([organizationId])
   @@map("users")
@@ -292,6 +305,30 @@ model MCPAgent {
 
   @@unique([userId, organizationId, agentType])
   @@map("mcp_agents")
+}
+
+// Per-user People.ai Sales AI connection: encrypted mcp_* tokens from the
+// mcp.people.ai OAuth flow, plus the team/membership identity they resolve to.
+// One connection per user per workspace; agents read People.ai as this user.
+model PeopleAiConnection {
+  id             String    @id @default(cuid())
+  organizationId String    @db.Uuid
+  userId         String
+  teamId         String?
+  membershipId   String?
+  scope          String?
+  accessToken    String // encrypted (src/lib/crypto/secrets.ts)
+  refreshToken   String? // encrypted
+  status         String    @default("active") // 'active' | 'refresh_failed' | 'revoked'
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("people_ai_connections")
 }
 
 model McpConnection {
