@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
+import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/peopleai/client'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
@@ -74,7 +75,7 @@ function metadataOf(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {}
 }
 
-async function loadTools(organizationId: string, providers: string[]) {
+async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null) {
   const tools: ToolDefinition[] = []
   const bindings = new Map<string, ToolBinding>()
 
@@ -125,26 +126,62 @@ async function loadTools(organizationId: string, providers: string[]) {
     }
   }
 
-  // ---- Backstory MCP (OAuth 2.0 client-credentials or static bearer) ------
-  if (hasBackstoryProvider && backstoryMcpConfigured()) {
-    // C2 — isolate Backstory discovery so its failure degrades to fewer tools
-    // instead of aborting the run.
+  // ---- People.ai Sales AI MCP (a.k.a. Backstory MCP) -----------------------
+  // Identity order matters for data isolation:
+  //  1. The agent OWNER's delegated connection (mcp_* token) — the agent reads
+  //     People.ai exactly as that rep.
+  //  2. The org service key (PAI-Client-Id/Secret) for ownerless runs.
+  //  3. Legacy env-configured service account (BACKSTORY_MCP_*), logged loudly
+  //     because it is not tenant-isolated.
+  if (hasBackstoryProvider) {
     try {
-      const backstoryUrl = process.env.BACKSTORY_MCP_URL!
-      const backstoryClient = new BackstoryMcpClient()
-      const available = await backstoryClient.getServerTools(backstoryUrl)
-      for (const tool of available.slice(0, 20)) {
-        const name = toolName('backstory', tool.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient })
-        tools.push({
-          name,
-          description: tool.description || `${tool.name} via backstory`,
-          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+      let paiClient = ownerUserId ? await getPeopleAiClientForUser(ownerUserId, organizationId) : null
+      let identity: 'user' | 'service' | 'legacy-env' = 'user'
+      if (!paiClient) {
+        paiClient = getPeopleAiServiceClient()
+        identity = 'service'
+      }
+
+      if (paiClient) {
+        const adapter: McpToolClient = {
+          executeTool: (_serverUrl, name, args) => paiClient!.callTool(name, args),
+        }
+        if (identity !== 'user') {
+          apiLogger.warn('loadTools: People.ai tools using service identity (no owner connection)', {
+            organizationId, ownerUserId: ownerUserId ?? null,
+          })
+        }
+        const available = await paiClient.listTools()
+        for (const tool of available.slice(0, 20)) {
+          const name = toolName('backstory', tool.name)
+          if (bindings.has(name)) continue
+          bindings.set(name, { provider: 'backstory', serverUrl: paiClient.serverUrl, toolName: tool.name, client: adapter })
+          tools.push({
+            name,
+            description: tool.description || `${tool.name} via People.ai`,
+            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+          })
+        }
+      } else if (backstoryMcpConfigured()) {
+        apiLogger.warn('loadTools: People.ai tools using legacy env service account (no tenant isolation)', {
+          organizationId,
         })
+        const backstoryUrl = process.env.BACKSTORY_MCP_URL!
+        const backstoryClient = new BackstoryMcpClient()
+        const available = await backstoryClient.getServerTools(backstoryUrl)
+        for (const tool of available.slice(0, 20)) {
+          const name = toolName('backstory', tool.name)
+          if (bindings.has(name)) continue
+          bindings.set(name, { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient })
+          tools.push({
+            name,
+            description: tool.description || `${tool.name} via backstory`,
+            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+          })
+        }
       }
     } catch (error) {
-      apiLogger.warn('loadTools: Backstory MCP tool discovery failed, skipping provider', {
+      apiLogger.warn('loadTools: People.ai tool discovery failed, skipping provider', {
         provider: 'backstory',
         organizationId,
         error: error instanceof Error ? error.message : String(error),
@@ -403,7 +440,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
     const providers = Array.isArray(agentMetadata.integrations) ? agentMetadata.integrations.map(String) : []
     const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
-    const { tools, bindings } = await loadTools(organizationId, providers)
+    const { tools, bindings } = await loadTools(organizationId, providers, userId)
     const system = buildAgentSystemPrompt(agent.objective, skillIds)
 
     if (pendingResults) runner.appendToolResults(transcript, pendingResults)
