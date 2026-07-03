@@ -4,6 +4,7 @@ import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/peopleai/client'
+import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection } from '@/lib/nango/delivery'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
@@ -321,6 +322,36 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         organizationId,
         error: error instanceof Error ? error.message : String(error),
       })
+    }
+  }
+
+  // ---- Nango delivery (outbound writes as the acting user) -----------------
+  // Slack/Gmail/Salesforce writes through the org's Nango connections,
+  // preferring the agent owner's own connection so messages arrive as the rep.
+  // Gated per capability on both a matching providers entry and a resolvable
+  // connection. Failures never abort the run.
+  if (nangoConfigured()) {
+    for (const spec of DELIVERY_TOOLS) {
+      if (tools.length >= 64) break
+      const requested = providers.some((p) => new RegExp(spec.capability, 'i').test(p))
+      if (!requested) continue
+      try {
+        const connection = await resolveDeliveryConnection(organizationId, spec.capability, ownerUserId)
+        if (!connection) continue
+        const name = toolName('nango', spec.name)
+        if (bindings.has(name)) continue
+        const deliveryClient: McpToolClient = {
+          executeTool: (_serverUrl, _toolName, args) => spec.run(connection, args),
+        }
+        bindings.set(name, { provider: `nango:${spec.capability}`, serverUrl: 'nango', toolName: spec.name, client: deliveryClient })
+        tools.push({ name, description: spec.description, inputSchema: spec.inputSchema })
+      } catch (error) {
+        apiLogger.warn('loadTools: Nango delivery setup failed, skipping capability', {
+          capability: spec.capability,
+          organizationId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
     }
   }
 
