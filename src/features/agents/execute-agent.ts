@@ -16,7 +16,7 @@ import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integra
 import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
-import { checkMonthlyTokenBudget } from '@/lib/usage/budget'
+import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 import { cached } from '@/lib/cache'
 import { buildAgentSystemPrompt } from './system-prompt'
 import {
@@ -537,12 +537,33 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     if (pendingResults) runner.appendToolResults(transcript, pendingResults)
 
     const maxTurns = Number(agentMetadata.maxTurns) || Number(process.env.AGENT_MAX_TURNS) || 16
+    // Per-run token backstop against a pathological loop (independent of the
+    // monthly ceiling). Generous by default; tune via AGENT_MAX_RUN_TOKENS.
+    const perRunTokenCap = Number(process.env.AGENT_MAX_RUN_TOKENS) || 2_000_000
+    const monthlyLimit = budget.limit
     let finalText = ''
 
     for (let turn = 0; turn < maxTurns; turn += 1) {
       const turnResult = await runner.next(transcript, system, [...tools, ASK_USER_TOOL])
       usage.inputTokens += turnResult.usage.inputTokens
       usage.outputTokens += turnResult.usage.outputTokens
+
+      // Record this turn's spend on the live cross-process counter, then enforce
+      // both the per-run cap and the (in-flight-aware) monthly ceiling mid-run so
+      // a runaway can't blow far past the budget between the start-of-run check
+      // and completion.
+      const runTotal = usage.inputTokens + usage.outputTokens
+      const monthTotal = await recordTokenUsage(organizationId, turnResult.usage.inputTokens + turnResult.usage.outputTokens)
+      if (perRunTokenCap > 0 && runTotal >= perRunTokenCap) {
+        finalText = turnResult.text || 'Run stopped: it reached its per-run token cap.'
+        await recordEvent(execution.id, null, 'run.capped', { reason: 'per_run_token_cap', runTotal, cap: perRunTokenCap })
+        break
+      }
+      if (monthlyLimit > 0 && (monthTotal ?? 0) >= monthlyLimit) {
+        finalText = turnResult.text || 'Run stopped: the workspace monthly token budget was reached.'
+        await recordEvent(execution.id, null, 'run.capped', { reason: 'monthly_budget', monthTotal, limit: monthlyLimit })
+        break
+      }
 
       if (!turnResult.toolCalls.length) {
         finalText = turnResult.text || 'Agent completed without a text response.'

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
 import { DEFAULT_AGENT_MODEL, generateStructured } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 
 const DRAFT_SCHEMA = {
   type: 'object',
@@ -56,6 +57,10 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     create: z.boolean().default(false),
   }).parse(await request.json())
 
+  // Counts against the workspace token budget — block when already over.
+  const budget = await checkMonthlyTokenBudget(auth.organizationId)
+  if (budget.over) throw new ApiError('Monthly token budget reached for this workspace.', 429, 'BUDGET_EXCEEDED')
+
   const text = await generateStructured({
     schemaName: 'agent_draft',
     schema: DRAFT_SCHEMA as unknown as Record<string, unknown>,
@@ -69,6 +74,8 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   })
 
   if (!text) throw new ApiError('The model returned no draft', 502, 'DRAFT_FAILED')
+  // Rough metering (~chars/4) since generateStructured returns no token usage.
+  void recordTokenUsage(auth.organizationId, Math.ceil((description.length + text.length) / 4)).catch(() => undefined)
   const draft = JSON.parse(text) as Draft
 
   const schedule = {

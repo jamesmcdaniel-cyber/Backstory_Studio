@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { generateStructured } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { buildAssistantContext } from '@/features/agents/assistant-context'
+import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 import { agentIdFromRequest, requireAgent, deriveTitle, LEGACY_SESSION_ID } from './shared'
 
 export const runtime = 'nodejs'
@@ -174,6 +175,11 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     .parse(await request.json())
   const agent = await requireAgent(agentId, auth)
 
+  // Assistant chat counts against the workspace token budget too — block when
+  // the org is already over so chat can't bypass the ceiling.
+  const budget = await checkMonthlyTokenBudget(auth.organizationId)
+  if (budget.over) throw new ApiError('Monthly token budget reached for this workspace.', 429, 'BUDGET_EXCEEDED')
+
   // Resolve the target conversation. An explicit, owned session is reused;
   // otherwise (absent, legacy, or unknown) a new session starts — the legacy
   // flat thread stays read-only history.
@@ -231,6 +237,13 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
   // Persist only after the model answered, so a failed call leaves no
   // half-thread behind (the client restores the input for a retry).
+  // Rough metering: generateStructured doesn't return token usage, so estimate
+  // (~chars/4) to keep the month-to-date counter aware of assistant spend.
+  void recordTokenUsage(
+    auth.organizationId,
+    Math.ceil((JSON.stringify(context).length + message.length + reply.length) / 4),
+  ).catch(() => undefined)
+
   const userMessage = await prisma.agentChatMessage.create({
     data: {
       agentTaskId: agentId,

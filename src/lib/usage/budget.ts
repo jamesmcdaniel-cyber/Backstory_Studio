@@ -1,4 +1,25 @@
 import { prisma } from '@/lib/prisma'
+import { cacheGetNumber, cacheIncrBy } from '@/lib/cache'
+
+// Live month-to-date token counter, keyed per org + UTC month. Incremented per
+// turn as tokens are spent, so concurrent runs/workers see each other's spend
+// immediately (the DB columns are only written at run end). TTL just cleans up
+// old months; the key rolls over each month.
+const MONTH_TTL_MS = 35 * 24 * 60 * 60 * 1000
+function monthKey(organizationId: string): string {
+  const now = new Date()
+  const ym = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+  return `usage:${organizationId}:${ym}`
+}
+
+/**
+ * Record token spend against the live month-to-date counter. Call per turn.
+ * Best-effort (returns the new total, or null if the counter backend is down).
+ */
+export async function recordTokenUsage(organizationId: string, tokens: number): Promise<number | null> {
+  if (!Number.isFinite(tokens) || tokens <= 0) return null
+  return cacheIncrBy(monthKey(organizationId), Math.floor(tokens), MONTH_TTL_MS)
+}
 
 /**
  * Per-entitlement-tier monthly token ceilings (total input+output per UTC
@@ -46,7 +67,13 @@ export async function checkMonthlyTokenBudget(
     where: { organizationId, startedAt: { gte: since } },
     _sum: { inputTokens: true, outputTokens: true },
   })
-  const used = (aggregate._sum.inputTokens || 0) + (aggregate._sum.outputTokens || 0)
+  const dbUsed = (aggregate._sum.inputTokens || 0) + (aggregate._sum.outputTokens || 0)
+
+  // The live counter includes in-flight runs the DB aggregate can't see yet, so
+  // it's normally the higher (and correct) number. Fall back to the DB total if
+  // the counter is unavailable or was reset mid-month, so we never under-count.
+  const live = await cacheGetNumber(monthKey(organizationId))
+  const used = Math.max(dbUsed, live ?? 0)
 
   return { over: used >= limit, used, limit }
 }

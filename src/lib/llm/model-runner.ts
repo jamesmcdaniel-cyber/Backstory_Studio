@@ -39,12 +39,19 @@ export interface ModelRunner {
 
 const ADAPTIVE_THINKING_MODELS = /^claude-(opus-4-[678]|sonnet-4-6|fable-5|mythos-5)/
 
+// Bound a single model call well below the BullMQ job lock (300s, see
+// queue/config.ts): worst case maxRetries(1)+1 attempts × 120s = 240s < 300s,
+// so a hung/slow call can't outlive the lock and cause a run to both
+// dead-letter (stalled) and complete. Applied to every SDK client here.
+const LLM_TIMEOUT_MS = 120_000
+const LLM_MAX_RETRIES = 1
+
 class AnthropicRunner implements ModelRunner {
   private readonly client: Anthropic
 
   constructor(readonly model: string) {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured')
-    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
   }
 
   start(input: string): unknown[] {
@@ -116,7 +123,7 @@ class OpenAIRunner implements ModelRunner {
 
   constructor(readonly model: string) {
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured')
-    this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
   }
 
   start(input: string): unknown[] {
@@ -227,7 +234,7 @@ export async function generateHeadline(summary: string): Promise<string | null> 
   try {
     let text = ''
     if (target.provider === 'anthropic') {
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
       const response = await client.messages.create({
         model: target.model,
         max_tokens: 64,
@@ -240,7 +247,7 @@ export async function generateHeadline(summary: string): Promise<string | null> 
         .join(' ')
         .trim()
     } else {
-      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
       const response = await client.chat.completions.create({
         model: target.model,
         max_tokens: 64,
@@ -298,7 +305,7 @@ export function structuredProviderOrder(input: {
 }
 
 async function anthropicStructured(opts: StructuredOpts): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
   const model = isClaude(DEFAULT_AGENT_MODEL) ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL
   const response = await client.messages.create({
     model,
@@ -314,7 +321,7 @@ async function anthropicStructured(opts: StructuredOpts): Promise<string> {
 }
 
 async function openaiStructured(opts: StructuredOpts): Promise<string> {
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
   const response = await client.chat.completions.create({
     model: isClaude(DEFAULT_AGENT_MODEL) ? 'gpt-4o' : DEFAULT_AGENT_MODEL,
     max_tokens: opts.maxTokens ?? 4096,

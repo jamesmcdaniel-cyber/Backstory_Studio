@@ -19,6 +19,9 @@ export interface Cache {
   get<T>(key: string): Promise<T | null>
   set<T>(key: string, value: T, ttlMs: number): Promise<void>
   del(key: string): Promise<void>
+  /** Atomically add `amount` to a counter, returning the new total. Sets the TTL
+   *  window on first increment. Used for the cross-process token-usage counter. */
+  incrBy(key: string, amount: number, ttlMs: number): Promise<number>
 }
 
 // Bounds the in-memory fallback so a long-lived process can't grow unbounded.
@@ -49,6 +52,19 @@ function createMemoryCache(): Cache {
     async del(key: string): Promise<void> {
       store.delete(key)
     },
+    async incrBy(key: string, amount: number, ttlMs: number): Promise<number> {
+      const now = Date.now()
+      const hit = store.get(key)
+      const live = hit !== undefined && hit.expiresAt > now
+      const current = live && typeof hit!.value === 'number' ? (hit!.value as number) : 0
+      const next = current + amount
+      if (store.size >= MAX_MEMORY_ENTRIES && !store.has(key)) {
+        const oldest = store.keys().next().value
+        if (oldest !== undefined) store.delete(oldest)
+      }
+      store.set(key, { value: next, expiresAt: live ? hit!.expiresAt : now + ttlMs })
+      return next
+    },
   }
 }
 
@@ -72,6 +88,12 @@ function createRedisCache(url: string): Cache {
     },
     async del(key: string): Promise<void> {
       await redis.del(key)
+    },
+    async incrBy(key: string, amount: number, ttlMs: number): Promise<number> {
+      const next = await redis.incrby(key, amount)
+      // First increment created the key → stamp its TTL window.
+      if (next === amount) await redis.pexpire(key, Math.max(1, Math.floor(ttlMs)))
+      return next
     },
   }
 }
@@ -111,6 +133,22 @@ export async function cacheSet<T>(key: string, value: T, ttlMs: number): Promise
   } catch (error) {
     warn('set', key, error)
   }
+}
+
+/** Best-effort atomic increment; returns the new total, or null on backend error. */
+export async function cacheIncrBy(key: string, amount: number, ttlMs: number): Promise<number | null> {
+  try {
+    return await getCache().incrBy(key, amount, ttlMs)
+  } catch (error) {
+    warn('incrBy', key, error)
+    return null
+  }
+}
+
+/** Best-effort numeric get (for counters); null on miss or non-numeric. */
+export async function cacheGetNumber(key: string): Promise<number | null> {
+  const value = await cacheGet<number>(key)
+  return typeof value === 'number' ? value : null
 }
 
 /** Best-effort delete (cache busting); swallows backend errors. */
