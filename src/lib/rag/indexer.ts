@@ -14,6 +14,8 @@
  */
 
 import { apiLogger } from '@/lib/logger'
+import { getPeopleAiReadClient } from '@/lib/peopleai/client'
+import { enrichAccount, enrichOpportunity } from '@/lib/peopleai/salesai-facts'
 import { embedTexts } from './embeddings'
 import { getGraphRagStore, ragEnabled } from './get-store'
 import type { EdgeRelation, GraphEdge, GraphNode, NodeType } from './store'
@@ -107,9 +109,45 @@ export async function indexSignal(signal: SignalRecord): Promise<void> {
     if (signal.accountId && signal.opportunityId) {
       edges.push({ organizationId: org, from: nid.opportunity(signal.opportunityId), to: nid.account(signal.accountId), rel: 'belongs_to' })
     }
+    // Enrich account/opportunity nodes with live Sales AI intelligence (status,
+    // risks, next steps) so the graph carries substance, not just ids. Native
+    // service client; best-effort — a failure leaves the basic node.
+    await enrichEntities(org, signal.accountId, signal.opportunityId, nodes)
     await commit(org, nodes, edges)
   } catch (error) {
     warn('indexSignal', error)
+  }
+}
+
+/** Replace basic account/opp node text with Sales AI facts, in place. */
+async function enrichEntities(
+  organizationId: string,
+  accountId: string | null,
+  opportunityId: string | null,
+  nodes: PendingNode[],
+): Promise<void> {
+  if (!accountId && !opportunityId) return
+  const client = await getPeopleAiReadClient(null, organizationId)
+  if (!client) return
+  try {
+    if (accountId) {
+      const facts = await enrichAccount(client, accountId)
+      const node = nodes.find((n) => n.id === nid.account(accountId))
+      if (facts && node) {
+        node.text = `Account ${accountId} — Sales AI status: ${facts.text}`
+        node.props = { ...node.props, peopleaiAccountId: facts.peopleaiId }
+      }
+    }
+    if (opportunityId) {
+      const facts = await enrichOpportunity(client, opportunityId)
+      const node = nodes.find((n) => n.id === nid.opportunity(opportunityId))
+      if (facts && node) {
+        node.text = `Opportunity ${opportunityId} — Sales AI status: ${facts.text}`
+        node.props = { ...node.props, peopleaiOpportunityId: facts.peopleaiId }
+      }
+    }
+  } catch (error) {
+    warn('enrichEntities', error)
   }
 }
 
