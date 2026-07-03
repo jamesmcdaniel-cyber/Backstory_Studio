@@ -203,6 +203,26 @@ model SignalSubscription {
   @@map("signal_subscriptions")
 }
 
+// A rep-defined "custom signal": a saved SalesAI question (e.g. "who's talking
+// about this account?", "what's the next best action?") reused here — People.ai
+// exposes no signal catalog, so the definition lives on our side and runs via
+// the ask_sales_ai_about_account/opportunity MCP tools. Per rep (owner), org
+// scoped, matching the graph isolation posture.
+model CustomSignal {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  userId         String
+  name           String
+  question       String   @db.Text
+  // 'account' | 'opportunity' — which ask_sales_ai tool it runs against.
+  scope          String   @default("account")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, userId, updatedAt])
+  @@map("custom_signals")
+}
+
 model AgentExecution {
   id              String    @id @default(cuid())
   agentType       String

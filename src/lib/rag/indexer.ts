@@ -246,6 +246,47 @@ export async function indexAgent(agent: AgentRecord): Promise<void> {
   }
 }
 
+/**
+ * Index a custom-signal run (a rep's saved SalesAI question + its answer) as a
+ * private insight node linked to the account/opportunity, so agents and the
+ * assistant can correlate on it. Best-effort; gated on embeddings.
+ */
+export async function indexCustomSignalResult(params: {
+  organizationId: string
+  ownerUserId: string
+  signalId: string
+  name: string
+  question: string
+  answer: string
+  accountId?: string | null
+  opportunityId?: string | null
+}): Promise<void> {
+  if (!ragEnabled()) return
+  try {
+    const target = params.accountId ?? params.opportunityId ?? 'x'
+    const nodeId = `insight:sig:${params.signalId}:${target}`
+    const text = `Custom signal "${params.name}" — Q: ${params.question} — A: ${params.answer}`.slice(0, 1800)
+    const nodes: PendingNode[] = [{
+      id: nodeId, type: 'insight', text,
+      props: { signalId: params.signalId, name: params.name },
+      // The rep's own signal result — private to them (matches isolation posture).
+      ownerUserId: params.ownerUserId, visibility: 'private',
+    }]
+    const edges: GraphEdge[] = []
+    if (params.accountId) {
+      nodes.push({ id: nid.account(params.accountId), type: 'account', text: `Account ${params.accountId}`, props: { accountId: params.accountId } })
+      edges.push({ organizationId: params.organizationId, from: nodeId, to: nid.account(params.accountId), rel: 'about_account' })
+    }
+    if (params.opportunityId) {
+      nodes.push({ id: nid.opportunity(params.opportunityId), type: 'opportunity', text: `Opportunity ${params.opportunityId}`, props: { opportunityId: params.opportunityId } })
+      edges.push({ organizationId: params.organizationId, from: nodeId, to: nid.opportunity(params.opportunityId), rel: 'about_opportunity' })
+    }
+    await commitGraph(params.organizationId, nodes, edges)
+  } catch (error) {
+    warn('indexCustomSignalResult', error)
+  }
+}
+
 function safeJson(value: unknown): string {
   try {
     return typeof value === 'string' ? value : JSON.stringify(value ?? {})

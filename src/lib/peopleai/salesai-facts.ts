@@ -147,3 +147,35 @@ export async function askSalesAiAboutAccount(
     return ''
   }
 }
+
+/** Ask SalesAI a freeform question about an opportunity. */
+export async function askSalesAiAboutOpportunity(
+  client: SalesAiCaller,
+  peopleaiOpportunityId: number,
+  question: string,
+): Promise<string> {
+  try {
+    const result = await client.callTool('ask_sales_ai_about_opportunity', {
+      peopleai_opportunity_id: peopleaiOpportunityId,
+      question,
+    })
+    return extractMcpText(result)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Resolve an account name to its People.ai account id via the find_account
+ * tool, so custom signals can target an account the rep types by name.
+ */
+export async function findAccountId(client: SalesAiCaller, accountName: string): Promise<number | null> {
+  try {
+    const result = await client.callTool('find_account', { account_name: accountName })
+    const text = extractMcpText(result)
+    const match = /peopleai[_-]?account[_-]?id["\s:]+(\d+)/i.exec(text)
+    return match ? Number(match[1]) : null
+  } catch {
+    return null
+  }
+}

@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { ArrowUpRight, Loader2, Plus, Radio, Trash2 } from 'lucide-react'
+import { ArrowUpRight, Loader2, Play, Plus, Radio, Sparkles, Trash2 } from 'lucide-react'
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { Markdown } from '@/components/ui/markdown'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const SIGNAL_TYPES = [
@@ -201,20 +204,187 @@ function SubscriptionsManager() {
   )
 }
 
+type CustomSignal = {
+  id: string
+  name: string
+  question: string
+  scope: 'account' | 'opportunity'
+  updatedAt: string
+}
+
+// Rep-defined saved SalesAI questions ("custom signals"). People.ai exposes no
+// signal catalog, so they're defined here and run via ask_sales_ai; results feed
+// the graph so agents can use them.
+function CustomSignalsManager() {
+  const [signals, setSignals] = useState<CustomSignal[]>([])
+  const [loading, setLoading] = useState(true)
+  const [name, setName] = useState('')
+  const [question, setQuestion] = useState('')
+  const [scope, setScope] = useState<'account' | 'opportunity'>('account')
+  const [saving, setSaving] = useState(false)
+  const [targets, setTargets] = useState<Record<string, string>>({})
+  const [runningId, setRunningId] = useState<string | null>(null)
+  const [results, setResults] = useState<Record<string, string>>({})
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const response = await fetch('/api/signals/custom', { cache: 'no-store' })
+      const data = await response.json().catch(() => ({}))
+      setSignals(data.success ? data.signals : [])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const create = async () => {
+    if (!name.trim() || !question.trim()) {
+      toast.error('Give the signal a name and a question.')
+      return
+    }
+    setSaving(true)
+    try {
+      const response = await fetch('/api/signals/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, question, scope }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        toast.error(data.error || 'Could not save the signal.')
+        return
+      }
+      setName(''); setQuestion(''); setScope('account')
+      toast.success('Signal saved.')
+      await load()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const remove = async (id: string) => {
+    const response = await fetch(`/api/signals/custom?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (response.ok) setSignals((prev) => prev.filter((s) => s.id !== id))
+  }
+
+  const run = async (signal: CustomSignal) => {
+    const target = (targets[signal.id] || '').trim()
+    if (!target) {
+      toast.error(signal.scope === 'account' ? 'Enter an account name or id.' : 'Enter an opportunity id.')
+      return
+    }
+    setRunningId(signal.id)
+    try {
+      const response = await fetch(`/api/signals/custom/${signal.id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast.error(data.error || 'Could not run the signal.')
+        return
+      }
+      setResults((prev) => ({ ...prev, [signal.id]: data.answer }))
+    } finally {
+      setRunningId(null)
+    }
+  }
+
+  if (loading) return <div className="p-8 text-center text-gray-400"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border bg-white p-5">
+        <p className="eyebrow">New custom signal</p>
+        <h3 className="mt-1 font-semibold text-gray-900">A saved SalesAI question you can reuse</h3>
+        <p className="mt-1 text-sm text-gray-500">
+          e.g. &ldquo;Who&apos;s talking about us and what do they care about?&rdquo; or &ldquo;What&apos;s the next best action?&rdquo; — run it against any account or opportunity; results feed your agents.
+        </p>
+        <div className="mt-4 space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_180px]">
+            <Input placeholder="Signal name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Select value={scope} onValueChange={(v) => setScope(v as 'account' | 'opportunity')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="account">Account</SelectItem>
+                <SelectItem value="opportunity">Opportunity</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <Textarea rows={3} placeholder="The question SalesAI should answer…" value={question} onChange={(e) => setQuestion(e.target.value)} />
+          <Button size="sm" disabled={saving} onClick={create}>
+            {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+            Save signal
+          </Button>
+        </div>
+      </div>
+
+      {signals.length === 0 ? (
+        <div className="rounded-xl border border-dashed p-10 text-center">
+          <Sparkles className="mx-auto h-6 w-6 text-gray-300" />
+          <p className="mt-2 text-sm text-gray-500">No custom signals yet. Save one above to reuse it across accounts.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {signals.map((signal) => (
+            <div key={signal.id} className="rounded-xl border bg-white p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-900">{signal.name}</span>
+                    <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-500">{signal.scope}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-500">{signal.question}</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => remove(signal.id)} aria-label="Delete signal">
+                  <Trash2 className="h-4 w-4 text-gray-400" />
+                </Button>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Input
+                  className="h-9 w-64"
+                  placeholder={signal.scope === 'account' ? 'Account name or id' : 'Opportunity id'}
+                  value={targets[signal.id] || ''}
+                  onChange={(e) => setTargets((prev) => ({ ...prev, [signal.id]: e.target.value }))}
+                  onKeyDown={(e) => e.key === 'Enter' && run(signal)}
+                />
+                <Button size="sm" variant="outline" disabled={runningId === signal.id} onClick={() => run(signal)}>
+                  {runningId === signal.id ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+                  Run
+                </Button>
+              </div>
+              {results[signal.id] && (
+                <div className="mt-3 rounded-lg border bg-gray-50 p-3 text-sm">
+                  <Markdown>{results[signal.id]}</Markdown>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function SignalsPage() {
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-semibold">Signals</h1>
-          <p className="text-sm text-gray-500">People.ai Sales AI events, and the agents they trigger.</p>
+          <p className="text-sm text-gray-500">People.ai Sales AI events, your custom signals, and the agents they trigger.</p>
         </div>
         <Tabs defaultValue="feed">
           <TabsList>
             <TabsTrigger value="feed">Signal feed</TabsTrigger>
+            <TabsTrigger value="custom">Custom signals</TabsTrigger>
             <TabsTrigger value="rules">Routing rules</TabsTrigger>
           </TabsList>
           <TabsContent value="feed" className="mt-6"><SignalsList /></TabsContent>
+          <TabsContent value="custom" className="mt-6"><CustomSignalsManager /></TabsContent>
           <TabsContent value="rules" className="mt-6"><SubscriptionsManager /></TabsContent>
         </Tabs>
       </div>
