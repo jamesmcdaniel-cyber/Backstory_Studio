@@ -141,9 +141,13 @@ async function enrichEntities(
   if (!accountId && !opportunityId) return
   const client = await getPeopleAiReadClient(null, organizationId)
   if (!client) return
+  // Cache scope = the identity the read client uses. getPeopleAiReadClient(null,
+  // org) resolves to the org-wide service client, so account/opp facts are the
+  // shared org view — safe to cache per org (matches the isolation posture).
+  const cacheScope = `org:${organizationId}`
   try {
     if (accountId) {
-      const facts = await enrichAccount(client, accountId)
+      const facts = await enrichAccount(client, accountId, { cacheScope })
       const node = nodes.find((n) => n.id === nid.account(accountId))
       if (facts && node) {
         node.text = `Account ${accountId} — Sales AI status: ${facts.text}`
@@ -151,7 +155,7 @@ async function enrichEntities(
       }
     }
     if (opportunityId) {
-      const facts = await enrichOpportunity(client, opportunityId)
+      const facts = await enrichOpportunity(client, opportunityId, { cacheScope })
       const node = nodes.find((n) => n.id === nid.opportunity(opportunityId))
       if (facts && node) {
         node.text = `Opportunity ${opportunityId} — Sales AI status: ${facts.text}`

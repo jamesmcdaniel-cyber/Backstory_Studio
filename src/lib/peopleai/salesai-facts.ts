@@ -9,6 +9,8 @@
  * resolved via find_record_by_crm_id first.
  */
 
+import { cacheGet, cacheSet } from '@/lib/cache'
+
 /** Minimal shape of the People.ai client — just what facts need (injectable for tests). */
 export interface SalesAiCaller {
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>
@@ -18,6 +20,25 @@ export interface EnrichedEntity {
   text: string
   peopleaiId: number
 }
+
+export interface EnrichOptions {
+  /**
+   * When set, cache the successful result under this scope. Use the identity the
+   * `client` reads as — e.g. `org:<orgId>` for the service (org-shared) client —
+   * so one rep's private view can't be served to another. Omit to skip caching.
+   */
+  cacheScope?: string
+  cacheTtlMs?: number
+  /**
+   * Invoked when the result was served from cache (no live MCP call). Lets a
+   * caller (e.g. the backfill circuit breaker) treat cache hits as neutral —
+   * a fast cache hit says nothing about live-endpoint health.
+   */
+  onCacheHit?: () => void
+}
+
+// Sales AI status changes slowly; 15 min balances freshness against MCP cost.
+const SALES_AI_TTL_MS = 15 * 60 * 1000
 
 /** Extract concatenated text from an MCP tool result's content blocks. */
 export function extractMcpText(result: unknown): string {
@@ -57,28 +78,57 @@ async function resolveAccountId(client: SalesAiCaller, ref: string | number): Pr
   }
 }
 
-export async function enrichAccount(client: SalesAiCaller, accountRef: string | number): Promise<EnrichedEntity | null> {
+export async function enrichAccount(
+  client: SalesAiCaller,
+  accountRef: string | number,
+  opts: EnrichOptions = {},
+): Promise<EnrichedEntity | null> {
   const id = await resolveAccountId(client, accountRef)
   if (id == null) return null
-  try {
-    const result = await client.callTool('get_account_status', { peopleai_account_id: id })
-    const text = extractMcpText(result)
-    return text ? { text: text.slice(0, 2000), peopleaiId: id } : null
-  } catch {
-    return null
+  const fetchFacts = async (): Promise<EnrichedEntity | null> => {
+    try {
+      const result = await client.callTool('get_account_status', { peopleai_account_id: id })
+      const text = extractMcpText(result)
+      return text ? { text: text.slice(0, 2000), peopleaiId: id } : null
+    } catch {
+      return null
+    }
   }
+  // Manual get/fetch/set (not cached()) so we can signal a cache hit to the
+  // caller. Negatives aren't cached, so a timeout won't suppress future
+  // enrichment; only real facts are stored.
+  if (!opts.cacheScope) return fetchFacts()
+  const key = `sai:acct:${opts.cacheScope}:${id}`
+  const hit = await cacheGet<EnrichedEntity>(key)
+  if (hit) { opts.onCacheHit?.(); return hit }
+  const facts = await fetchFacts()
+  if (facts) await cacheSet(key, facts, opts.cacheTtlMs ?? SALES_AI_TTL_MS)
+  return facts
 }
 
-export async function enrichOpportunity(client: SalesAiCaller, opportunityRef: string | number): Promise<EnrichedEntity | null> {
+export async function enrichOpportunity(
+  client: SalesAiCaller,
+  opportunityRef: string | number,
+  opts: EnrichOptions = {},
+): Promise<EnrichedEntity | null> {
   const id = numericId(opportunityRef)
   if (id == null) return null
-  try {
-    const result = await client.callTool('get_opportunity_status', { peopleai_opportunity_id: id })
-    const text = extractMcpText(result)
-    return text ? { text: text.slice(0, 2000), peopleaiId: id } : null
-  } catch {
-    return null
+  const fetchFacts = async (): Promise<EnrichedEntity | null> => {
+    try {
+      const result = await client.callTool('get_opportunity_status', { peopleai_opportunity_id: id })
+      const text = extractMcpText(result)
+      return text ? { text: text.slice(0, 2000), peopleaiId: id } : null
+    } catch {
+      return null
+    }
   }
+  if (!opts.cacheScope) return fetchFacts()
+  const key = `sai:opp:${opts.cacheScope}:${id}`
+  const hit = await cacheGet<EnrichedEntity>(key)
+  if (hit) { opts.onCacheHit?.(); return hit }
+  const facts = await fetchFacts()
+  if (facts) await cacheSet(key, facts, opts.cacheTtlMs ?? SALES_AI_TTL_MS)
+  return facts
 }
 
 /** Ask SalesAI a freeform question about an account (used by the assistant brain). */

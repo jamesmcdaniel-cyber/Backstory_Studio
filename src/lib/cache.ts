@@ -1,0 +1,136 @@
+/**
+ * Read-through cache with a Redis backend and an in-memory fallback.
+ *
+ * Redis-backed when REDIS_URL is set (shared across processes/instances — the
+ * real cache in production); otherwise a bounded per-process in-memory map
+ * (local dev, or when Redis is unreachable). Backend selection mirrors the
+ * ratelimit.ts seam.
+ *
+ * Every operation is BEST-EFFORT: a cache miss, corrupt value, or backend
+ * outage never breaks the caller — it falls through to the source of truth.
+ * Negatives (null/undefined) are never cached, so a transient upstream failure
+ * can't get pinned for the TTL.
+ */
+
+import { Redis } from 'ioredis'
+import { apiLogger } from '@/lib/logger'
+
+export interface Cache {
+  get<T>(key: string): Promise<T | null>
+  set<T>(key: string, value: T, ttlMs: number): Promise<void>
+  del(key: string): Promise<void>
+}
+
+// Bounds the in-memory fallback so a long-lived process can't grow unbounded.
+const MAX_MEMORY_ENTRIES = 5000
+
+function createMemoryCache(): Cache {
+  const store = new Map<string, { value: unknown; expiresAt: number }>()
+  return {
+    async get<T>(key: string): Promise<T | null> {
+      const hit = store.get(key)
+      if (!hit) return null
+      if (hit.expiresAt <= Date.now()) {
+        store.delete(key)
+        return null
+      }
+      // Touch for LRU-ish ordering (Map preserves insertion order).
+      store.delete(key)
+      store.set(key, hit)
+      return hit.value as T
+    },
+    async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
+      if (store.size >= MAX_MEMORY_ENTRIES && !store.has(key)) {
+        const oldest = store.keys().next().value
+        if (oldest !== undefined) store.delete(oldest)
+      }
+      store.set(key, { value, expiresAt: Date.now() + ttlMs })
+    },
+    async del(key: string): Promise<void> {
+      store.delete(key)
+    },
+  }
+}
+
+function createRedisCache(url: string): Cache {
+  // Fail fast (best-effort): one retry, no ready-check, lazy connect so an
+  // unreachable Redis degrades to source-of-truth reads instead of hanging.
+  const redis = new Redis(url, { maxRetriesPerRequest: 1, enableReadyCheck: false, lazyConnect: true })
+  let warned = false
+  redis.on('error', (error: Error) => {
+    if (warned) return
+    warned = true
+    apiLogger.warn('cache: redis error (falling through to source)', { error: error.message })
+  })
+  return {
+    async get<T>(key: string): Promise<T | null> {
+      const raw = await redis.get(key)
+      return raw ? (JSON.parse(raw) as T) : null
+    },
+    async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
+      await redis.set(key, JSON.stringify(value), 'PX', Math.max(1, Math.floor(ttlMs)))
+    },
+    async del(key: string): Promise<void> {
+      await redis.del(key)
+    },
+  }
+}
+
+let instance: Cache | null = null
+
+export function getCache(): Cache {
+  if (instance) return instance
+  const url = process.env.REDIS_URL
+  instance = url ? createRedisCache(url) : createMemoryCache()
+  return instance
+}
+
+/** True when a shared (Redis) cache is configured; false = per-process memory. */
+export function cacheConfigured(): boolean {
+  return Boolean(process.env.REDIS_URL)
+}
+
+function warn(op: string, key: string, error: unknown): void {
+  apiLogger.warn(`cache.${op} failed`, { key, error: error instanceof Error ? error.message : String(error) })
+}
+
+/** Best-effort get; returns null on miss or any backend error. */
+export async function cacheGet<T>(key: string): Promise<T | null> {
+  try {
+    return await getCache().get<T>(key)
+  } catch (error) {
+    warn('get', key, error)
+    return null
+  }
+}
+
+/** Best-effort set; swallows backend errors. */
+export async function cacheSet<T>(key: string, value: T, ttlMs: number): Promise<void> {
+  try {
+    await getCache().set(key, value, ttlMs)
+  } catch (error) {
+    warn('set', key, error)
+  }
+}
+
+/** Best-effort delete (cache busting); swallows backend errors. */
+export async function cacheDelete(key: string): Promise<void> {
+  try {
+    await getCache().del(key)
+  } catch (error) {
+    warn('del', key, error)
+  }
+}
+
+/**
+ * Read-through: return the cached value, else run `fetcher`, cache a
+ * non-null/undefined result under `ttlMs`, and return it. Negatives are not
+ * cached (so a failed fetch isn't pinned). Cache errors never propagate.
+ */
+export async function cached<T>(key: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+  const hit = await cacheGet<T>(key)
+  if (hit !== null && hit !== undefined) return hit
+  const value = await fetcher()
+  if (value !== null && value !== undefined) await cacheSet(key, value, ttlMs)
+  return value
+}

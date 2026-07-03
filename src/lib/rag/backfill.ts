@@ -71,18 +71,25 @@ async function buildSalesAiBook(organizationId: string): Promise<{ nodes: Pendin
   const TIMEOUT_FLOOR_MS = BULK_TIMEOUT_MS - 1_000
   let consecutiveTimeouts = 0
   let enrichmentDisabled = false
-  const tryEnrich = async <T>(fn: () => Promise<T | null>): Promise<T | null> => {
+  // The breaker judges LIVE calls only: a cache hit returns in ~ms and says
+  // nothing about live-endpoint health, so it must be neutral (neither reset nor
+  // count) — otherwise interleaved hits would keep resetting the counter and the
+  // breaker could never trip.
+  const tryEnrich = async <T>(run: (hooks: { onCacheHit: () => void }) => Promise<T | null>): Promise<T | null> => {
     if (enrichmentDisabled) return null
+    let fromCache = false
     const start = Date.now()
-    const result = await fn().catch(() => null)
-    const timedOut = result == null && Date.now() - start >= TIMEOUT_FLOOR_MS
-    if (timedOut) {
-      if (++consecutiveTimeouts >= FAILURE_LIMIT) {
-        enrichmentDisabled = true
-        apiLogger.warn('backfill: Sales AI enrichment disabled after repeated timeouts', { organizationId, failures: consecutiveTimeouts })
+    const result = await run({ onCacheHit: () => { fromCache = true } }).catch(() => null)
+    if (!fromCache) {
+      const timedOut = result == null && Date.now() - start >= TIMEOUT_FLOOR_MS
+      if (timedOut) {
+        if (++consecutiveTimeouts >= FAILURE_LIMIT) {
+          enrichmentDisabled = true
+          apiLogger.warn('backfill: Sales AI enrichment disabled after repeated timeouts', { organizationId, failures: consecutiveTimeouts })
+        }
+      } else {
+        consecutiveTimeouts = 0
       }
-    } else {
-      consecutiveTimeouts = 0
     }
     return result
   }
@@ -105,7 +112,7 @@ async function buildSalesAiBook(organizationId: string): Promise<{ nodes: Pendin
     const acctId = account.peopleai_account_id
     if (acctId == null) continue
     const acctKey = String(acctId)
-    const facts = await tryEnrich(() => enrichAccount(client, acctId))
+    const facts = await tryEnrich((hooks) => enrichAccount(client, acctId, { cacheScope: `org:${organizationId}`, onCacheHit: hooks.onCacheHit }))
     nodes.push({
       id: nodeIds.account(acctKey), type: 'account',
       text: facts?.text
@@ -118,7 +125,7 @@ async function buildSalesAiBook(organizationId: string): Promise<{ nodes: Pendin
       const oppId = opp.peopleai_opportunity_id
       if (oppId == null) continue
       const oppKey = String(oppId)
-      const oppFacts = await tryEnrich(() => enrichOpportunity(client, oppId))
+      const oppFacts = await tryEnrich((hooks) => enrichOpportunity(client, oppId, { cacheScope: `org:${organizationId}`, onCacheHit: hooks.onCacheHit }))
       const base = `Opportunity: ${opp.opportunity_name ?? oppKey} — $${opp.amount ?? '?'}, closes ${opp.close_date ?? '?'}, engagement ${opp.engagement_level ?? '?'}, owner ${opp.owner?.name ?? '?'}`
       nodes.push({
         id: nodeIds.opportunity(oppKey), type: 'opportunity',
