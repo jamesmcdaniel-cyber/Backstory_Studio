@@ -17,6 +17,11 @@ let _warned = false
 function getDerivedKey(): Buffer | null {
   const raw = process.env.ENCRYPTION_KEY
   if (!raw) {
+    // Secrets at rest must never silently degrade to reversible base64 in
+    // production — refuse to operate instead.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY is required in production')
+    }
     if (!_warned) {
       console.warn('ENCRYPTION_KEY not set — MCP secrets stored unencrypted')
       _warned = true
@@ -76,6 +81,11 @@ export function encryptSecret(plaintext: string): string {
 
 export function decryptSecret(payload: string): string {
   if (payload.startsWith('b64:')) {
+    // Legacy unencrypted payloads stay readable, but only when the process is
+    // properly configured — production without a key must not run at all.
+    if (process.env.NODE_ENV === 'production' && !process.env.ENCRYPTION_KEY) {
+      throw new Error('ENCRYPTION_KEY is required in production')
+    }
     return Buffer.from(payload.slice(4), 'base64').toString('utf8')
   }
 
