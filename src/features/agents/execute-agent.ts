@@ -5,6 +5,8 @@ import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/peopleai/client'
 import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection } from '@/lib/nango/delivery'
+import { recordAudit } from '@/lib/audit'
+import { createApproval, requiresApproval } from '@/lib/agents/approval'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
@@ -533,12 +535,51 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
         try {
           if (!binding) throw new Error(`Tool binding not found: ${call.name}`)
+
+          // Approval gate: if this agent requires approval and the tool is an
+          // outbound write, queue it instead of executing — an approver runs
+          // it out-of-band. The model is told the action is pending.
+          if (requiresApproval(agentMetadata, binding.provider)) {
+            const approval = await createApproval({
+              organizationId,
+              executionId: execution.id,
+              userId,
+              provider: binding.provider,
+              tool: call.name,
+              args: (call.input ?? {}) as Record<string, unknown>,
+            })
+            await prisma.workflowStep.update({
+              where: { id: step.id },
+              data: { status: 'succeeded', output: jsonValue({ queuedForApproval: approval.id }), completedAt: new Date() },
+            })
+            await recordEvent(execution.id, step.id, 'tool.queued_for_approval', { name: step.node, approvalId: approval.id })
+            results.push({
+              toolCallId: call.id,
+              content: JSON.stringify({ status: 'queued_for_approval', approvalId: approval.id, message: 'This action requires approval and has been queued. It will run once approved.' }),
+            })
+            continue
+          }
+
           const result = await binding.client.executeTool(binding.serverUrl, binding.toolName, call.input)
           await prisma.workflowStep.update({
             where: { id: step.id },
             data: { status: 'succeeded', output: jsonValue(result), completedAt: new Date() },
           })
           await recordEvent(execution.id, step.id, 'tool.completed', { name: step.node })
+          // Immutable audit trail. Delivery/write planes (nango, slack, email,
+          // salesforce, people.ai) are the consequential ones; the args are
+          // hashed, not stored.
+          const writePlanes = /^(nango|slack|email|backstory)/i
+          await recordAudit({
+            organizationId,
+            executionId: execution.id,
+            actorUserId: userId,
+            actorKind: 'agent',
+            action: writePlanes.test(binding.provider) ? 'tool.write' : 'tool.call',
+            tool: call.name,
+            resourceType: binding.provider,
+            payload: call.input,
+          })
           results.push({ toolCallId: call.id, content: JSON.stringify(result) })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)

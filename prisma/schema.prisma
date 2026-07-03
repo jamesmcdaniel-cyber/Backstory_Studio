@@ -42,6 +42,8 @@ model Organization {
   peopleAiConnections PeopleAiConnection[]
   signals             Signal[]
   signalSubscriptions SignalSubscription[]
+  auditEvents         AuditEvent[]
+  approvalRequests    ApprovalRequest[]
 
   @@map("organizations")
 }
@@ -294,6 +296,53 @@ model WorkflowEvent {
 
   @@index([executionId, ts])
   @@map("workflow_events")
+}
+
+// Append-only audit trail of consequential actions (tool writes, config
+// changes, connections, approvals). Never updated or deleted in normal
+// operation; exportable per org for enterprise compliance.
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  actorUserId    String?
+  actorKind      String   @default("user") // 'user' | 'agent' | 'system'
+  action         String              // e.g. 'tool.write', 'agent.config_changed'
+  resourceType   String?
+  resourceId     String?
+  tool           String?
+  executionId    String?
+  // Hash (not contents) of the payload — proves what happened without storing
+  // potentially sensitive tool arguments in the audit row.
+  payloadHash    String?
+  detail         Json?
+  ip             String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, action])
+  @@map("audit_events")
+}
+
+// A pending outbound-write approval. The run parks (waiting_for_input) until an
+// approver decides; on approval the write proceeds, on rejection it is skipped.
+model ApprovalRequest {
+  id             String    @id @default(cuid())
+  organizationId String    @db.Uuid
+  executionId    String
+  tool           String
+  summary        String    @db.Text
+  payload        Json
+  status         String    @default("pending") // 'pending' | 'approved' | 'rejected'
+  decidedById    String?
+  decidedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@map("approval_requests")
 }
 
 model AgentTemplate {
