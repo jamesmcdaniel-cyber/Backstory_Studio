@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Nango, { type ConnectUI } from '@nangohq/frontend'
-import { CheckCircle2, Loader2, Plug, RefreshCw } from 'lucide-react'
+import { CheckCircle2, Loader2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { IntegrationLogo } from '@/components/integrations/integration-logo'
 
 type Integration = {
   id: string
@@ -143,7 +144,10 @@ export function OAuthIntegrationsGrid() {
             <Card key={integration.id}>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between gap-3 text-base">
-                  <span className="flex items-center gap-2"><Plug className="h-4 w-4" />{integration.name}</span>
+                  <span className="flex items-center gap-2">
+                    <IntegrationLogo src={integration.logo} slug={integration.provider} name={integration.name} />
+                    {integration.name}
+                  </span>
                   <Badge variant="outline">
                     {connection?.connected ? <><CheckCircle2 className="mr-1 h-3 w-3 text-green-600" />Connected</> : 'Not connected'}
                   </Badge>

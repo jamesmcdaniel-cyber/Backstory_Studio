@@ -188,13 +188,18 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       schema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
       system: SYSTEM_PROMPT,
       user: JSON.stringify({ context, conversation, question: message }),
-      maxTokens: 2048,
+      // Generous headroom: a reconfigure reply returns the agent's complete
+      // instructions inline, which can be long — a tight cap truncates the JSON
+      // and turns a valid answer into a parse failure.
+      maxTokens: 8192,
     })
     const parsed = JSON.parse(text || '{}') as { reply?: unknown; proposal?: unknown }
     reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : ''
     proposal = normalizeProposal(proposalSchema.catch(null).parse(parsed.proposal ?? null))
-  } catch {
-    throw new ApiError('The assistant could not respond. Try again.', 502, 'ASSISTANT_FAILED')
+  } catch (error) {
+    // Preserve the real cause so the 5xx handler logs/reports it — a bare catch
+    // made this failure invisible in logs and Sentry.
+    throw new ApiError('The assistant could not respond. Try again.', 502, 'ASSISTANT_FAILED', error)
   }
   if (!reply) reply = proposal ? 'Here is the proposed configuration change.' : 'No answer returned.'
 

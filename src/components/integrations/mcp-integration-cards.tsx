@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { AlertCircle, ChevronDown, Loader2, Plug, Wrench } from 'lucide-react'
+import { AlertCircle, ChevronDown, Loader2, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { IntegrationLogo } from '@/components/integrations/integration-logo'
 
 type Tool = { name: string; description?: string }
 
@@ -82,7 +83,10 @@ export function MCPIntegrationCards() {
             <Card key={connection.provider}>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between text-base capitalize">
-                  <span className="flex items-center gap-2"><Plug className="h-4 w-4" />{connection.provider}</span>
+                  <span className="flex items-center gap-2">
+                    <IntegrationLogo slug={connection.provider} name={connection.provider} />
+                    {connection.provider}
+                  </span>
                   <Badge variant="outline">{connection.status.replace('_', ' ')}</Badge>
                 </CardTitle>
               </CardHeader>

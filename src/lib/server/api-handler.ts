@@ -9,6 +9,9 @@ export class ApiError extends Error {
     message: string,
     readonly status = 400,
     readonly code = 'BAD_REQUEST',
+    // The underlying error (when this ApiError wraps a caught failure), so 5xx
+    // handling can log/report the real cause instead of the generic message.
+    readonly cause?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -36,6 +39,18 @@ export function withAuthenticatedApi(handler: AuthenticatedHandler) {
       }
 
       if (error instanceof ApiError) {
+        // Server-side ApiErrors (5xx) are real failures — log + report them.
+        // Client errors (4xx) are expected and returned quietly.
+        if (error.status >= 500) {
+          apiLogger.error('API request failed (ApiError)', {
+            path: request.nextUrl.pathname,
+            code: error.code,
+            status: error.status,
+            error: error.message,
+            cause: error.cause instanceof Error ? error.cause.message : error.cause ? String(error.cause) : undefined,
+          })
+          captureError(error.cause ?? error, { path: request.nextUrl.pathname, code: error.code })
+        }
         return NextResponse.json(
           { success: false, error: error.message, code: error.code },
           { status: error.status },

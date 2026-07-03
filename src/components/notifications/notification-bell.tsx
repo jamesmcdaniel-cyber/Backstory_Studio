@@ -121,7 +121,9 @@ export function NotificationBell() {
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 z-40 mt-1 w-80 rounded-lg border bg-white shadow-lg">
+          {/* Bell lives in the left sidebar, so open rightward (left-0); cap
+              width so the panel never overflows a narrow mobile drawer. */}
+          <div className="absolute left-0 z-40 mt-1 w-80 max-w-[calc(100vw-1.5rem)] rounded-lg border bg-white shadow-lg">
             <div className="flex items-center justify-between border-b px-3 py-2">
               <span className="text-sm font-semibold">Notifications</span>
               {pushState === 'available' && <button className="text-xs font-medium text-indigo-600" onClick={enablePush}>Enable push</button>}
