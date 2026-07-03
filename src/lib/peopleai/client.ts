@@ -137,3 +137,21 @@ export function getPeopleAiServiceClient(options: PeopleAiClientOptions = {}): P
   if (!clientId || !clientSecret) return null
   return new PeopleAiClient({ kind: 'service', clientId, clientSecret }, options)
 }
+
+/**
+ * The Sales AI client for READING context (assistant brain, RAG indexing).
+ * Native/OOTB by design: the org service credential is the default so context
+ * works with zero user setup; a caller's own connection is preferred when
+ * available for rep-scoped fidelity. Returns null only when neither is set.
+ */
+export async function getPeopleAiReadClient(
+  userId: string | null,
+  organizationId: string,
+  options: PeopleAiClientOptions = {},
+): Promise<PeopleAiClient | null> {
+  if (userId) {
+    const userClient = await getPeopleAiClientForUser(userId, organizationId, options)
+    if (userClient) return userClient
+  }
+  return getPeopleAiServiceClient(options)
+}

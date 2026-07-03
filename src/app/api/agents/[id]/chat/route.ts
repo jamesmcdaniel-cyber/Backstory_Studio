@@ -169,7 +169,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const agent = await requireAgent(agentId, auth)
 
   const [context, historyRows] = await Promise.all([
-    buildAssistantContext(agent),
+    buildAssistantContext(agent, message),
     prisma.agentChatMessage.findMany({
       where: { agentTaskId: agentId, userId: auth.dbUser.id },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],

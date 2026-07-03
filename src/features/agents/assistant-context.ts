@@ -1,6 +1,8 @@
 import type { AgentTask } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { readAgentMetadata } from '@/lib/agents/metadata'
+import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
+import { getGraphRagStore } from '@/lib/rag/get-store'
 
 /**
  * Server-side context assembly for the agent-scoped assistant chat. Pulls the
@@ -60,9 +62,30 @@ export type AssistantContext = {
   recentRuns: ReturnType<typeof summarizeRun>[]
   latestRun: (ReturnType<typeof summarizeRun> & { toolCalls: unknown[]; conversation: unknown[] }) | null
   latestFailedRun: (ReturnType<typeof summarizeRun> & { toolCalls: unknown[]; conversation: unknown[] }) | null
+  /** Graph-RAG correlated context (Sales AI signals, integration data, related runs). Empty string when RAG is unconfigured. */
+  correlated: string
 }
 
-export async function buildAssistantContext(agent: AgentTask): Promise<AssistantContext> {
+/**
+ * Graph-RAG context for an assistant question about this agent. Seeds expansion
+ * from the agent node so answers can reference correlated Sales AI signals and
+ * prior cross-agent runs. Best-effort — returns '' when embeddings/store are
+ * unconfigured or on any failure.
+ */
+async function correlatedContext(agent: AgentTask, question: string): Promise<string> {
+  try {
+    const context = await retrieveContext(getGraphRagStore(), {
+      organizationId: agent.organizationId,
+      query: `${question}\n${agent.objective}`.slice(0, 2000),
+      seedNodeIds: [`agent:${agent.id}`],
+    })
+    return renderContext(context)
+  } catch {
+    return ''
+  }
+}
+
+export async function buildAssistantContext(agent: AgentTask, question = ''): Promise<AssistantContext> {
   const executions = await prisma.agentExecution.findMany({
     where: { agentTaskId: agent.id },
     omit: { transcript: true },
@@ -104,6 +127,7 @@ export async function buildAssistantContext(agent: AgentTask): Promise<Assistant
   })
 
   const agentMetadata = readAgentMetadata(agent.metadata)
+  const correlated = await correlatedContext(agent, question)
 
   return {
     agent: {
@@ -120,5 +144,6 @@ export async function buildAssistantContext(agent: AgentTask): Promise<Assistant
     recentRuns: executions.map(summarizeRun),
     latestRun: latest ? detailFor(latest) : null,
     latestFailedRun: latestFailed ? detailFor(latestFailed) : null,
+    correlated,
   }
 }

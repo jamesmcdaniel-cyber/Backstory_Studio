@@ -1,0 +1,72 @@
+/**
+ * In-memory GraphRagStore.
+ *
+ * The default store when no external graph DB is configured, and the substrate
+ * for tests. Per-process only (not shared across serverless invocations), so in
+ * production it's a graceful no-op-ish fallback rather than a durable store —
+ * real deployments set NEO4J_* to get persistence. Retrieval semantics match
+ * the Neo4j adapter so the contract test can run against both.
+ */
+
+import { cosineSimilarity } from './embeddings'
+import type { GraphEdge, GraphNode, GraphRagStore, SearchHit } from './store'
+
+export class MemoryGraphStore implements GraphRagStore {
+  private nodes = new Map<string, GraphNode>()
+  private edges: GraphEdge[] = []
+
+  async upsertNodes(nodes: GraphNode[]): Promise<void> {
+    for (const node of nodes) this.nodes.set(node.id, node)
+  }
+
+  async upsertEdges(edges: GraphEdge[]): Promise<void> {
+    for (const edge of edges) {
+      const exists = this.edges.some(
+        (e) => e.from === edge.from && e.to === edge.to && e.rel === edge.rel && e.organizationId === edge.organizationId,
+      )
+      if (!exists) this.edges.push(edge)
+    }
+  }
+
+  async search(organizationId: string, queryEmbedding: number[], k: number): Promise<SearchHit[]> {
+    const hits: SearchHit[] = []
+    for (const node of this.nodes.values()) {
+      if (node.organizationId !== organizationId) continue
+      if (node.embedding.length === 0) continue
+      hits.push({ node, score: cosineSimilarity(queryEmbedding, node.embedding) })
+    }
+    hits.sort((a, b) => b.score - a.score)
+    return hits.slice(0, k)
+  }
+
+  async expand(organizationId: string, nodeIds: string[], hops: number): Promise<GraphNode[]> {
+    const seen = new Set(nodeIds)
+    let frontier = new Set(nodeIds)
+    for (let hop = 0; hop < hops; hop++) {
+      const next = new Set<string>()
+      for (const edge of this.edges) {
+        if (edge.organizationId !== organizationId) continue
+        // Undirected: a run's neighborhood includes the signal that triggered
+        // it and vice versa. Only expand from THIS hop's frontier — newly
+        // reached nodes are expanded on the next hop, not the same one.
+        if (frontier.has(edge.from) && !seen.has(edge.to)) next.add(edge.to)
+        if (frontier.has(edge.to) && !seen.has(edge.from)) next.add(edge.from)
+      }
+      if (next.size === 0) break
+      for (const id of next) seen.add(id)
+      frontier = next
+    }
+    const result: GraphNode[] = []
+    for (const id of seen) {
+      if (nodeIds.includes(id)) continue // return only the newly-reached neighbors
+      const node = this.nodes.get(id)
+      if (node && node.organizationId === organizationId) result.push(node)
+    }
+    return result
+  }
+
+  async clear(organizationId: string): Promise<void> {
+    for (const [id, node] of this.nodes) if (node.organizationId === organizationId) this.nodes.delete(id)
+    this.edges = this.edges.filter((e) => e.organizationId !== organizationId)
+  }
+}
