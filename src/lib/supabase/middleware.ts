@@ -38,6 +38,15 @@ export async function updateSession(request: NextRequest) {
   const isApi = pathname.startsWith('/api/')
   const isAuthPage = pathname.startsWith('/auth/')
 
+  // Production is SSO/invite-only: password signup is disabled unless
+  // explicitly allowed (AUTH_ALLOW_PASSWORD=true keeps it for dev).
+  if (pathname === '/auth/signup' && process.env.AUTH_ALLOW_PASSWORD === 'false') {
+    const url = request.nextUrl.clone()
+    url.pathname = '/auth/login'
+    url.search = ''
+    return copyCookies(response, NextResponse.redirect(url))
+  }
+
   if (!user && !isApi && !publicPages.has(pathname)) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'

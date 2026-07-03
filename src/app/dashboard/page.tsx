@@ -63,6 +63,12 @@ function AgentHQ() {
     } else {
       // Surface the real reason instead of rendering an empty shell.
       const data = await agentResponse.json().catch(() => ({}))
+      if (data.code === 'ENTITLEMENT_REQUIRED') {
+        // The gate: this workspace has no active People.ai Sales AI
+        // connection — send the user to the connect flow.
+        window.location.assign('/connect')
+        return
+      }
       setAuthStatus(agentResponse.status)
       setAuthError(data.error || `Couldn't load agents (HTTP ${agentResponse.status}).`)
     }
