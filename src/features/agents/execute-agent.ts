@@ -159,7 +159,10 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
           tools.push({
             name,
             description: tool.description || `${tool.name} via People.ai`,
-            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+            inputSchema:
+              tool.inputSchema && typeof tool.inputSchema === 'object'
+                ? (tool.inputSchema as Record<string, unknown>)
+                : { type: 'object', properties: {} },
           })
         }
       } else if (backstoryMcpConfigured()) {
