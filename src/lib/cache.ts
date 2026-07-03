@@ -134,3 +134,18 @@ export async function cached<T>(key: string, ttlMs: number, fetcher: () => Promi
   if (value !== null && value !== undefined) await cacheSet(key, value, ttlMs)
   return value
 }
+
+/**
+ * Health probe for the cache backend. `configured` = Redis is the backend (a
+ * shared cache); `ok` = a set/get round-trip succeeds. So (configured:true,
+ * ok:false) means REDIS_URL is set but Redis is unreachable; (configured:false,
+ * ok:true) means the in-memory fallback (no Redis). Best-effort — never throws.
+ */
+export async function cachePing(): Promise<{ configured: boolean; ok: boolean }> {
+  const configured = cacheConfigured()
+  const probeKey = '__health_probe__'
+  const token = String(Date.now())
+  await cacheSet(probeKey, token, 5_000)
+  const ok = (await cacheGet<string>(probeKey)) === token
+  return { configured, ok }
+}
