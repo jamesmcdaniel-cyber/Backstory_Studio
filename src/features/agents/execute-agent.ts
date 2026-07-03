@@ -498,7 +498,18 @@ export async function runAgentExecution(data: AgentExecutionJob) {
         seedNodeIds,
       })
       const rendered = renderContext(ragContext)
-      if (rendered) system = `${system}\n\n${rendered}`
+      if (rendered) {
+        system = `${system}\n\n${rendered}`
+        // Surface the correlated context in the run's activity log so the
+        // "brain" is visible: what Sales AI signals / prior runs / related
+        // accounts the agent pulled in before acting.
+        await recordEvent(execution.id, null, 'context.retrieved', {
+          source: 'graph-rag',
+          hits: ragContext.hits.map((h) => ({ type: h.type, text: h.text })),
+          related: ragContext.related.map((r) => ({ type: r.type, text: r.text })),
+          summary: `Pulled ${ragContext.hits.length} correlated fact(s) + ${ragContext.related.length} connected entit(ies) from Sales AI, integrations, and prior runs.`,
+        })
+      }
     } catch (error) {
       apiLogger.warn('execute-agent: RAG context skipped', {
         organizationId,

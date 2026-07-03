@@ -8,6 +8,7 @@ import {
   CircleDashed,
   HelpCircle,
   Loader2,
+  Network,
   Send,
   Sparkles,
   Wrench,
@@ -146,11 +147,46 @@ function ThinkingCard({ text }: { text: string }) {
   )
 }
 
+// Renders the graph-RAG context the agent pulled in before acting — the visible
+// "brain" step: which Sales AI signals, prior runs, and related entities it
+// correlated. Collapsed to the summary by default; expandable to the facts.
+function ContextCard({ summary, hits, related }: { summary: string; hits: ContextFact[]; related: ContextFact[] }) {
+  const [open, setOpen] = useState(false)
+  const total = hits.length + related.length
+  return (
+    <div className="rounded-lg border border-dashed border-horizon-200 bg-horizon-50/40 px-3 py-2">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 text-left"
+        onClick={() => setOpen((v) => !v)}
+        disabled={total === 0}
+      >
+        <Network className="h-3 w-3 shrink-0 text-horizon-600" />
+        <span className="mono-label text-horizon-700">Correlated context</span>
+        {total > 0 && <ChevronDown className={`h-3.5 w-3.5 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />}
+      </button>
+      <p className="mt-1 text-sm text-gray-600">{summary}</p>
+      {open && total > 0 && (
+        <ul className="mt-2 space-y-1 border-t pt-2">
+          {[...hits, ...related].map((fact, i) => (
+            <li key={i} className="text-xs text-gray-600">
+              <span className="mono-label mr-1.5 text-gray-400">{fact.type}</span>
+              {fact.text}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // Merge thinking events and tool-call steps into one chronological process
 // timeline, so the log reads as the agent's reasoning interleaved with its calls.
+type ContextFact = { type: string; text: string }
 type TimelineItem =
   | { key: string; ts: number; kind: 'thinking'; text: string }
   | { key: string; ts: number; kind: 'tool'; step: RunStep }
+  | { key: string; ts: number; kind: 'context'; summary: string; hits: ContextFact[]; related: ContextFact[] }
 
 function buildTimeline(details: RunDetails | null): TimelineItem[] {
   if (!details) return []
@@ -158,6 +194,16 @@ function buildTimeline(details: RunDetails | null): TimelineItem[] {
   for (const event of details.events ?? []) {
     if (event.kind === 'agent.thinking' && event.payload?.text) {
       items.push({ key: `t-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'thinking', text: String(event.payload.text) })
+    }
+    if (event.kind === 'context.retrieved') {
+      items.push({
+        key: `c-${event.id}`,
+        ts: new Date(event.ts).getTime(),
+        kind: 'context',
+        summary: String(event.payload?.summary ?? 'Retrieved correlated context'),
+        hits: Array.isArray(event.payload?.hits) ? (event.payload.hits as ContextFact[]) : [],
+        related: Array.isArray(event.payload?.related) ? (event.payload.related as ContextFact[]) : [],
+      })
     }
   }
   for (const step of details.steps ?? []) {
@@ -276,7 +322,9 @@ function RunRow({
               {timeline.map((item) => (
                 item.kind === 'thinking'
                   ? <ThinkingCard key={item.key} text={item.text} />
-                  : <ToolCallCard key={item.key} step={item.step} />
+                  : item.kind === 'context'
+                    ? <ContextCard key={item.key} summary={item.summary} hits={item.hits} related={item.related} />
+                    : <ToolCallCard key={item.key} step={item.step} />
               ))}
               {isActive && (
                 <p className="flex items-center gap-2 px-1 text-sm text-blue-600">
