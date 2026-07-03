@@ -266,6 +266,11 @@ export async function indexCustomSignalResult(params: {
     const target = params.accountId ?? params.opportunityId ?? 'x'
     const nodeId = `insight:sig:${params.signalId}:${target}`
     const text = `Custom signal "${params.name}" — Q: ${params.question} — A: ${params.answer}`.slice(0, 1800)
+    // Only the private insight node is written. We deliberately do NOT push
+    // bare account/opportunity nodes here: upsertNodes is a full-replace, so a
+    // bare node would clobber the richer SHARED entity node written by
+    // enrichEntities (Sales AI status) for the whole org. The edge links to the
+    // existing entity when present (a no-op if it isn't yet indexed).
     const nodes: PendingNode[] = [{
       id: nodeId, type: 'insight', text,
       props: { signalId: params.signalId, name: params.name },
@@ -274,11 +279,9 @@ export async function indexCustomSignalResult(params: {
     }]
     const edges: GraphEdge[] = []
     if (params.accountId) {
-      nodes.push({ id: nid.account(params.accountId), type: 'account', text: `Account ${params.accountId}`, props: { accountId: params.accountId } })
       edges.push({ organizationId: params.organizationId, from: nodeId, to: nid.account(params.accountId), rel: 'about_account' })
     }
     if (params.opportunityId) {
-      nodes.push({ id: nid.opportunity(params.opportunityId), type: 'opportunity', text: `Opportunity ${params.opportunityId}`, props: { opportunityId: params.opportunityId } })
       edges.push({ organizationId: params.organizationId, from: nodeId, to: nid.opportunity(params.opportunityId), rel: 'about_opportunity' })
     }
     await commitGraph(params.organizationId, nodes, edges)

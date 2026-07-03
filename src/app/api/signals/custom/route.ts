@@ -37,7 +37,8 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
 })
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  const data = createSchema.parse(await request.json())
+  // Guard the parse: a bad/empty body should be a 400 (zod), not a 500.
+  const data = createSchema.parse(await request.json().catch(() => ({})))
   const signal = await prisma.customSignal.create({
     data: {
       organizationId: auth.organizationId,

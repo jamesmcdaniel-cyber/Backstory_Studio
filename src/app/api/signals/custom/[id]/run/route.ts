@@ -34,7 +34,8 @@ function signalIdFromPath(request: NextRequest): string {
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const id = signalIdFromPath(request)
-  const { target } = runSchema.parse(await request.json())
+  // Guard the parse: a bad/empty body should be a 400 (zod), not a 500.
+  const { target } = runSchema.parse(await request.json().catch(() => ({})))
 
   const signal = await prisma.customSignal.findFirst({
     where: { id, organizationId: auth.organizationId, userId: auth.dbUser.id },
