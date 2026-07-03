@@ -16,6 +16,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
+import { indexSignal } from '@/lib/rag/indexer'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 
 interface SignalShape {
@@ -168,6 +169,18 @@ export async function routeSignal(
   }
 
   await prisma.signal.update({ where: { id: signal.id }, data: { processedAt: new Date() } })
+
+  // Index the signal + its entities into the graph-RAG store (best-effort,
+  // gated on embeddings) so agents and the assistant can correlate against it.
+  void indexSignal({
+    id: signal.id,
+    organizationId: signal.organizationId,
+    type: signal.type,
+    accountId: signal.accountId,
+    opportunityId: signal.opportunityId,
+    stakeholderId: signal.stakeholderId,
+    payload: signal.payload,
+  }).catch(() => undefined)
 
   apiLogger.info('signal routed', {
     signalId: signal.id,

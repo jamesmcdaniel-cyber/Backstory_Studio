@@ -4,6 +4,19 @@ import { DEFAULT_AGENT_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { readAgentMetadata } from '@/lib/agents/metadata'
+import { indexAgent } from '@/lib/rag/indexer'
+
+/** Best-effort graph-RAG indexing of an agent node (gated on embeddings). */
+function indexAgentRow(agent: { id: string; organizationId: string; objective: string; description: string; metadata: unknown }): Promise<void> {
+  const metadata = readAgentMetadata(agent.metadata)
+  return indexAgent({
+    id: agent.id,
+    organizationId: agent.organizationId,
+    title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',
+    objective: agent.objective,
+    description: metadata.description || agent.description,
+  }).catch(() => undefined)
+}
 
 const scheduleSchema = z.object({
   type: z.enum(['manual', 'hourly', 'daily', 'weekly', 'cron']).default('manual'),
@@ -87,6 +100,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       },
     },
   })
+  void indexAgentRow(agent)
   return { success: true, agent: serializeAgent(agent) }
 })
 
@@ -117,6 +131,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       },
     },
   })
+  void indexAgentRow(agent)
   return { success: true, agent: serializeAgent(agent) }
 })
 

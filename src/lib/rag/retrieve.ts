@@ -15,7 +15,8 @@
  * ranking/rendering logic is unit-testable without network or a graph DB.
  */
 
-import { embedQuery, embeddingsConfigured, type EmbedOptions } from './embeddings'
+import { embedQuery, type EmbedOptions } from './embeddings'
+import { ragEnabled } from './get-store'
 import type { GraphNode, GraphRagStore, SearchHit } from './store'
 
 export interface RetrieveOptions {
@@ -53,7 +54,7 @@ export async function retrieveContext(
   const maxNodes = options.maxNodes ?? 16
   const embed = options.embed ?? embedQuery
 
-  if (!embeddingsConfigured() && !options.embed) {
+  if (!ragEnabled() && !options.embed) {
     return { hits: [], related: [] }
   }
 

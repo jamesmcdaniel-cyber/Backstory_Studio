@@ -7,6 +7,9 @@ import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/people
 import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection } from '@/lib/nango/delivery'
 import { recordAudit } from '@/lib/audit'
 import { createApproval, requiresApproval } from '@/lib/agents/approval'
+import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
+import { getGraphRagStore } from '@/lib/rag/get-store'
+import { indexExecution } from '@/lib/rag/indexer'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
@@ -477,7 +480,31 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const providers = Array.isArray(agentMetadata.integrations) ? agentMetadata.integrations.map(String) : []
     const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
     const { tools, bindings } = await loadTools(organizationId, providers, userId)
-    const system = buildAgentSystemPrompt(agent.objective, skillIds)
+    let system = buildAgentSystemPrompt(agent.objective, skillIds)
+
+    // Graph-RAG: give the agent correlated context (Sales AI signals,
+    // integration/MCP data from prior runs, related accounts/opps) before it
+    // acts. Best-effort and gated — a no-op when embeddings aren't configured.
+    try {
+      const execInput = (queuedExecution?.input ?? null) as { signal?: { accountId?: string; opportunityId?: string } } | null
+      const signalRef = execInput?.signal
+      const seedNodeIds = [
+        signalRef?.accountId ? `account:${signalRef.accountId}` : null,
+        signalRef?.opportunityId ? `opp:${signalRef.opportunityId}` : null,
+      ].filter((id): id is string => Boolean(id))
+      const ragContext = await retrieveContext(getGraphRagStore(), {
+        organizationId,
+        query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
+        seedNodeIds,
+      })
+      const rendered = renderContext(ragContext)
+      if (rendered) system = `${system}\n\n${rendered}`
+    } catch (error) {
+      apiLogger.warn('execute-agent: RAG context skipped', {
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
 
     if (pendingResults) runner.appendToolResults(transcript, pendingResults)
 
@@ -681,6 +708,19 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       agentTaskId: agent.id,
       executionId: execution.id,
     })
+    // Index this run (output + correlated entities) into the graph-RAG store so
+    // future agents/assistant answers can draw on what happened here. Fire and
+    // forget — gated on embeddings, never blocks completion.
+    void indexExecution({
+      id: execution.id,
+      organizationId,
+      agentTaskId: agent.id,
+      agentTitle: (agentMetadata.title as string) || agent.description,
+      signalId: (queuedExecution?.input as { signal?: { id?: string } } | null)?.signal?.id ?? null,
+      input: queuedExecution?.input ?? { prompt: data.input },
+      output,
+      status: 'completed',
+    }).catch(() => undefined)
     return output
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

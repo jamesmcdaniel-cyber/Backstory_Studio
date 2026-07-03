@@ -14,8 +14,8 @@
  */
 
 import { apiLogger } from '@/lib/logger'
-import { embedTexts, embeddingsConfigured } from './embeddings'
-import { getGraphRagStore } from './get-store'
+import { embedTexts } from './embeddings'
+import { getGraphRagStore, ragEnabled } from './get-store'
 import type { EdgeRelation, GraphEdge, GraphNode, NodeType } from './store'
 
 // ── Node id scheme (stable, so re-indexing upserts in place) ─────────────────
@@ -37,7 +37,7 @@ interface PendingNode {
 
 /** Embed pending nodes in one batch and persist nodes + edges. */
 async function commit(organizationId: string, nodes: PendingNode[], edges: GraphEdge[]): Promise<void> {
-  if (!embeddingsConfigured() || nodes.length === 0) return
+  if (!ragEnabled() || nodes.length === 0) return
   const store = getGraphRagStore()
   const embeddings = await embedTexts(nodes.map((n) => n.text), { inputType: 'document' })
   const graphNodes: GraphNode[] = nodes.map((n, i) => ({
@@ -89,7 +89,7 @@ export interface SignalRecord {
 }
 
 export async function indexSignal(signal: SignalRecord): Promise<void> {
-  if (!embeddingsConfigured()) return
+  if (!ragEnabled()) return
   try {
     const org = signal.organizationId
     const payloadText = safeJson(signal.payload).slice(0, 1500)
@@ -126,7 +126,7 @@ export interface ExecutionRecord {
 }
 
 export async function indexExecution(execution: ExecutionRecord): Promise<void> {
-  if (!embeddingsConfigured()) return
+  if (!ragEnabled()) return
   try {
     const org = execution.organizationId
     const outputText = safeJson(execution.output).slice(0, 1500)
@@ -164,7 +164,7 @@ export interface AgentRecord {
 }
 
 export async function indexAgent(agent: AgentRecord): Promise<void> {
-  if (!embeddingsConfigured()) return
+  if (!ragEnabled()) return
   try {
     await commit(
       agent.organizationId,
