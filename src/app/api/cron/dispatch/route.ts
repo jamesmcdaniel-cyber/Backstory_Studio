@@ -18,6 +18,8 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
+import { workersEnabled } from '@/lib/queue/config'
+import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -78,6 +80,14 @@ export async function GET(request: Request) {
         completedAt: new Date(),
       },
     })
+
+    // Single-owner scheduling: when the BullMQ worker is live in queue mode it
+    // owns scheduled dispatch (via its JobScheduler), so this cron must NOT also
+    // dispatch — otherwise every scheduled agent fires twice (double side
+    // effects + token cost). The stuck-run reaper above still runs regardless.
+    if (workersEnabled && EXECUTION_MODE === 'queue') {
+      return Response.json({ success: true, skipped: 'worker-owns-scheduling', reaped: true, due: 0, ran: [] })
+    }
 
     // Load all active agents (capped at 200 to avoid huge fetches)
     const agents = await prisma.agentTask.findMany({

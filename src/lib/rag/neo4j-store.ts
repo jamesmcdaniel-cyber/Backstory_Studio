@@ -19,6 +19,26 @@ export function neo4jConfigured(): boolean {
   return Boolean(process.env.NEO4J_URI && process.env.NEO4J_USERNAME && process.env.NEO4J_PASSWORD)
 }
 
+/** Health probe: verify Neo4j connectivity. Non-fatal — RAG degrades if down. */
+export async function neo4jPing(): Promise<{ configured: boolean; ok: boolean }> {
+  if (!neo4jConfigured()) return { configured: false, ok: false }
+  try {
+    const neo4j = (await import('neo4j-driver')).default
+    const driver = neo4j.driver(
+      process.env.NEO4J_URI!,
+      neo4j.auth.basic(process.env.NEO4J_USERNAME!, process.env.NEO4J_PASSWORD!),
+    )
+    try {
+      await driver.verifyConnectivity()
+      return { configured: true, ok: true }
+    } finally {
+      await driver.close()
+    }
+  } catch {
+    return { configured: true, ok: false }
+  }
+}
+
 type Driver = {
   executeQuery: (query: string, params?: Record<string, unknown>) => Promise<{ records: Array<{ get: (k: string) => unknown }> }>
   close: () => Promise<void>

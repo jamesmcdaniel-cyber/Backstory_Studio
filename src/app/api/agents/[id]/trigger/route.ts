@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { apiLogger } from '@/lib/logger'
@@ -72,18 +73,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'No active user in organization' }, { status: 409 })
     }
 
-    const execution = await prisma.agentExecution.create({
-      data: {
-        agentType: agent.agentType,
-        agentTaskId: agent.id,
-        status: 'pending',
-        input: { prompt: input },
-        trigger: { type: 'webhook' },
-        metadata: { title: (metadata.title as string) || agent.description },
-        userId: user.id,
-        organizationId: agent.organizationId,
-      },
-    })
+    // Idempotency: at-least-once/retrying senders (Pipedream, monitors) can
+    // deliver the same event twice. When they supply a key, a duplicate returns
+    // the existing execution instead of firing the agent again — reusing the
+    // @@unique([organizationId, idempotencyKey]) constraint.
+    const idempotencyKey = request.headers.get('x-idempotency-key')?.trim() || undefined
+
+    let execution
+    try {
+      execution = await prisma.agentExecution.create({
+        data: {
+          agentType: agent.agentType,
+          agentTaskId: agent.id,
+          status: 'pending',
+          input: { prompt: input },
+          trigger: { type: 'webhook' },
+          metadata: { title: (metadata.title as string) || agent.description },
+          userId: user.id,
+          organizationId: agent.organizationId,
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+        },
+      })
+    } catch (error) {
+      if (idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existing = await prisma.agentExecution.findFirst({
+          where: { organizationId: agent.organizationId, idempotencyKey },
+        })
+        if (existing) {
+          return NextResponse.json({ success: true, executionId: existing.id, status: existing.status, duplicate: true })
+        }
+      }
+      throw error
+    }
 
     if (inlineExecution) {
       try {

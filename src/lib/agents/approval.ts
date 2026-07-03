@@ -88,14 +88,16 @@ export async function decideApproval(input: {
   })
   if (!approval) throw new Error('Approval not found')
   if (approval.status !== 'pending') {
-    return { status: approval.status as 'approved' | 'rejected', executed: false }
+    return { status: approval.status === 'rejected' ? 'rejected' : 'approved', executed: false }
   }
 
   if (!input.approve) {
-    await prisma.approvalRequest.update({
-      where: { id: approval.id },
+    // Atomic claim: only the request that flips pending→rejected proceeds.
+    const claimed = await prisma.approvalRequest.updateMany({
+      where: { id: approval.id, organizationId: input.organizationId, status: 'pending' },
       data: { status: 'rejected', decidedById: input.deciderUserId, decidedAt: new Date() },
     })
+    if (claimed.count !== 1) return currentDecision(input.approvalId, input.organizationId)
     await recordAudit({
       organizationId: input.organizationId,
       executionId: approval.executionId,
@@ -107,7 +109,16 @@ export async function decideApproval(input: {
     return { status: 'rejected', executed: false }
   }
 
-  // Approved — execute the queued delivery write now.
+  // Approve: atomically claim the pending request (pending→approving) so exactly
+  // ONE approver executes the delivery. Delivery (Nango) is NOT idempotent, and
+  // two concurrent approvals both passed the read above — the claim is the race
+  // guard: a losing caller sees status != pending and is a no-op.
+  const claimed = await prisma.approvalRequest.updateMany({
+    where: { id: approval.id, organizationId: input.organizationId, status: 'pending' },
+    data: { status: 'approving', decidedById: input.deciderUserId, decidedAt: new Date() },
+  })
+  if (claimed.count !== 1) return currentDecision(input.approvalId, input.organizationId)
+
   const payload = approval.payload as {
     provider: string
     capability: DeliveryCapability | null
@@ -115,18 +126,34 @@ export async function decideApproval(input: {
     userId: string
   }
   let executed = false
-  if (payload.capability) {
-    const spec = DELIVERY_TOOLS.find((tool) => tool.capability === payload.capability)
-    const connection = await resolveDeliveryConnection(input.organizationId, payload.capability, payload.userId)
-    if (spec && connection) {
-      await spec.run(connection, payload.args)
-      executed = true
+  try {
+    if (payload.capability) {
+      const spec = DELIVERY_TOOLS.find((tool) => tool.capability === payload.capability)
+      const connection = await resolveDeliveryConnection(input.organizationId, payload.capability, payload.userId)
+      if (spec && connection) {
+        await spec.run(connection, payload.args)
+        executed = true
+      }
     }
+  } catch (error) {
+    // Delivery failed after we claimed it — mark failed (not back to pending) so
+    // a possibly-partial, non-idempotent write is never silently re-approved.
+    await prisma.approvalRequest.update({ where: { id: approval.id }, data: { status: 'failed' } }).catch(() => undefined)
+    await recordAudit({
+      organizationId: input.organizationId,
+      executionId: approval.executionId,
+      actorUserId: input.deciderUserId,
+      action: 'approval.failed',
+      tool: approval.tool,
+      resourceType: payload.provider,
+      resourceId: approval.id,
+    }).catch(() => undefined)
+    throw error
   }
 
   await prisma.approvalRequest.update({
     where: { id: approval.id },
-    data: { status: 'approved', decidedById: input.deciderUserId, decidedAt: new Date() },
+    data: { status: 'approved' },
   })
   await recordAudit({
     organizationId: input.organizationId,
@@ -139,4 +166,12 @@ export async function decideApproval(input: {
     payload: payload.args,
   })
   return { status: 'approved', executed }
+}
+
+/** Report the settled decision for a request another caller already claimed. */
+async function currentDecision(approvalId: string, organizationId: string): Promise<DecideResult> {
+  const current = await prisma.approvalRequest.findFirst({ where: { id: approvalId, organizationId } })
+  // 'approving' = another approver is mid-execution; surface it as approved
+  // (not executed by us) rather than implying it's still actionable.
+  return { status: current?.status === 'rejected' ? 'rejected' : 'approved', executed: false }
 }

@@ -15,11 +15,27 @@ class WorkerRuntime {
   ]
 
   constructor() {
-    this.server.get('/health', async () => ({
-      status: 'healthy',
-      workers: ['agent-execution', 'scheduled-agent-execution'],
-      uptime: process.uptime(),
-    }))
+    // Real readiness: reflect that the workers are running AND Redis is
+    // reachable. A dead Redis connection means the worker consumes nothing —
+    // returning 503 lets Docker's healthcheck/restart policy recycle it instead
+    // of leaving a silently-dead worker reporting healthy.
+    this.server.get('/health', async (_request, reply) => {
+      const running = this.workers.every((worker) => worker.isRunning())
+      let redis = false
+      try {
+        redis = (await getRedisConnection().ping()) === 'PONG'
+      } catch {
+        redis = false
+      }
+      const healthy = running && redis
+      reply.code(healthy ? 200 : 503)
+      return {
+        status: healthy ? 'healthy' : 'unhealthy',
+        workers: { 'agent-execution': this.workers[0].isRunning(), 'scheduled-agent-execution': this.workers[1].isRunning() },
+        redis,
+        uptime: process.uptime(),
+      }
+    })
     // Failed jobs (single attempt — no side-effect replay) are dead-lettered.
     const queues = [QUEUE_NAMES.AGENT_EXECUTION, QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION]
     this.workers.forEach((worker, index) => worker.on('failed', deadLetterFromJob(queues[index])))
