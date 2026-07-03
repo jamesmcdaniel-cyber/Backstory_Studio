@@ -29,9 +29,11 @@ type SkillSummary = {
   integrations: string[]
 }
 
-type BuiltinIntegration = {
+type ToolChip = {
+  key: string
   label: string
-  configured: boolean
+  slug: string
+  connected: boolean
 }
 
 type ConnectionIntegration = {
@@ -40,7 +42,7 @@ type ConnectionIntegration = {
 }
 
 type AvailableIntegrations = {
-  builtins: BuiltinIntegration[]
+  tools: ToolChip[]
   connections: ConnectionIntegration[]
 }
 
@@ -272,7 +274,7 @@ export function AgentConfigForm({
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
-          setAvailableIntegrations({ builtins: data.builtins, connections: data.connections })
+          setAvailableIntegrations({ tools: data.tools ?? [], connections: data.connections ?? [] })
         }
       })
       .catch(() => {})
@@ -419,28 +421,30 @@ export function AgentConfigForm({
         <Label>Connected tools</Label>
         {availableIntegrations ? (
           <div className="mt-2 space-y-3">
-            {/* Built-in integrations */}
-            {availableIntegrations.builtins.length > 0 && (
+            {/* All configured/available tools across planes (built-ins, Nango,
+                Klavis), deduped, with brand logos. */}
+            {availableIntegrations.tools.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {availableIntegrations.builtins.map((b) => {
-                  const selected = draft.integrations.includes(b.label)
+                {availableIntegrations.tools.map((t) => {
+                  const selected = draft.integrations.includes(t.key)
                   return (
                     <button
-                      key={b.label}
+                      key={t.key}
                       type="button"
-                      onClick={() => toggleIntegration(b.label)}
-                      className={[
-                        'flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors duration-150',
+                      onClick={() => toggleIntegration(t.key)}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-full border py-1 pl-1.5 pr-3 text-xs transition-colors duration-150',
                         selected
                           ? 'border-primary bg-primary text-primary-foreground'
                           : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
-                      ].join(' ')}
+                      )}
                     >
-                      {b.label}
-                      {!b.configured && !selected && (
+                      <IntegrationLogo slug={t.slug} name={t.label} className="h-4 w-4 bg-white/70" />
+                      {t.label}
+                      {!t.connected && !selected && (
                         <span className="text-[10px] opacity-60">not configured</span>
                       )}
-                      {b.configured && !selected && (
+                      {t.connected && !selected && (
                         <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
                       )}
                     </button>
@@ -448,7 +452,7 @@ export function AgentConfigForm({
                 })}
               </div>
             )}
-            {/* MCP connections */}
+            {/* Custom Backstory-MCP connections (loaded for every agent). */}
             {availableIntegrations.connections.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {availableIntegrations.connections.map((c) => {
@@ -458,13 +462,14 @@ export function AgentConfigForm({
                       key={c.id}
                       type="button"
                       onClick={() => toggleIntegration(c.name)}
-                      className={[
-                        'rounded-full border px-3 py-1 text-xs transition-colors duration-150',
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-full border py-1 pl-1.5 pr-3 text-xs transition-colors duration-150',
                         selected
                           ? 'border-primary bg-primary text-primary-foreground'
                           : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
-                      ].join(' ')}
+                      )}
                     >
+                      <IntegrationLogo slug={c.name.toLowerCase().replace(/[^a-z0-9]+/g, '')} name={c.name} className="h-4 w-4 bg-white/70" />
                       {c.name}
                     </button>
                   )
