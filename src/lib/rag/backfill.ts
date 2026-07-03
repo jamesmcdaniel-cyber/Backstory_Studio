@@ -53,27 +53,36 @@ const safe = (value: unknown) => { try { return typeof value === 'string' ? valu
 async function buildSalesAiBook(organizationId: string): Promise<{ nodes: PendingNode[]; edges: GraphEdge[]; accounts: number; opportunities: number }> {
   // Tighter per-call ceiling for bulk work: an unresponsive Sales AI endpoint
   // must not turn a backfill into hundreds of 30s timeouts (the failure mode
-  // that stalled the first run for ~1h).
-  const client = getPeopleAiServiceClient({ timeoutMs: 12_000 })
+  // that stalled the first run for ~1h). 15s also leaves the one-shot
+  // top_records read comfortable headroom while keeping the loop fail-fast.
+  const BULK_TIMEOUT_MS = 15_000
+  const client = getPeopleAiServiceClient({ timeoutMs: BULK_TIMEOUT_MS })
   if (!client) return { nodes: [], edges: [], accounts: 0, opportunities: 0 }
 
-  // Circuit breaker: after a run of enrichment calls that return nothing (the
-  // endpoint is slow, erroring, or the org has no Sales AI facts), stop calling
-  // it and fall back to basic nodes. Bounds the whole book build to a few
-  // wasted calls instead of one per account/opportunity.
+  // Circuit breaker: stop enriching after repeated TIMEOUTS (a slow/unresponsive
+  // endpoint) and fall back to basic nodes, so the book build can't become
+  // hundreds of serial timeouts. Crucially, a *fast* null is just "no Sales AI
+  // data for this entity" and must NOT trip the breaker — otherwise a few
+  // data-sparse accounts would disable enrichment for the whole book. We tell
+  // them apart by elapsed time, because enrichAccount/enrichOpportunity swallow
+  // errors and always return null-or-facts (never throw), so null alone is
+  // ambiguous. Only a null that took ~the full timeout counts as a failure.
   const FAILURE_LIMIT = 5
-  let consecutiveFailures = 0
+  const TIMEOUT_FLOOR_MS = BULK_TIMEOUT_MS - 1_000
+  let consecutiveTimeouts = 0
   let enrichmentDisabled = false
   const tryEnrich = async <T>(fn: () => Promise<T | null>): Promise<T | null> => {
     if (enrichmentDisabled) return null
+    const start = Date.now()
     const result = await fn().catch(() => null)
-    if (result == null) {
-      if (++consecutiveFailures >= FAILURE_LIMIT) {
+    const timedOut = result == null && Date.now() - start >= TIMEOUT_FLOOR_MS
+    if (timedOut) {
+      if (++consecutiveTimeouts >= FAILURE_LIMIT) {
         enrichmentDisabled = true
-        apiLogger.warn('backfill: Sales AI enrichment disabled after repeated empty/failed calls', { organizationId, failures: consecutiveFailures })
+        apiLogger.warn('backfill: Sales AI enrichment disabled after repeated timeouts', { organizationId, failures: consecutiveTimeouts })
       }
     } else {
-      consecutiveFailures = 0
+      consecutiveTimeouts = 0
     }
     return result
   }

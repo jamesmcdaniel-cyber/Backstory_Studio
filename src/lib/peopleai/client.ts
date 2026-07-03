@@ -31,7 +31,11 @@ export interface PeopleAiClientOptions {
 // dominating the caller. The transport's own fallback is 30s; we tighten it
 // here because Sales AI sits on hot paths (tool loading, enrichment). Tunable
 // via PEOPLE_AI_MCP_TIMEOUT_MS for environments with a slower endpoint.
-const DEFAULT_MCP_TIMEOUT_MS = Number(process.env.PEOPLE_AI_MCP_TIMEOUT_MS) || 20_000
+// Guard the parse: a truthy-but-invalid value ('-5', '10.5', 'abc') must not
+// reach AbortSignal.timeout (which throws a RangeError on negatives/NaN). Only
+// a finite positive integer wins; anything else falls back to 20s.
+const parsedMcpTimeout = Math.floor(Number(process.env.PEOPLE_AI_MCP_TIMEOUT_MS))
+const DEFAULT_MCP_TIMEOUT_MS = Number.isFinite(parsedMcpTimeout) && parsedMcpTimeout > 0 ? parsedMcpTimeout : 20_000
 
 export class PeopleAiClient {
   private readonly transport: StreamableHttpMcpClient

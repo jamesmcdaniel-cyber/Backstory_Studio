@@ -139,6 +139,10 @@ export class KlavisClient {
         method,
         ...(params ? { params } : {}),
       }),
+      // Bound the request so an unresponsive Klavis MCP server can't hang an
+      // agent run indefinitely (mirrors api()'s 15s). Aborts throw, which the
+      // callers (loadTools / executeTool) already handle.
+      signal: AbortSignal.timeout(15_000),
     })
     if (!response.ok) throw new Error(`MCP server returned ${response.status}`)
     if (notification) return { result: null }
