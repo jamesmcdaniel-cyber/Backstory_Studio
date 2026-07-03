@@ -105,7 +105,42 @@ if (ENABLED) {
     assert.equal(user!.peopleAiMembershipId, 'member-9')
   })
 
-  test('connecting a different team into a bound workspace is refused', async () => {
+  test('a second user from the same team joins the existing team workspace', async () => {
+    // userC signs up solo (fresh org), then connects the same team-77 —
+    // they must land in orgA (already bound to team-77), and their empty
+    // solo org must be cleaned up.
+    const soloOrg = await prisma.organization.create({ data: { name: 'Solo', slug: `s-${Date.now()}` } })
+    const userC = await prisma.user.create({
+      data: { supabaseId: crypto.randomUUID(), email: 'c@x.com', organizationId: soloOrg.id },
+    })
+
+    const config = { clientId: 'c', redirectUri: 'https://x/cb' }
+    const outcome = await completeConnect({
+      userId: userC.id,
+      organizationId: soloOrg.id,
+      code: 'code-3',
+      verifier: 'v-3',
+      config,
+      exchanger, // returns team-77 → orgA
+    })
+    assert.equal(outcome.teamId, 'team-77')
+
+    const moved = await prisma.user.findUnique({ where: { id: userC.id } })
+    assert.equal(moved!.organizationId, ids.orgA, 'user should join the team workspace')
+
+    const connection = await prisma.peopleAiConnection.findUnique({
+      where: { organizationId_userId: { organizationId: ids.orgA!, userId: userC.id } },
+    })
+    assert.ok(connection, 'connection should be scoped to the team workspace')
+
+    const cleaned = await prisma.organization.findUnique({ where: { id: soloOrg.id } })
+    assert.equal(cleaned, null, 'empty solo org should be deleted after the move')
+
+    await prisma.peopleAiConnection.deleteMany({ where: { userId: userC.id } })
+    await prisma.user.delete({ where: { id: userC.id } })
+  })
+
+  test('connecting a different team into a bound multi-member workspace is refused', async () => {
     const config = { clientId: 'c', redirectUri: 'https://x/cb' }
     await assert.rejects(
       completeConnect({

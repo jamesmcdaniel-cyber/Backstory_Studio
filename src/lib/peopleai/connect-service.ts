@@ -120,28 +120,56 @@ export async function completeConnect(input: CompleteConnectInput): Promise<Peop
 
   const identity = extractIdentity(tokens)
 
-  // Bind the workspace to the People.ai team on first connect; refuse to mix
-  // teams inside one workspace (tenant isolation).
+  // Org = People.ai team. Three cases when the token carries a team id:
+  //  1. The team already has a workspace and it's this one → nothing to do.
+  //  2. The team already has a workspace elsewhere → the connecting user
+  //     JOINS it (their fresh solo landing org is deleted when empty). This
+  //     is how "every rep from a customer shares one workspace" happens.
+  //  3. No workspace has this team yet → bind the current one (first
+  //     connector claims it), unless it's already bound to a different team.
+  let organizationId = input.organizationId
   if (identity.teamId) {
-    const org = await prisma.organization.findUnique({
-      where: { id: input.organizationId },
-      select: { peopleAiTeamId: true },
-    })
-    if (org?.peopleAiTeamId && org.peopleAiTeamId !== identity.teamId) {
-      throw new TeamMismatchError()
-    }
-    if (!org?.peopleAiTeamId) {
-      await prisma.organization.update({
-        where: { id: input.organizationId },
-        data: { peopleAiTeamId: identity.teamId },
+    const [teamOrg, currentOrg] = await Promise.all([
+      prisma.organization.findUnique({ where: { peopleAiTeamId: identity.teamId }, select: { id: true } }),
+      prisma.organization.findUnique({ where: { id: input.organizationId }, select: { peopleAiTeamId: true } }),
+    ])
+
+    const currentBoundElsewhere = Boolean(
+      currentOrg?.peopleAiTeamId && currentOrg.peopleAiTeamId !== identity.teamId,
+    )
+
+    if (teamOrg && teamOrg.id !== input.organizationId) {
+      if (currentBoundElsewhere) throw new TeamMismatchError()
+      const memberCount = await prisma.user.count({ where: { organizationId: input.organizationId } })
+      if (memberCount > 1) throw new TeamMismatchError()
+
+      // Join the team workspace as a regular member.
+      await prisma.user.update({
+        where: { id: input.userId },
+        data: { organizationId: teamOrg.id, role: 'USER' },
       })
+      organizationId = teamOrg.id
+
+      // The abandoned solo landing org is deleted when it holds nothing.
+      const agentCount = await prisma.agentTask.count({ where: { organizationId: input.organizationId } })
+      if (agentCount === 0) {
+        await prisma.organization.delete({ where: { id: input.organizationId } }).catch(() => undefined)
+      }
+    } else if (!teamOrg) {
+      if (currentBoundElsewhere) throw new TeamMismatchError()
+      if (!currentOrg?.peopleAiTeamId) {
+        await prisma.organization.update({
+          where: { id: input.organizationId },
+          data: { peopleAiTeamId: identity.teamId },
+        })
+      }
     }
   }
 
   await prisma.peopleAiConnection.upsert({
-    where: { organizationId_userId: { organizationId: input.organizationId, userId: input.userId } },
+    where: { organizationId_userId: { organizationId, userId: input.userId } },
     create: {
-      organizationId: input.organizationId,
+      organizationId,
       userId: input.userId,
       teamId: identity.teamId,
       membershipId: identity.membershipId,
@@ -169,7 +197,7 @@ export async function completeConnect(input: CompleteConnectInput): Promise<Peop
     })
   }
 
-  await revalidateEntitlement(input.organizationId)
+  await revalidateEntitlement(organizationId)
   return identity
 }
 
