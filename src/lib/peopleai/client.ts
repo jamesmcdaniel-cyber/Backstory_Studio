@@ -21,7 +21,17 @@ export type PeopleAiAuth =
 export interface PeopleAiClientOptions {
   fetchImpl?: typeof fetch
   baseUrl?: string
+  /** Per-call MCP request ceiling. Defaults to DEFAULT_MCP_TIMEOUT_MS. */
+  timeoutMs?: number
 }
+
+// Per-call ceiling for People.ai MCP requests. Deliberately well under both the
+// interactive request budget (a chat turn / inline agent run) and any job
+// budget, so a slow or unresponsive Sales AI endpoint fails fast instead of
+// dominating the caller. The transport's own fallback is 30s; we tighten it
+// here because Sales AI sits on hot paths (tool loading, enrichment). Tunable
+// via PEOPLE_AI_MCP_TIMEOUT_MS for environments with a slower endpoint.
+const DEFAULT_MCP_TIMEOUT_MS = Number(process.env.PEOPLE_AI_MCP_TIMEOUT_MS) || 20_000
 
 export class PeopleAiClient {
   private readonly transport: StreamableHttpMcpClient
@@ -35,6 +45,7 @@ export class PeopleAiClient {
     this.transport = new StreamableHttpMcpClient({
       clientName: 'BackstoryStudio',
       fetchImpl: options.fetchImpl,
+      timeoutMs: options.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS,
       getHeaders: async () => this.headers(),
       onUnauthorized: async () => this.recoverAuth(options),
     })

@@ -51,8 +51,32 @@ const safe = (value: unknown) => { try { return typeof value === 'string' ? valu
 
 /** Build the org's Sales AI book (accounts + opportunities) as nodes/edges, enriched. */
 async function buildSalesAiBook(organizationId: string): Promise<{ nodes: PendingNode[]; edges: GraphEdge[]; accounts: number; opportunities: number }> {
-  const client = getPeopleAiServiceClient()
+  // Tighter per-call ceiling for bulk work: an unresponsive Sales AI endpoint
+  // must not turn a backfill into hundreds of 30s timeouts (the failure mode
+  // that stalled the first run for ~1h).
+  const client = getPeopleAiServiceClient({ timeoutMs: 12_000 })
   if (!client) return { nodes: [], edges: [], accounts: 0, opportunities: 0 }
+
+  // Circuit breaker: after a run of enrichment calls that return nothing (the
+  // endpoint is slow, erroring, or the org has no Sales AI facts), stop calling
+  // it and fall back to basic nodes. Bounds the whole book build to a few
+  // wasted calls instead of one per account/opportunity.
+  const FAILURE_LIMIT = 5
+  let consecutiveFailures = 0
+  let enrichmentDisabled = false
+  const tryEnrich = async <T>(fn: () => Promise<T | null>): Promise<T | null> => {
+    if (enrichmentDisabled) return null
+    const result = await fn().catch(() => null)
+    if (result == null) {
+      if (++consecutiveFailures >= FAILURE_LIMIT) {
+        enrichmentDisabled = true
+        apiLogger.warn('backfill: Sales AI enrichment disabled after repeated empty/failed calls', { organizationId, failures: consecutiveFailures })
+      }
+    } else {
+      consecutiveFailures = 0
+    }
+    return result
+  }
 
   let records: TopAccount[] = []
   try {
@@ -72,7 +96,7 @@ async function buildSalesAiBook(organizationId: string): Promise<{ nodes: Pendin
     const acctId = account.peopleai_account_id
     if (acctId == null) continue
     const acctKey = String(acctId)
-    const facts = await enrichAccount(client, acctId).catch(() => null)
+    const facts = await tryEnrich(() => enrichAccount(client, acctId))
     nodes.push({
       id: nodeIds.account(acctKey), type: 'account',
       text: facts?.text
@@ -85,7 +109,7 @@ async function buildSalesAiBook(organizationId: string): Promise<{ nodes: Pendin
       const oppId = opp.peopleai_opportunity_id
       if (oppId == null) continue
       const oppKey = String(oppId)
-      const oppFacts = await enrichOpportunity(client, oppId).catch(() => null)
+      const oppFacts = await tryEnrich(() => enrichOpportunity(client, oppId))
       const base = `Opportunity: ${opp.opportunity_name ?? oppKey} — $${opp.amount ?? '?'}, closes ${opp.close_date ?? '?'}, engagement ${opp.engagement_level ?? '?'}, owner ${opp.owner?.name ?? '?'}`
       nodes.push({
         id: nodeIds.opportunity(oppKey), type: 'opportunity',
