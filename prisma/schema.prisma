@@ -104,6 +104,7 @@ model AgentTask {
   executions   AgentExecution[]
   signalSubscriptions SignalSubscription[]
   chatMessages AgentChatMessage[]
+  chatSessions AgentChatSession[]
 
   @@index([organizationId, status])
   @@index([userId])
@@ -118,15 +119,39 @@ model AgentChatMessage {
   agentTaskId    String
   organizationId String   @db.Uuid
   userId         String
+  // Groups messages into a conversation. Nullable so pre-existing flat threads
+  // (before sessions) read as one implicit "Earlier conversation".
+  sessionId      String?
   role           String
   content        String   @db.Text
   metadata       Json?
   createdAt      DateTime @default(now())
 
-  agentTask AgentTask @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
+  agentTask AgentTask         @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
+  session   AgentChatSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([agentTaskId, userId, createdAt])
+  @@index([sessionId, createdAt])
   @@map("agent_chat_messages")
+}
+
+// A single assistant conversation for one agent + user. Multiple sessions per
+// agent give users a "new chat" and a browsable history, scoped per agent.
+model AgentChatSession {
+  id             String   @id @default(cuid())
+  agentTaskId    String
+  organizationId String   @db.Uuid
+  userId         String
+  // Auto-derived from the first user message; null until the first message.
+  title          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  agentTask AgentTask          @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
+  messages  AgentChatMessage[]
+
+  @@index([agentTaskId, userId, updatedAt])
+  @@map("agent_chat_sessions")
 }
 
 // Inbound People.ai Sales AI event (webhook or poller). Immutable once

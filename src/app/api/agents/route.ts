@@ -7,7 +7,7 @@ import { readAgentMetadata } from '@/lib/agents/metadata'
 import { indexAgent } from '@/lib/rag/indexer'
 
 /** Best-effort graph-RAG indexing of an agent node (gated on embeddings). */
-function indexAgentRow(agent: { id: string; organizationId: string; objective: string; description: string; metadata: unknown }): Promise<void> {
+function indexAgentRow(agent: { id: string; organizationId: string; objective: string; description: string; metadata: unknown; userId?: string | null; visibility?: string }): Promise<void> {
   const metadata = readAgentMetadata(agent.metadata)
   return indexAgent({
     id: agent.id,
@@ -15,6 +15,9 @@ function indexAgentRow(agent: { id: string; organizationId: string; objective: s
     title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',
     objective: agent.objective,
     description: metadata.description || agent.description,
+    // Per-rep scope: a private agent's node is visible only to its owner.
+    ownerUserId: agent.userId ?? null,
+    visibility: agent.visibility === 'private' ? 'private' : 'shared',
   }).catch(() => undefined)
 }
 

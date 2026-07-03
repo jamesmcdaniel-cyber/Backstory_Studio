@@ -494,6 +494,9 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       ].filter((id): id is string => Boolean(id))
       const ragContext = await retrieveContext(getGraphRagStore(), {
         organizationId,
+        // Scope correlated context to this rep: shared org data + their own
+        // private nodes, never another rep's private book.
+        viewerUserId: userId,
         query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
         seedNodeIds,
       })
@@ -731,6 +734,10 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       input: queuedExecution?.input ?? { prompt: data.input },
       output,
       status: 'completed',
+      // Runs inherit the agent's scope: a private agent's runs stay private to
+      // its owner, matching executionVisibilityScope for row-level access.
+      ownerUserId: agent.userId ?? null,
+      visibility: agent.visibility === 'private' ? 'private' : 'shared',
     }).catch(() => undefined)
     return output
   } catch (error) {

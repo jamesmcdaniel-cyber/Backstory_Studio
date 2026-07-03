@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, Loader2, MessageSquare, Send } from 'lucide-react'
+import { Check, Clock, Loader2, MessageSquare, Plus, Send } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -44,6 +44,30 @@ type ChatMessage = {
   createdAt: string
   proposal?: AssistantProposal | null
   appliedAt?: string | null
+}
+
+type SessionSummary = {
+  id: string
+  title: string
+  updatedAt: string
+  messageCount: number
+}
+
+/** Compact relative time for the history list, e.g. "just now", "2h", "3d". */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return ''
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w`
+  return `${Math.floor(days / 30)}mo`
 }
 
 function scheduleLabel(schedule: ProposalSchedule): string {
@@ -124,28 +148,91 @@ export function AssistantPanel({
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [applyingId, setApplyingId] = useState<string | null>(null)
+  // Conversation state: the active session (null = a fresh, not-yet-saved chat)
+  // and this agent's history for the current user.
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [historyOpen, setHistoryOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const historyRef = useRef<HTMLDivElement | null>(null)
   const agentId = agent?.id
   // Tracks the currently-targeted agent so in-flight async completions can
   // detect an agent switch and avoid mutating another agent's thread.
   const agentIdRef = useRef(agentId)
 
+  // History is per agent + per rep: refetch the session list whenever the agent
+  // changes (server scopes it to this agent and the authenticated user).
+  const loadSessions = useCallback(async (targetAgentId: string) => {
+    try {
+      const response = await fetch(`/api/agents/${targetAgentId}/chat/sessions`, { cache: 'no-store' })
+      const data = await response.json().catch(() => ({}))
+      if (agentIdRef.current !== targetAgentId) return
+      setSessions(Array.isArray(data.sessions) ? data.sessions : [])
+    } catch {
+      if (agentIdRef.current === targetAgentId) setSessions([])
+    }
+  }, [])
+
   useEffect(() => {
     agentIdRef.current = agentId
+    setHistoryOpen(false)
     if (!agentId) {
       setMessages([])
+      setSessions([])
+      setSessionId(null)
       return
     }
     let cancelled = false
     setLoading(true)
     setMessages([])
+    setSessionId(null)
+    // Load the most recent conversation for this agent + the history list.
     fetch(`/api/agents/${agentId}/chat`, { cache: 'no-store' })
       .then((response) => response.json())
-      .then((data) => { if (!cancelled) setMessages(Array.isArray(data.messages) ? data.messages : []) })
+      .then((data) => {
+        if (cancelled) return
+        setMessages(Array.isArray(data.messages) ? data.messages : [])
+        setSessionId(typeof data.sessionId === 'string' ? data.sessionId : null)
+      })
       .catch(() => { if (!cancelled) setMessages([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
+    void loadSessions(agentId)
     return () => { cancelled = true }
-  }, [agentId])
+  }, [agentId, loadSessions])
+
+  // Close the history dropdown on an outside click.
+  useEffect(() => {
+    if (!historyOpen) return
+    const onClick = (event: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(event.target as Node)) setHistoryOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [historyOpen])
+
+  const startNewChat = () => {
+    setHistoryOpen(false)
+    setSessionId(null)
+    setMessages([])
+    setInput('')
+  }
+
+  const selectSession = async (id: string) => {
+    setHistoryOpen(false)
+    if (!agentId || id === sessionId) return
+    const targetAgentId = agentId
+    setLoading(true)
+    setMessages([])
+    try {
+      const response = await fetch(`/api/agents/${targetAgentId}/chat?sessionId=${encodeURIComponent(id)}`, { cache: 'no-store' })
+      const data = await response.json().catch(() => ({}))
+      if (agentIdRef.current !== targetAgentId) return
+      setMessages(Array.isArray(data.messages) ? data.messages : [])
+      setSessionId(typeof data.sessionId === 'string' ? data.sessionId : id)
+    } finally {
+      if (agentIdRef.current === targetAgentId) setLoading(false)
+    }
+  }
 
   // Keep the newest message in view as the thread grows.
   useEffect(() => {
@@ -163,11 +250,14 @@ export function AssistantPanel({
       ...previous,
       { id: localId, role: 'user', content, createdAt: new Date().toISOString() },
     ])
+    // A legacy synthetic thread is read-only; sending from it opens a fresh
+    // session rather than appending to the null-session bucket.
+    const targetSessionId = sessionId && sessionId !== 'legacy' ? sessionId : undefined
     try {
       const response = await fetch(`/api/agents/${targetAgentId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: content }),
+        body: JSON.stringify({ message: content, ...(targetSessionId ? { sessionId: targetSessionId } : {}) }),
       })
       const data = await response.json().catch(() => ({}))
       // The user switched agents while the request was in flight; this
@@ -183,6 +273,9 @@ export function AssistantPanel({
         ...previous.filter((message) => message.id !== localId),
         ...(Array.isArray(data.messages) ? data.messages : []),
       ])
+      if (typeof data.sessionId === 'string') setSessionId(data.sessionId)
+      // Refresh history so a new chat appears / its title + ordering update.
+      void loadSessions(targetAgentId)
     } finally {
       if (agentIdRef.current === targetAgentId) setSending(false)
     }
@@ -237,9 +330,67 @@ export function AssistantPanel({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b p-4">
-        <p className="eyebrow">Assistant</p>
-        <h2 className="mt-1 truncate font-semibold">{agent ? agent.title : 'No agent selected'}</h2>
-        <p className="text-xs text-gray-500">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="eyebrow">Assistant</p>
+            <h2 className="mt-1 truncate font-semibold">{agent ? agent.title : 'No agent selected'}</h2>
+          </div>
+          {agent && (
+            <div className="flex shrink-0 items-center gap-1" ref={historyRef}>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label="New chat"
+                title="New chat"
+                onClick={startNewChat}
+                disabled={sending}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+              <div className="relative">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label="Chat history"
+                  title="Chat history"
+                  onClick={() => setHistoryOpen((open) => !open)}
+                >
+                  <Clock className="h-4 w-4" />
+                </Button>
+                {historyOpen && (
+                  <div className="absolute right-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-md border border-border bg-popover shadow-md">
+                    <p className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">Chat history</p>
+                    {sessions.length === 0 ? (
+                      <p className="px-3 pb-3 pt-1 text-sm text-gray-500">No past chats yet.</p>
+                    ) : (
+                      <ul className="max-h-72 overflow-y-auto pb-1">
+                        {sessions.map((session) => (
+                          <li key={session.id}>
+                            <button
+                              type="button"
+                              onClick={() => selectSession(session.id)}
+                              className={cn(
+                                'flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
+                                session.id === sessionId && 'bg-accent/60',
+                              )}
+                            >
+                              <MessageSquare className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                              <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                              <span className="shrink-0 text-xs text-gray-400">{relativeTime(session.updatedAt)}</span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-gray-500">
           {agent
             ? 'Ask about run output, debug errors, or change configuration in plain language.'
             : 'Pick an agent to ask about its runs, debug errors, or change its configuration.'}

@@ -21,6 +21,9 @@ export type NodeType =
   | 'run'
   | 'insight'
 
+/** Who may see a node. 'shared' = the whole org; 'private' = only its owner. */
+export type NodeVisibility = 'shared' | 'private'
+
 export interface GraphNode {
   id: string
   organizationId: string
@@ -30,7 +33,29 @@ export interface GraphNode {
   /** Structured attributes rendered into context (dates, amounts, status, url). */
   props: Record<string, unknown>
   embedding: number[]
+  /**
+   * The rep this node belongs to, or null/undefined for org-shared data (the
+   * service-key book, webhook signals). Combined with `visibility` to scope
+   * retrieval per rep — see `nodeVisibleTo`.
+   */
+  ownerUserId?: string | null
+  /** Defaults to 'shared' when unset (legacy nodes read as shared). */
+  visibility?: NodeVisibility
   updatedAt?: string
+}
+
+/**
+ * The single visibility contract, shared by every store implementation so
+ * MemoryGraphStore and Neo4jGraphStore scope identically. A node is visible to
+ * `viewerUserId` unless it is private and owned by someone else. Mirrors the
+ * Prisma `agentVisibilityScope`/`executionVisibilityScope` row-level rules.
+ */
+export function nodeVisibleTo(
+  node: Pick<GraphNode, 'ownerUserId' | 'visibility'>,
+  viewerUserId: string | null,
+): boolean {
+  if ((node.visibility ?? 'shared') !== 'private') return true
+  return node.ownerUserId != null && node.ownerUserId === viewerUserId
 }
 
 export type EdgeRelation =
@@ -56,10 +81,17 @@ export interface SearchHit {
 export interface GraphRagStore {
   upsertNodes(nodes: GraphNode[]): Promise<void>
   upsertEdges(edges: GraphEdge[]): Promise<void>
-  /** Vector search within an org; returns top-k by cosine similarity. */
-  search(organizationId: string, queryEmbedding: number[], k: number): Promise<SearchHit[]>
-  /** Neighborhood expansion: nodes reachable from `nodeIds` within `hops` edges. */
-  expand(organizationId: string, nodeIds: string[], hops: number): Promise<GraphNode[]>
+  /**
+   * Vector search within an org, scoped to what `viewerUserId` may see (shared
+   * nodes + their own private nodes). Pass null to see only shared nodes.
+   * Returns top-k by cosine similarity.
+   */
+  search(organizationId: string, viewerUserId: string | null, queryEmbedding: number[], k: number): Promise<SearchHit[]>
+  /**
+   * Neighborhood expansion: visible nodes reachable from `nodeIds` within
+   * `hops` edges, scoped to what `viewerUserId` may see.
+   */
+  expand(organizationId: string, viewerUserId: string | null, nodeIds: string[], hops: number): Promise<GraphNode[]>
   /** For tests/cleanup. */
   clear?(organizationId: string): Promise<void>
 }

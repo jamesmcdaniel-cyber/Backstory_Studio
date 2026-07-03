@@ -21,6 +21,12 @@ import type { GraphNode, GraphRagStore, SearchHit } from './store'
 
 export interface RetrieveOptions {
   organizationId: string
+  /**
+   * The rep this retrieval is for. Scopes results to shared nodes + this rep's
+   * own private nodes; pass null to see only shared nodes. Omitting it defaults
+   * to null (shared-only) — callers with a user MUST pass it to see private data.
+   */
+  viewerUserId?: string | null
   /** Free-text query (assistant question, or the agent objective + signal). */
   query: string
   /** Optional known entity node ids to seed expansion from (e.g. the signal's account). */
@@ -53,6 +59,7 @@ export async function retrieveContext(
   const hops = options.hops ?? 2
   const maxNodes = options.maxNodes ?? 16
   const embed = options.embed ?? embedQuery
+  const viewerUserId = options.viewerUserId ?? null
 
   if (!ragEnabled() && !options.embed) {
     return { hits: [], related: [] }
@@ -62,7 +69,7 @@ export async function retrieveContext(
   try {
     const queryVector = await embed(options.query, { inputType: 'query' })
     if (queryVector.length > 0) {
-      searchHits = await store.search(options.organizationId, queryVector, topK)
+      searchHits = await store.search(options.organizationId, viewerUserId, queryVector, topK)
     }
   } catch {
     // Retrieval is best-effort — a failed embed/search must not break the caller.
@@ -73,7 +80,7 @@ export async function retrieveContext(
   let related: GraphNode[] = []
   if (seedIds.length > 0) {
     try {
-      related = await store.expand(options.organizationId, seedIds, hops)
+      related = await store.expand(options.organizationId, viewerUserId, seedIds, hops)
     } catch {
       related = []
     }

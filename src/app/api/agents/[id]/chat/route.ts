@@ -1,12 +1,10 @@
-import type { NextRequest } from 'next/server'
-import type { AgentChatMessage, AgentTask, Prisma } from '@prisma/client'
+import type { AgentChatMessage, Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { generateStructured } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
-import type { AuthContext } from '@/lib/server/auth'
-import { agentVisibilityScope } from '@/lib/server/visibility'
 import { buildAssistantContext } from '@/features/agents/assistant-context'
+import { agentIdFromRequest, requireAgent, deriveTitle, LEGACY_SESSION_ID } from './shared'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
@@ -111,25 +109,6 @@ function normalizeProposal(raw: z.infer<typeof proposalSchema>) {
   return { summary: raw.summary?.trim() || 'Configuration update', ...changes }
 }
 
-function agentIdFromPath(request: NextRequest): string {
-  const id = request.nextUrl.pathname.split('/').at(-2)
-  if (!id) throw new ApiError('Agent id is required')
-  return id
-}
-
-async function requireAgent(id: string, auth: AuthContext): Promise<AgentTask> {
-  const agent = await prisma.agentTask.findFirst({
-    where: {
-      id,
-      organizationId: auth.organizationId,
-      status: { not: 'DELETED' },
-      ...agentVisibilityScope(auth.dbUser.id),
-    },
-  })
-  if (!agent) throw new ApiError('Agent not found', 404, 'NOT_FOUND')
-  return agent
-}
-
 function serializeMessage(message: AgentChatMessage) {
   const metadata =
     message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
@@ -146,32 +125,79 @@ function serializeMessage(message: AgentChatMessage) {
 }
 
 export const GET = withAuthenticatedApi(async (request, auth) => {
-  const agentId = agentIdFromPath(request)
+  const agentId = agentIdFromRequest(request)
   await requireAgent(agentId, auth)
-  const rows = await prisma.agentChatMessage.findMany({
-    where: { agentTaskId: agentId, userId: auth.dbUser.id },
-    // Secondary id sort keeps user/assistant pairs stable when both rows land
-    // in the same millisecond (cuids are creation-ordered within a process).
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    take: 100,
-  })
-  return { success: true, messages: rows.reverse().map(serializeMessage) }
+  const requested = new URL(request.url).searchParams.get('sessionId')
+
+  // Resolve which conversation to return: explicit session, else the most
+  // recent one, else the legacy flat thread (if any), else empty (new chat).
+  let sessionId: string | null = requested
+  if (!sessionId) {
+    const latest = await prisma.agentChatSession.findFirst({
+      where: { agentTaskId: agentId, userId: auth.dbUser.id },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true },
+    })
+    if (latest) {
+      sessionId = latest.id
+    } else {
+      const legacyCount = await prisma.agentChatMessage.count({
+        where: { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
+      })
+      sessionId = legacyCount > 0 ? LEGACY_SESSION_ID : null
+    }
+  }
+
+  let rows: AgentChatMessage[] = []
+  if (sessionId) {
+    rows = await prisma.agentChatMessage.findMany({
+      where:
+        sessionId === LEGACY_SESSION_ID
+          ? { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null }
+          : { agentTaskId: agentId, userId: auth.dbUser.id, sessionId },
+      // Secondary id sort keeps user/assistant pairs stable when both rows land
+      // in the same millisecond (cuids are creation-ordered within a process).
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 100,
+    })
+  }
+  return { success: true, sessionId, messages: rows.reverse().map(serializeMessage) }
 })
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
     throw new ApiError('No model provider is configured', 503, 'AI_UNAVAILABLE')
   }
-  const agentId = agentIdFromPath(request)
-  const { message } = z
-    .object({ message: z.string().min(1).max(4000) })
+  const agentId = agentIdFromRequest(request)
+  const { message, sessionId: requestedSessionId } = z
+    .object({ message: z.string().min(1).max(4000), sessionId: z.string().optional() })
     .parse(await request.json())
   const agent = await requireAgent(agentId, auth)
 
+  // Resolve the target conversation. An explicit, owned session is reused;
+  // otherwise (absent, legacy, or unknown) a new session starts — the legacy
+  // flat thread stays read-only history.
+  let session =
+    requestedSessionId && requestedSessionId !== LEGACY_SESSION_ID
+      ? await prisma.agentChatSession.findFirst({
+          where: { id: requestedSessionId, agentTaskId: agentId, userId: auth.dbUser.id },
+        })
+      : null
+  if (!session) {
+    session = await prisma.agentChatSession.create({
+      data: {
+        agentTaskId: agentId,
+        organizationId: auth.organizationId,
+        userId: auth.dbUser.id,
+        title: deriveTitle(message),
+      },
+    })
+  }
+
   const [context, historyRows] = await Promise.all([
-    buildAssistantContext(agent, message),
+    buildAssistantContext(agent, message, auth.dbUser.id),
     prisma.agentChatMessage.findMany({
-      where: { agentTaskId: agentId, userId: auth.dbUser.id },
+      where: { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: session.id },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 20,
     }),
@@ -210,6 +236,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       agentTaskId: agentId,
       organizationId: auth.organizationId,
       userId: auth.dbUser.id,
+      sessionId: session.id,
       role: 'user',
       content: message,
     },
@@ -219,19 +246,25 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       agentTaskId: agentId,
       organizationId: auth.organizationId,
       userId: auth.dbUser.id,
+      sessionId: session.id,
       role: 'assistant',
       content: reply,
       ...(proposal ? { metadata: { proposal } as unknown as Prisma.InputJsonValue } : {}),
     },
   })
+  // Bump the session so it sorts to the top of history (and set its title on the
+  // first message). Best-effort — ordering is cosmetic, not correctness.
+  await prisma.agentChatSession
+    .update({ where: { id: session.id }, data: { title: session.title ?? deriveTitle(message) } })
+    .catch(() => undefined)
 
-  return { success: true, messages: [serializeMessage(userMessage), serializeMessage(assistantMessage)] }
+  return { success: true, sessionId: session.id, messages: [serializeMessage(userMessage), serializeMessage(assistantMessage)] }
 })
 
 // Marks a proposal message as applied after the client has confirmed the
 // change through the existing PUT /api/agents update endpoint.
 export const PATCH = withAuthenticatedApi(async (request, auth) => {
-  const agentId = agentIdFromPath(request)
+  const agentId = agentIdFromRequest(request)
   const { messageId } = z.object({ messageId: z.string().min(1) }).parse(await request.json())
   await requireAgent(agentId, auth)
 

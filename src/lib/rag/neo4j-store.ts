@@ -11,7 +11,7 @@
  */
 
 import { cosineSimilarity, EMBEDDING_DIM } from './embeddings'
-import type { GraphEdge, GraphNode, GraphRagStore, NodeType, SearchHit } from './store'
+import { nodeVisibleTo, type GraphEdge, type GraphNode, type GraphRagStore, type NodeType, type NodeVisibility, type SearchHit } from './store'
 
 const VECTOR_INDEX = 'entity_embedding'
 
@@ -59,11 +59,13 @@ export class Neo4jGraphStore implements GraphRagStore {
       `UNWIND $rows AS row
        MERGE (e:Entity { id: row.id })
        SET e.organizationId = row.organizationId, e.type = row.type, e.text = row.text,
-           e.props = row.props, e.embedding = row.embedding, e.updatedAt = row.updatedAt`,
+           e.props = row.props, e.embedding = row.embedding, e.updatedAt = row.updatedAt,
+           e.ownerUserId = row.ownerUserId, e.visibility = row.visibility`,
       {
         rows: nodes.map((n) => ({
           id: n.id, organizationId: n.organizationId, type: n.type, text: n.text,
           props: JSON.stringify(n.props ?? {}), embedding: n.embedding, updatedAt: n.updatedAt ?? new Date().toISOString(),
+          ownerUserId: n.ownerUserId ?? null, visibility: n.visibility ?? 'shared',
         })),
       },
     )
@@ -84,15 +86,18 @@ export class Neo4jGraphStore implements GraphRagStore {
     }
   }
 
-  async search(organizationId: string, queryEmbedding: number[], k: number): Promise<SearchHit[]> {
+  async search(organizationId: string, viewerUserId: string | null, queryEmbedding: number[], k: number): Promise<SearchHit[]> {
     if (queryEmbedding.length === 0) return []
     const driver = await this.driver()
-    // Over-fetch from the vector index, then filter to the org and take k.
+    // Over-fetch from the vector index, then filter to the org + viewer scope
+    // and take k. `coalesce(...,'shared')` makes legacy nodes (no visibility
+    // property) read as shared, so no migration is needed.
     const { records } = await driver.executeQuery(
       `CALL db.index.vector.queryNodes($index, $fetch, $q) YIELD node, score
        WHERE node.organizationId = $org
+         AND (coalesce(node.visibility, 'shared') <> 'private' OR node.ownerUserId = $viewer)
        RETURN node, score LIMIT $k`,
-      { index: VECTOR_INDEX, fetch: Math.max(k * 4, 20), q: queryEmbedding, org: organizationId, k },
+      { index: VECTOR_INDEX, fetch: Math.max(k * 4, 20), q: queryEmbedding, org: organizationId, viewer: viewerUserId, k },
     ).catch(async () => {
       // No vector index (e.g. Community edition): fall back to scoring in-app.
       const all = await driver.executeQuery(
@@ -101,7 +106,7 @@ export class Neo4jGraphStore implements GraphRagStore {
       )
       const scored = all.records
         .map((r) => hydrate(r.get('node')))
-        .filter((n): n is GraphNode => n !== null && n.embedding.length > 0)
+        .filter((n): n is GraphNode => n !== null && n.embedding.length > 0 && nodeVisibleTo(n, viewerUserId))
         .map((node) => ({ node, score: cosineSimilarity(queryEmbedding, node.embedding) }))
         .sort((a, b) => b.score - a.score)
         .slice(0, k)
@@ -113,15 +118,18 @@ export class Neo4jGraphStore implements GraphRagStore {
       .filter((h): h is SearchHit => h.node !== null)
   }
 
-  async expand(organizationId: string, nodeIds: string[], hops: number): Promise<GraphNode[]> {
+  async expand(organizationId: string, viewerUserId: string | null, nodeIds: string[], hops: number): Promise<GraphNode[]> {
     if (nodeIds.length === 0) return []
     const driver = await this.driver()
+    // Only return neighbors the viewer may see — a private node owned by another
+    // rep is never surfaced, even if reachable by an edge.
     const { records } = await driver.executeQuery(
       `MATCH (seed:Entity) WHERE seed.id IN $ids
        MATCH (seed)-[*1..${Math.max(1, Math.min(hops, 3))}]-(n:Entity { organizationId: $org })
        WHERE NOT n.id IN $ids
+         AND (coalesce(n.visibility, 'shared') <> 'private' OR n.ownerUserId = $viewer)
        RETURN DISTINCT n AS node`,
-      { ids: nodeIds, org: organizationId },
+      { ids: nodeIds, org: organizationId, viewer: viewerUserId },
     )
     return records.map((r) => hydrate(r.get('node'))).filter((n): n is GraphNode => n !== null)
   }
@@ -150,6 +158,8 @@ function hydrate(raw: unknown): GraphNode | null {
     text: typeof p.text === 'string' ? p.text : '',
     props: parsedProps,
     embedding: Array.isArray(p.embedding) ? (p.embedding as number[]) : [],
+    ownerUserId: typeof p.ownerUserId === 'string' ? p.ownerUserId : null,
+    visibility: p.visibility === 'private' ? 'private' : ('shared' as NodeVisibility),
     updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : undefined,
   }
 }

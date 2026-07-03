@@ -18,7 +18,7 @@ import { getPeopleAiReadClient } from '@/lib/peopleai/client'
 import { enrichAccount, enrichOpportunity } from '@/lib/peopleai/salesai-facts'
 import { embedTexts } from './embeddings'
 import { getGraphRagStore, ragEnabled } from './get-store'
-import type { EdgeRelation, GraphEdge, GraphNode, NodeType } from './store'
+import type { EdgeRelation, GraphEdge, GraphNode, NodeType, NodeVisibility } from './store'
 
 // ── Node id scheme (stable, so re-indexing upserts in place) ─────────────────
 export const nodeIds = {
@@ -36,6 +36,10 @@ export interface PendingNode {
   type: NodeType
   text: string
   props: Record<string, unknown>
+  /** Owner for per-rep scoping; omit/null for org-shared data. */
+  ownerUserId?: string | null
+  /** Defaults to 'shared' when omitted. */
+  visibility?: NodeVisibility
 }
 
 /** Embed pending nodes in one batch and persist nodes + edges. Reused by backfill. */
@@ -55,6 +59,8 @@ async function commit(organizationId: string, nodes: PendingNode[], edges: Graph
     text: n.text,
     props: n.props,
     embedding: embeddings[i] ?? [],
+    ownerUserId: n.ownerUserId ?? null,
+    visibility: n.visibility ?? 'shared',
     updatedAt: new Date().toISOString(),
   }))
   await store.upsertNodes(graphNodes)
@@ -167,6 +173,10 @@ export interface ExecutionRecord {
   output: unknown
   status: string
   toolSummaries?: string[]
+  /** Owner of the run node — the run's agent owner, so runs inherit agent scope. */
+  ownerUserId?: string | null
+  /** Run visibility; inherits the agent's visibility. Defaults to 'shared'. */
+  visibility?: NodeVisibility
 }
 
 export async function indexExecution(execution: ExecutionRecord): Promise<void> {
@@ -180,6 +190,8 @@ export async function indexExecution(execution: ExecutionRecord): Promise<void> 
         id: nid.run(execution.id), type: 'run',
         text: `Agent run (${execution.status}) for "${execution.agentTitle ?? execution.agentTaskId ?? 'agent'}".${tools} Output: ${outputText}`,
         props: { status: execution.status, agentTaskId: execution.agentTaskId },
+        ownerUserId: execution.ownerUserId ?? null,
+        visibility: execution.visibility ?? 'shared',
       },
     ]
     const edges: GraphEdge[] = []
@@ -205,6 +217,10 @@ export interface AgentRecord {
   title: string
   objective: string | null
   description: string | null
+  /** Agent owner; scopes the agent node per rep. */
+  ownerUserId?: string | null
+  /** 'private' hides the agent (and its runs) from other reps. Defaults to 'shared'. */
+  visibility?: NodeVisibility
 }
 
 export async function indexAgent(agent: AgentRecord): Promise<void> {
@@ -216,6 +232,8 @@ export async function indexAgent(agent: AgentRecord): Promise<void> {
         id: nid.agent(agent.id), type: 'agent',
         text: `Agent "${agent.title}". ${agent.description ?? ''} Objective: ${agent.objective ?? ''}`.slice(0, 1200),
         props: { agentId: agent.id, title: agent.title },
+        ownerUserId: agent.ownerUserId ?? null,
+        visibility: agent.visibility ?? 'shared',
       }],
       [],
     )

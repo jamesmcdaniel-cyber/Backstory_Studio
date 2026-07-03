@@ -126,17 +126,24 @@ export async function backfillOrganization(organizationId: string): Promise<Back
       id: nodeIds.agent(agent.id), type: 'agent',
       text: clip(`Agent "${title}". ${agent.description ?? ''} Objective: ${agent.objective ?? ''}`, 1200),
       props: { agentId: agent.id, title },
+      ownerUserId: agent.userId ?? null,
+      visibility: agent.visibility === 'private' ? 'private' : 'shared',
     })
   }
 
   const executions = await prisma.agentExecution.findMany({
-    where: { organizationId, status: 'completed' }, take: CAPS.executions, orderBy: { startedAt: 'desc' }, omit: { transcript: true },
+    where: { organizationId, status: 'completed' }, take: CAPS.executions, orderBy: { startedAt: 'desc' },
+    omit: { transcript: true },
+    // Runs inherit their agent's scope so a private agent's runs stay private.
+    include: { agentTask: { select: { userId: true, visibility: true } } },
   })
   for (const execution of executions) {
     nodes.push({
       id: nodeIds.run(execution.id), type: 'run',
       text: clip(`Agent run (${execution.status}). Output: ${safe(execution.output)}`, 1500),
       props: { status: execution.status, agentTaskId: execution.agentTaskId },
+      ownerUserId: execution.agentTask?.userId ?? null,
+      visibility: execution.agentTask?.visibility === 'private' ? 'private' : 'shared',
     })
     if (execution.agentTaskId) edges.push({ organizationId, from: nodeIds.run(execution.id), to: nodeIds.agent(execution.agentTaskId), rel: 'ran_agent' })
     if (execution.signalId) edges.push({ organizationId, from: nodeIds.signal(execution.signalId), to: nodeIds.run(execution.id), rel: 'triggered_run' })

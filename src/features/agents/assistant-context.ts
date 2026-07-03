@@ -72,10 +72,13 @@ export type AssistantContext = {
  * prior cross-agent runs. Best-effort — returns '' when embeddings/store are
  * unconfigured or on any failure.
  */
-async function correlatedContext(agent: AgentTask, question: string): Promise<string> {
+async function correlatedContext(agent: AgentTask, question: string, viewerUserId: string | null): Promise<string> {
   try {
     const context = await retrieveContext(getGraphRagStore(), {
       organizationId: agent.organizationId,
+      // The user asking is the viewer — scope to shared data + their own private
+      // nodes so the assistant never surfaces another rep's private book.
+      viewerUserId,
       query: `${question}\n${agent.objective}`.slice(0, 2000),
       seedNodeIds: [`agent:${agent.id}`],
     })
@@ -85,7 +88,7 @@ async function correlatedContext(agent: AgentTask, question: string): Promise<st
   }
 }
 
-export async function buildAssistantContext(agent: AgentTask, question = ''): Promise<AssistantContext> {
+export async function buildAssistantContext(agent: AgentTask, question = '', viewerUserId: string | null = null): Promise<AssistantContext> {
   const executions = await prisma.agentExecution.findMany({
     where: { agentTaskId: agent.id },
     omit: { transcript: true },
@@ -127,7 +130,7 @@ export async function buildAssistantContext(agent: AgentTask, question = ''): Pr
   })
 
   const agentMetadata = readAgentMetadata(agent.metadata)
-  const correlated = await correlatedContext(agent, question)
+  const correlated = await correlatedContext(agent, question, viewerUserId)
 
   return {
     agent: {

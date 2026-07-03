@@ -9,7 +9,7 @@
  */
 
 import { cosineSimilarity } from './embeddings'
-import type { GraphEdge, GraphNode, GraphRagStore, SearchHit } from './store'
+import { nodeVisibleTo, type GraphEdge, type GraphNode, type GraphRagStore, type SearchHit } from './store'
 
 export class MemoryGraphStore implements GraphRagStore {
   private nodes = new Map<string, GraphNode>()
@@ -28,18 +28,19 @@ export class MemoryGraphStore implements GraphRagStore {
     }
   }
 
-  async search(organizationId: string, queryEmbedding: number[], k: number): Promise<SearchHit[]> {
+  async search(organizationId: string, viewerUserId: string | null, queryEmbedding: number[], k: number): Promise<SearchHit[]> {
     const hits: SearchHit[] = []
     for (const node of this.nodes.values()) {
       if (node.organizationId !== organizationId) continue
       if (node.embedding.length === 0) continue
+      if (!nodeVisibleTo(node, viewerUserId)) continue
       hits.push({ node, score: cosineSimilarity(queryEmbedding, node.embedding) })
     }
     hits.sort((a, b) => b.score - a.score)
     return hits.slice(0, k)
   }
 
-  async expand(organizationId: string, nodeIds: string[], hops: number): Promise<GraphNode[]> {
+  async expand(organizationId: string, viewerUserId: string | null, nodeIds: string[], hops: number): Promise<GraphNode[]> {
     const seen = new Set(nodeIds)
     let frontier = new Set(nodeIds)
     for (let hop = 0; hop < hops; hop++) {
@@ -60,7 +61,9 @@ export class MemoryGraphStore implements GraphRagStore {
     for (const id of seen) {
       if (nodeIds.includes(id)) continue // return only the newly-reached neighbors
       const node = this.nodes.get(id)
-      if (node && node.organizationId === organizationId) result.push(node)
+      // Only return neighbors the viewer may see — a private node owned by
+      // another rep is never surfaced, even if reachable by an edge.
+      if (node && node.organizationId === organizationId && nodeVisibleTo(node, viewerUserId)) result.push(node)
     }
     return result
   }
