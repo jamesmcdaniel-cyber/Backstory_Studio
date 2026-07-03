@@ -6,6 +6,7 @@ import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { hashToken, timingSafeEqualHex } from '@/lib/crypto/secrets'
+import { rateLimit } from '@/lib/ratelimit'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -30,6 +31,12 @@ function triggerSecretValid(provided: string, metadata: Record<string, unknown>)
 export async function POST(request: NextRequest) {
   try {
     const id = request.nextUrl.pathname.split('/').at(-2)
+    // Public endpoint — throttle per agent id to blunt secret-guessing and
+    // trigger floods before any DB work.
+    const limited = await rateLimit(`trigger:${id ?? 'unknown'}`, { limit: 60, windowMs: 60_000 })
+    if (!limited.ok) {
+      return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 })
+    }
     const provided =
       request.headers.get('x-trigger-secret') ||
       (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
