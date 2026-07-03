@@ -1,17 +1,47 @@
 services:
+  # BullMQ worker: executes queued agent runs (EXECUTION_MODE=queue) off the
+  # serverless request path. Deploy alongside Vercel; share the same database
+  # and model keys as the web app.
   - type: worker
-    name: sprintiq-worker
+    name: backstory-worker
     env: node
     buildCommand: npm ci && npm run db:generate
     startCommand: npm run worker:start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: EXECUTION_MODE
+        value: queue
       - key: DATABASE_URL
         sync: false
+      - key: DIRECT_URL
+        sync: false
       - key: REDIS_URL
+        fromService:
+          type: redis
+          name: backstory-redis
+          property: connectionString
+      - key: ENCRYPTION_KEY
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
       - key: KLAVIS_API_KEY
         sync: false
+      - key: NANGO_SECRET_KEY
+        sync: false
+      - key: PEOPLE_AI_OAUTH_CLIENT_ID
+        sync: false
+      - key: PEOPLE_AI_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: PEOPLE_AI_WEBHOOK_SECRET
+        sync: false
+      - key: AGENT_WORKER_CONCURRENCY
+        value: "5"
+
+  - type: redis
+    name: backstory-redis
+    ipAllowList: []
+    plan: starter
+    maxmemoryPolicy: noeviction
