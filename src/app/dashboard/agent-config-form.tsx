@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Loader2, Play, X } from 'lucide-react'
@@ -10,6 +10,8 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { cn } from '@/lib/utils'
 
 /**
  * The agent configuration form, shared by the config dialog and the dashboard's
@@ -93,10 +95,118 @@ const emptyDraft: AgentDraft = {
   priority: 'medium',
   integrations: [],
   skills: [],
-  icon: '',
+  icon: '🤖',
   folder: '',
   visibility: 'shared',
   schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },
+}
+
+// ── Model catalog ───────────────────────────────────────────────────────────
+// id must satisfy the runtime's provider routing (model-runner.ts): a `claude*`
+// id routes to Anthropic, anything else to OpenAI. Claude first (platform
+// default / most capable); logos rendered via IntegrationLogo (Simple Icons).
+const MODELS = [
+  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', provider: 'anthropic' as const },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const },
+  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'anthropic' as const },
+  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const },
+  { id: 'gpt-4o-mini', label: 'GPT-4o mini', provider: 'openai' as const },
+]
+
+function ModelOption({ provider, label }: { provider: 'anthropic' | 'openai'; label: string }) {
+  return (
+    <span className="flex items-center gap-2">
+      <IntegrationLogo slug={provider} name={provider === 'anthropic' ? 'Claude' : 'OpenAI'} className="h-4 w-4" />
+      {label}
+    </span>
+  )
+}
+
+// ── Schedule cadence (UI concept mapped onto the backend schedule) ───────────
+// Backend supports type manual|hourly|daily|weekly|cron (see scheduling/due.ts).
+// The UI offers friendlier cadences; "every other day" rides on cron `*/2` day.
+type Cadence = 'daily' | 'every_other_day' | 'weekly' | 'custom'
+const EVERY_OTHER_DAY_RE = /^\d{1,2}\s+\d{1,2}\s+\*\/2\s+\*\s+\*$/
+
+function cadenceOf(schedule: AgentDraft['schedule']): Cadence {
+  if (schedule.type === 'weekly') return 'weekly'
+  if (schedule.type === 'daily') return 'daily'
+  if (schedule.type === 'cron' && schedule.cron && EVERY_OTHER_DAY_RE.test(schedule.cron)) return 'every_other_day'
+  return 'custom'
+}
+
+// HH:MM → an "every other day at that time" cron of the form `mm hh */2 * *`.
+function everyOtherDayCron(time: string): string {
+  const [hh, mm] = (time || '09:00').split(':').map((n) => parseInt(n, 10))
+  return `${Number.isNaN(mm) ? 0 : mm} ${Number.isNaN(hh) ? 9 : hh} */2 * *`
+}
+
+/** Pull HH:MM out of a cron's minute+hour fields for the time input. */
+function cronToTime(cron: string): string {
+  const [minF, hourF] = (cron || '').trim().split(/\s+/)
+  const mm = parseInt(minF, 10)
+  const hh = parseInt(hourF, 10)
+  if (Number.isNaN(mm) || Number.isNaN(hh)) return '09:00'
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
+}
+
+/** Legacy 'hourly' ≡ cron '0 * * * *'; represent it as custom cron so the
+ *  cadence UI (which has no Hourly preset) round-trips it losslessly. */
+function normalizeSchedule(schedule: AgentDraft['schedule']): AgentDraft['schedule'] {
+  if (schedule.type === 'hourly') return { ...schedule, type: 'cron', cron: schedule.cron || '0 * * * *' }
+  return schedule
+}
+
+// Curated agent emojis — all ≤4 UTF-16 code units, so they fit the icon cap.
+const AGENT_EMOJIS = [
+  '🤖', '📊', '📈', '📉', '✉️', '📬', '🔔', '📅',
+  '🗂️', '📝', '🔎', '🎯', '⚡', '🧠', '💬', '📣',
+  '🛰️', '🧭', '🚀', '🛎️', '💼', '📌', '🧾', '🔗',
+  '⏰', '🗓️', '✅', '⭐', '🔥', '💡', '🏷️', '🪄',
+]
+
+function EmojiPicker({ value, onChange }: { value: string; onChange: (emoji: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!open) return
+    const onClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-10 w-14 items-center justify-center rounded-md border border-input bg-background text-xl transition-colors hover:bg-accent"
+        aria-label="Choose agent emoji"
+      >
+        {value || '🤖'}
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-56 rounded-md border border-border bg-popover p-2 shadow-md">
+          <div className="grid grid-cols-8 gap-0.5">
+            {AGENT_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => { onChange(emoji); setOpen(false) }}
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded text-lg hover:bg-accent',
+                  value === emoji && 'bg-accent',
+                )}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function AgentConfigForm({
@@ -179,7 +289,7 @@ export function AgentConfigForm({
       icon: source.icon || emptyDraft.icon,
       folder: source.folder || '',
       visibility: source.visibility || 'shared',
-      schedule: { ...emptyDraft.schedule, ...(source.schedule || {}) },
+      schedule: normalizeSchedule({ ...emptyDraft.schedule, ...(source.schedule || {}) }),
     } : {
       ...emptyDraft,
       // When creating a fresh agent, default the schedule timezone to the
@@ -213,17 +323,52 @@ export function AgentConfigForm({
     else router.push(`/dashboard?run=${runId}`)
   }
 
+  // ── Schedule (cadence UI ↔ backend schedule) ──────────────────────────────
+  const cadence = cadenceOf(draft.schedule)
+  const scheduleTime = draft.schedule.type === 'cron'
+    ? cronToTime(draft.schedule.cron || '')
+    : (draft.schedule.time || '09:00')
+
+  const setScheduleEnabled = (on: boolean) => {
+    if (!on) {
+      setDraft({ ...draft, schedule: { ...draft.schedule, type: 'manual', isActive: false } })
+      return
+    }
+    // Turning it on from "manual" defaults to a daily cadence.
+    const time = draft.schedule.time || '09:00'
+    const timezone = draft.schedule.timezone || browserTimezone()
+    const base = draft.schedule.type === 'manual'
+      ? { type: 'daily' as const, time, timezone }
+      : draft.schedule
+    setDraft({ ...draft, schedule: { ...base, isActive: true } })
+  }
+
+  const setCadence = (next: Cadence) => {
+    const time = scheduleTime
+    const timezone = draft.schedule.timezone || browserTimezone()
+    const schedule: AgentDraft['schedule'] =
+      next === 'daily' ? { type: 'daily', time, timezone, isActive: true }
+      : next === 'weekly' ? { type: 'weekly', time, timezone, isActive: true }
+      : next === 'every_other_day' ? { type: 'cron', cron: everyOtherDayCron(time), time, timezone, isActive: true }
+      : { type: 'cron', cron: draft.schedule.type === 'cron' ? (draft.schedule.cron || '0 9 * * 1-5') : '0 9 * * 1-5', timezone, isActive: true }
+    setDraft({ ...draft, schedule })
+  }
+
+  const setScheduleTime = (time: string) => {
+    setDraft({
+      ...draft,
+      schedule: cadence === 'every_other_day'
+        ? { ...draft.schedule, time, cron: everyOtherDayCron(time) }
+        : { ...draft.schedule, time },
+    })
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <Label>Name</Label>
         <div className="flex gap-2">
-          <Input
-            className="w-16 text-center text-lg"
-            value={draft.icon}
-            onChange={(event) => setDraft({ ...draft, icon: event.target.value.slice(0, 8) })}
-            aria-label="Agent icon"
-          />
+          <EmojiPicker value={draft.icon} onChange={(icon) => setDraft({ ...draft, icon })} />
           <Input className="flex-1" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
         </div>
       </div>
@@ -255,78 +400,19 @@ export function AgentConfigForm({
         <Label>Instructions</Label>
         <Textarea rows={8} value={draft.instructions} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label>Model</Label>
-          <Select value={draft.model} onValueChange={(model) => setDraft({ ...draft, model })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="gpt-4o">GPT-4o</SelectItem>
-              <SelectItem value="gpt-4o-mini">GPT-4o mini</SelectItem>
-              <SelectItem value="claude-opus-4-8">Claude Opus 4.8</SelectItem>
-              <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6</SelectItem>
-              <SelectItem value="claude-haiku-4-5">Claude Haiku 4.5</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label>Schedule</Label>
-          <Select value={draft.schedule.type} onValueChange={(type: AgentDraft['schedule']['type']) => setDraft({
-            ...draft,
-            schedule: { ...draft.schedule, type, isActive: type !== 'manual' },
-          })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="manual">Manual</SelectItem>
-              <SelectItem value="hourly">Hourly</SelectItem>
-              <SelectItem value="daily">Daily</SelectItem>
-              <SelectItem value="weekly">Weekly</SelectItem>
-              <SelectItem value="cron">Custom (cron)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <div>
+        <Label>Model</Label>
+        <Select value={draft.model} onValueChange={(model) => setDraft({ ...draft, model })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {MODELS.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                <ModelOption provider={m.provider} label={m.label} />
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
-      {(draft.schedule.type === 'daily' || draft.schedule.type === 'weekly') && (
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <Label>Time</Label>
-            <Input
-              type="time"
-              value={draft.schedule.time || '09:00'}
-              onChange={(event) => setDraft({ ...draft, schedule: { ...draft.schedule, time: event.target.value } })}
-            />
-          </div>
-          <div>
-            <Label>Timezone</Label>
-            <Select
-              value={draft.schedule.timezone}
-              onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {/* Include the current zone first if it isn't one of the common ones,
-                    so a browser-detected zone outside the list still renders selected. */}
-                {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
-                  <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
-                )}
-                {COMMON_TIMEZONES.map((tz) => (
-                  <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      )}
-      {draft.schedule.type === 'cron' && (
-        <div>
-          <Label>Cron expression</Label>
-          <Input
-            placeholder="0 9 * * 1-5"
-            value={draft.schedule.cron || ''}
-            onChange={(event) => setDraft({ ...draft, schedule: { ...draft.schedule, cron: event.target.value } })}
-          />
-        </div>
-      )}
 
       {/* ── Connected tools picker ───────────────────────────────────── */}
       <div>
@@ -402,12 +488,74 @@ export function AgentConfigForm({
         )}
       </div>
 
-      <div className="flex items-center justify-between rounded-lg border p-3">
-        <Label>Schedule enabled</Label>
-        <Switch
-          checked={draft.schedule.isActive}
-          onCheckedChange={(isActive) => setDraft({ ...draft, schedule: { ...draft.schedule, isActive } })}
-        />
+      {/* ── Schedule ─────────────────────────────────────────────────── */}
+      <div className="space-y-3 rounded-lg border p-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <Label>Schedule enabled</Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">Run this agent automatically on a cadence.</p>
+          </div>
+          <Switch checked={draft.schedule.isActive} onCheckedChange={setScheduleEnabled} />
+        </div>
+
+        {draft.schedule.isActive && (
+          <div className="space-y-3 border-t pt-3">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Cadence</Label>
+                <Select value={cadence} onValueChange={(value) => setCadence(value as Cadence)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="every_other_day">Every other day</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="custom">Custom (cron)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {cadence !== 'custom' && (
+                <div>
+                  <Label>Time</Label>
+                  <Input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
+                </div>
+              )}
+            </div>
+
+            {cadence !== 'custom' ? (
+              <div>
+                <Label>Timezone</Label>
+                <Select
+                  value={draft.schedule.timezone}
+                  onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {/* Keep a browser-detected zone outside the common list selectable. */}
+                    {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
+                      <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
+                    )}
+                    {COMMON_TIMEZONES.map((tz) => (
+                      <SelectItem key={tz} value={tz}>{tz}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {cadence === 'weekly' && (
+                  <p className="mt-1 text-xs text-muted-foreground">Runs weekly at this time.</p>
+                )}
+              </div>
+            ) : (
+              <div>
+                <Label>Cron expression</Label>
+                <Input
+                  placeholder="0 9 * * 1-5"
+                  value={draft.schedule.cron || ''}
+                  onChange={(event) => setDraft({ ...draft, schedule: { ...draft.schedule, type: 'cron', cron: event.target.value } })}
+                />
+                <p className="mt-1 text-xs text-muted-foreground">5-field cron, evaluated in {draft.schedule.timezone || 'UTC'}.</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Compact Skills display ───────────────────────────────────── */}
