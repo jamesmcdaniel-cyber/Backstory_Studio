@@ -21,7 +21,7 @@ import { getGraphRagStore, ragEnabled } from './get-store'
 import type { EdgeRelation, GraphEdge, GraphNode, NodeType } from './store'
 
 // ── Node id scheme (stable, so re-indexing upserts in place) ─────────────────
-const nid = {
+export const nodeIds = {
   account: (id: string) => `account:${id}`,
   opportunity: (id: string) => `opp:${id}`,
   stakeholder: (id: string) => `stakeholder:${id}`,
@@ -29,12 +29,18 @@ const nid = {
   run: (id: string) => `run:${id}`,
   agent: (id: string) => `agent:${id}`,
 }
+const nid = nodeIds
 
-interface PendingNode {
+export interface PendingNode {
   id: string
   type: NodeType
   text: string
   props: Record<string, unknown>
+}
+
+/** Embed pending nodes in one batch and persist nodes + edges. Reused by backfill. */
+export async function commitGraph(organizationId: string, nodes: PendingNode[], edges: GraphEdge[]): Promise<void> {
+  return commit(organizationId, nodes, edges)
 }
 
 /** Embed pending nodes in one batch and persist nodes + edges. */
