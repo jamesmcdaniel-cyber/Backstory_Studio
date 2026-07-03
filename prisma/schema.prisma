@@ -40,6 +40,8 @@ model Organization {
   nangoConnections   NangoConnection[]
   integrationSecrets IntegrationSecret[]
   peopleAiConnections PeopleAiConnection[]
+  signals             Signal[]
+  signalSubscriptions SignalSubscription[]
 
   @@map("organizations")
 }
@@ -98,6 +100,7 @@ model AgentTask {
   organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   owner        User?              @relation(fields: [userId], references: [id], onDelete: SetNull)
   executions   AgentExecution[]
+  signalSubscriptions SignalSubscription[]
   chatMessages AgentChatMessage[]
 
   @@index([organizationId, status])
@@ -124,11 +127,63 @@ model AgentChatMessage {
   @@map("agent_chat_messages")
 }
 
+// Inbound People.ai Sales AI event (webhook or poller). Immutable once
+// written; the router turns matching signals into agent executions.
+model Signal {
+  id             String    @id @default(cuid())
+  organizationId String    @db.Uuid
+  // One of the documented SalesAI events: deal.score_updated,
+  // deal.risk_detected, deal.stage_changed, forecast.updated,
+  // insight.generated, stakeholder.engagement_changed.
+  type           String
+  accountId      String?
+  opportunityId  String?
+  stakeholderId  String?
+  payload        Json
+  // Replay guard: provider event id (or a content hash fallback).
+  dedupeKey      String    @unique
+  provenanceUrl  String?
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+
+  organization  Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscriptionRuns AgentExecution[]
+
+  @@index([organizationId, receivedAt])
+  @@index([organizationId, type])
+  @@map("signals")
+}
+
+// Routing rule: signal type + JSON filter → run an agent, with the signal
+// injected as structured context.
+model SignalSubscription {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  signalType     String
+  // Shallow equality filter over signal payload/entity fields, e.g.
+  // {"risk_level": "high"}. Empty object matches everything.
+  filter         Json     @default("{}")
+  agentTaskId    String
+  isActive       Boolean  @default(true)
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentTask    AgentTask    @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, signalType, isActive])
+  @@map("signal_subscriptions")
+}
+
 model AgentExecution {
   id              String    @id @default(cuid())
   agentType       String
   agentTemplateId String?
   agentTaskId     String?
+  // Replay/duplicate guard for signal-triggered runs (signalId:agentId).
+  idempotencyKey  String?
+  signalId        String?
   status          String    @default("pending")
   input           Json
   output          Json?
@@ -149,10 +204,12 @@ model AgentExecution {
   organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   agentTemplate AgentTemplate?     @relation(fields: [agentTemplateId], references: [id], onDelete: SetNull)
   agentTask     AgentTask?         @relation(fields: [agentTaskId], references: [id], onDelete: SetNull)
+  signal        Signal?            @relation(fields: [signalId], references: [id], onDelete: SetNull)
   workflowSteps WorkflowStep[]
   events        WorkflowEvent[]
   messages      ExecutionMessage[]
 
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, startedAt])
   @@index([agentTaskId])
   @@map("agent_executions")
