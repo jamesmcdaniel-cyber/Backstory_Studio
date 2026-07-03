@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { apiLogger } from '@/lib/logger'
+import { captureError } from '@/lib/observability/sentry'
 import { AuthContextError, requireAuthContext, type AuthContext } from './auth'
 
 export class ApiError extends Error {
@@ -52,6 +53,7 @@ export function withAuthenticatedApi(handler: AuthenticatedHandler) {
         path: request.nextUrl.pathname,
         error: error instanceof Error ? error.message : String(error),
       })
+      captureError(error, { path: request.nextUrl.pathname })
 
       return NextResponse.json(
         { success: false, error: 'Internal server error', code: 'INTERNAL_ERROR' },
