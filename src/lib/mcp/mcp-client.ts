@@ -117,7 +117,9 @@ export class McpClient {
     if (!resolvedTokenUrl) {
       const origin = new URL(serverUrl).origin
       const discoveryUrl = `${origin}/.well-known/oauth-authorization-server`
+      await assertPublicUrl(discoveryUrl)
       const discoveryResp = await fetch(discoveryUrl, {
+        redirect: 'error', // don't let a 3xx bounce us to an internal host
         signal: AbortSignal.timeout(10_000),
       })
       if (!discoveryResp.ok) {
@@ -145,6 +147,9 @@ export class McpClient {
     // require different styles and including both is safe.
     const basicCredentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
 
+    // Re-validate at fetch time (tokenUrl may be a discovered endpoint, and this
+    // guards against DNS rebinding since save).
+    await assertPublicUrl(resolvedTokenUrl)
     const response = await fetch(resolvedTokenUrl, {
       method: 'POST',
       headers: {
@@ -152,6 +157,7 @@ export class McpClient {
         Authorization: `Basic ${basicCredentials}`,
       },
       body: body.toString(),
+      redirect: 'error', // don't follow a 3xx to an internal host
       signal: AbortSignal.timeout(15_000),
     })
 
@@ -331,6 +337,7 @@ export class McpClient {
         method,
         ...(params ? { params } : {}),
       }),
+      redirect: 'error', // a 3xx to an internal host would bypass the SSRF guard
       signal: AbortSignal.timeout(30_000),
     })
 

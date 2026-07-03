@@ -56,13 +56,29 @@ function isBlockedIPv4(ip: string): boolean {
   )
 }
 
+// Extract the embedded IPv4 from an IPv4-mapped/compatible IPv6, in EITHER the
+// dotted form (::ffff:1.2.3.4) or the hex form the WHATWG URL parser produces
+// (::ffff:7f00:1). Without the hex case, mapped literals for loopback/metadata
+// slip past the guard.
+function mappedIPv4(a: string): string | null {
+  const dotted = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  if (dotted) return dotted[1]
+  const hex = a.match(/^::(?:ffff:)?(?:0:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+  if (hex) {
+    const hi = parseInt(hex[1], 16)
+    const lo = parseInt(hex[2], 16)
+    return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`
+  }
+  return null
+}
+
 function isBlockedIPv6(ip: string): boolean {
   const a = ip.toLowerCase().replace(/^\[|\]$/g, '')
   if (a === '::1' || a === '::') return true
-  if (a.startsWith('fe8') || a.startsWith('fe9') || a.startsWith('fea') || a.startsWith('feb')) return true // link-local fe80::/10
+  if (/^fe[89ab]/.test(a)) return true // link-local fe80::/10
   if (a.startsWith('fc') || a.startsWith('fd')) return true // unique-local fc00::/7
-  const mapped = a.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/) // IPv4-mapped
-  if (mapped) return isBlockedIPv4(mapped[1])
+  const mapped = mappedIPv4(a)
+  if (mapped) return isBlockedIPv4(mapped)
   return false
 }
 

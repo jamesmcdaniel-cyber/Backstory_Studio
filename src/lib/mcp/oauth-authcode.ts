@@ -43,6 +43,7 @@ export async function discoverAuthServer(
 
   const response = await fetch(discoveryUrl, {
     headers: { Accept: 'application/json' },
+    redirect: 'error', // don't follow a 3xx to an internal host (SSRF guard)
     signal: AbortSignal.timeout(10_000),
   })
   if (!response.ok) {
@@ -127,6 +128,7 @@ export async function registerClient(
       token_endpoint_auth_method: 'none',
       scope: 'claudeai',
     }),
+    redirect: 'error', // don't follow a 3xx to an internal host (SSRF guard)
     signal: AbortSignal.timeout(15_000),
   })
 
@@ -247,6 +249,7 @@ export async function exchangeCode(
       ...headers,
     },
     body: body.toString(),
+    redirect: 'error',
     signal: AbortSignal.timeout(15_000),
   })
 
@@ -301,6 +304,7 @@ export async function refreshAccessToken(
       ...headers,
     },
     body: body.toString(),
+    redirect: 'error',
     signal: AbortSignal.timeout(15_000),
   })
 

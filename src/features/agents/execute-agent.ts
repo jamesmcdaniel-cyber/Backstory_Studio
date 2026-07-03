@@ -17,7 +17,7 @@ import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
-import { cached } from '@/lib/cache'
+import { cacheGet, cacheSet } from '@/lib/cache'
 import { buildAgentSystemPrompt } from './system-prompt'
 import {
   createModelRunner,
@@ -82,9 +82,18 @@ function toolName(provider: string, name: string) {
 // tools/list round-trips) on EVERY run. Cache the discovery per server URL so a
 // warm run skips the network entirely; busted on connection create/update.
 const TOOL_DISCOVERY_TTL_MS = 10 * 60 * 1000
-export const toolDiscoveryCacheKey = (serverUrl: string) => `mcptools:${serverUrl}`
-function cachedToolDiscovery<T>(serverUrl: string, fetchTools: () => Promise<T[]>): Promise<T[]> {
-  return cached(toolDiscoveryCacheKey(serverUrl), TOOL_DISCOVERY_TTL_MS, fetchTools).then((r) => r ?? [])
+// Keyed by org too: MCP servers can gate tools/list by identity, so one org's
+// discovery must not pin another's tool set on a shared serverUrl.
+export const toolDiscoveryCacheKey = (organizationId: string, serverUrl: string) => `mcptools:${organizationId}:${serverUrl}`
+async function cachedToolDiscovery<T>(organizationId: string, serverUrl: string, fetchTools: () => Promise<T[]>): Promise<T[]> {
+  const key = toolDiscoveryCacheKey(organizationId, serverUrl)
+  const hit = await cacheGet<T[]>(key)
+  if (hit && hit.length > 0) return hit
+  const fresh = await fetchTools()
+  // Never cache an empty result — a transient empty/errored discovery must not
+  // pin "no tools" for the whole TTL and silently disable the integration.
+  if (fresh.length > 0) await cacheSet(key, fresh, TOOL_DISCOVERY_TTL_MS)
+  return fresh
 }
 
 function metadataOf(value: unknown): Record<string, any> {
@@ -117,7 +126,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
     const discovered = await Promise.all(agents.map(async (agent) => {
       const provider = String(agent.agentType).toLowerCase()
       try {
-        const available = await cachedToolDiscovery(agent.mcpServerUrl, () => client.getServerTools(agent.mcpServerUrl))
+        const available = await cachedToolDiscovery(organizationId, agent.mcpServerUrl, () => client.getServerTools(agent.mcpServerUrl))
         return { provider, serverUrl: agent.mcpServerUrl, available }
       } catch (error) {
         apiLogger.warn('loadTools: Klavis tool discovery failed, skipping provider', {
@@ -171,7 +180,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
             organizationId, ownerUserId: ownerUserId ?? null,
           })
         }
-        const available = await cachedToolDiscovery(paiClient.serverUrl, () => paiClient!.listTools())
+        const available = await cachedToolDiscovery(organizationId, paiClient.serverUrl, () => paiClient!.listTools())
         for (const tool of available.slice(0, 20)) {
           const name = toolName('backstory', tool.name)
           if (bindings.has(name)) continue
@@ -191,7 +200,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         })
         const backstoryUrl = process.env.BACKSTORY_MCP_URL!
         const backstoryClient = new BackstoryMcpClient()
-        const available = await cachedToolDiscovery(backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
+        const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
         for (const tool of available.slice(0, 20)) {
           const name = toolName('backstory', tool.name)
           if (bindings.has(name)) continue
@@ -239,7 +248,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         }
       }
       const client = new McpClient(config)
-      const available = await cachedToolDiscovery(fresh.serverUrl, () => client.getServerTools(fresh.serverUrl))
+      const available = await cachedToolDiscovery(organizationId, fresh.serverUrl, () => client.getServerTools(fresh.serverUrl))
       return { slug, serverUrl: fresh.serverUrl, name: fresh.name, client, available }
     } catch (error) {
       apiLogger.warn('loadTools: org MCP connection tool discovery failed, skipping', {

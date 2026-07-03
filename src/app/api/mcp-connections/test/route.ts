@@ -29,10 +29,12 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const data = testSchema.parse(await request.json().catch(() => ({})))
 
   // SSRF guard: reject internal/private/metadata targets before connecting.
+  // Both serverUrl AND the oauth2 tokenUrl are fetched server-side, so guard both.
   try {
     await assertPublicUrl(data.serverUrl)
+    if (data.tokenUrl) await assertPublicUrl(data.tokenUrl)
   } catch (error) {
-    if (error instanceof SsrfError) return { ok: false, error: 'That server URL is not allowed.' }
+    if (error instanceof SsrfError) return { ok: false, error: 'That server or token URL is not allowed.' }
     throw error
   }
 

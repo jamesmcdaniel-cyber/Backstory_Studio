@@ -10,9 +10,9 @@ import {
 import { assertPublicUrl, SsrfError } from '@/lib/net/ssrf'
 import { cacheDelete } from '@/lib/cache'
 
-// Mirror of execute-agent's toolDiscoveryCacheKey — kept in sync deliberately;
-// busting it makes a connection edit take effect before the discovery TTL.
-const toolDiscoveryCacheKey = (serverUrl: string) => `mcptools:${serverUrl}`
+// Mirror of execute-agent's toolDiscoveryCacheKey (org-scoped) — kept in sync
+// deliberately; busting it makes a connection edit take effect before the TTL.
+const toolDiscoveryCacheKey = (organizationId: string, serverUrl: string) => `mcptools:${organizationId}:${serverUrl}`
 
 /** SSRF guard for a user-supplied URL field; rejects private/internal targets. */
 async function requirePublicUrl(url: string | undefined, field: string): Promise<void> {
@@ -166,9 +166,9 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
 
   // Bust cached tool discovery so a changed serverUrl/auth is picked up now,
   // not after the TTL.
-  await cacheDelete(toolDiscoveryCacheKey(existing.serverUrl))
+  await cacheDelete(toolDiscoveryCacheKey(auth.organizationId, existing.serverUrl))
   if (body.serverUrl && body.serverUrl !== existing.serverUrl) {
-    await cacheDelete(toolDiscoveryCacheKey(body.serverUrl))
+    await cacheDelete(toolDiscoveryCacheKey(auth.organizationId, body.serverUrl))
   }
 
   return { success: true, connection: serializeConnection(connection) }

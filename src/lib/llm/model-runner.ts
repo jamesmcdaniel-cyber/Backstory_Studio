@@ -39,12 +39,15 @@ export interface ModelRunner {
 
 const ADAPTIVE_THINKING_MODELS = /^claude-(opus-4-[678]|sonnet-4-6|fable-5|mythos-5)/
 
-// Bound a single model call well below the BullMQ job lock (300s, see
-// queue/config.ts): worst case maxRetries(1)+1 attempts × 120s = 240s < 300s,
-// so a hung/slow call can't outlive the lock and cause a run to both
-// dead-letter (stalled) and complete. Applied to every SDK client here.
+// Bound a single model call below the BullMQ job lock (300s, see
+// queue/config.ts) so a hung/slow call can't outlive the lock and make a run
+// both dead-letter (stalled) and complete. The SDK `timeout` only wraps the
+// fetch (which resolves at response HEADERS for a stream), so it bounds
+// non-streaming calls; STREAM_DEADLINE_MS is an explicit end-to-end cap passed
+// as an AbortSignal to the streaming turn to bound the body read too.
 const LLM_TIMEOUT_MS = 120_000
 const LLM_MAX_RETRIES = 1
+const STREAM_DEADLINE_MS = 240_000
 
 class AnthropicRunner implements ModelRunner {
   private readonly client: Anthropic
@@ -90,7 +93,7 @@ class AnthropicRunner implements ModelRunner {
           }
         : {}),
       messages: transcript as Anthropic.MessageParam[],
-    })
+    }, { signal: AbortSignal.timeout(STREAM_DEADLINE_MS) })
     const message = await stream.finalMessage()
     transcript.push({ role: 'assistant', content: message.content })
 
