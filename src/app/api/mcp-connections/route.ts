@@ -7,6 +7,23 @@ import {
   mergeAuthConfig,
   redactConfig,
 } from '@/lib/crypto/secrets'
+import { assertPublicUrl, SsrfError } from '@/lib/net/ssrf'
+import { cacheDelete } from '@/lib/cache'
+
+// Mirror of execute-agent's toolDiscoveryCacheKey — kept in sync deliberately;
+// busting it makes a connection edit take effect before the discovery TTL.
+const toolDiscoveryCacheKey = (serverUrl: string) => `mcptools:${serverUrl}`
+
+/** SSRF guard for a user-supplied URL field; rejects private/internal targets. */
+async function requirePublicUrl(url: string | undefined, field: string): Promise<void> {
+  if (!url) return
+  try {
+    await assertPublicUrl(url)
+  } catch (error) {
+    if (error instanceof SsrfError) throw new ApiError(`${field} is not allowed: ${error.message}`, 400, 'INVALID_URL')
+    throw error
+  }
+}
 
 // ── Zod schema ───────────────────────────────────────────────────────────
 
@@ -72,6 +89,8 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const data = mcpConnectionSchema.parse(await request.json())
+  await requirePublicUrl(data.serverUrl, 'serverUrl')
+  await requirePublicUrl(data.tokenUrl, 'tokenUrl')
 
   const authConfig = buildAuthConfig({
     authType: data.authType,
@@ -111,6 +130,9 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   })
   if (!existing) throw new ApiError('MCP connection not found', 404, 'NOT_FOUND')
 
+  await requirePublicUrl(body.serverUrl, 'serverUrl')
+  await requirePublicUrl(body.tokenUrl, 'tokenUrl')
+
   // Merge authConfig: preserve secrets not provided in this update
   const existingConfig =
     existing.authConfig &&
@@ -141,6 +163,13 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       ...(body.isActive !== undefined && { isActive: body.isActive }),
     },
   })
+
+  // Bust cached tool discovery so a changed serverUrl/auth is picked up now,
+  // not after the TTL.
+  await cacheDelete(toolDiscoveryCacheKey(existing.serverUrl))
+  if (body.serverUrl && body.serverUrl !== existing.serverUrl) {
+    await cacheDelete(toolDiscoveryCacheKey(body.serverUrl))
+  }
 
   return { success: true, connection: serializeConnection(connection) }
 })

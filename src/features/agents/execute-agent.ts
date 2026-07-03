@@ -17,6 +17,7 @@ import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations
 import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
 import { notify } from '@/lib/notifications/service'
 import { checkMonthlyTokenBudget } from '@/lib/usage/budget'
+import { cached } from '@/lib/cache'
 import { buildAgentSystemPrompt } from './system-prompt'
 import {
   createModelRunner,
@@ -77,6 +78,15 @@ function toolName(provider: string, name: string) {
   return `${provider}_${name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
 }
 
+// MCP tool lists are near-static, but loadTools re-discovered them (initialize +
+// tools/list round-trips) on EVERY run. Cache the discovery per server URL so a
+// warm run skips the network entirely; busted on connection create/update.
+const TOOL_DISCOVERY_TTL_MS = 10 * 60 * 1000
+export const toolDiscoveryCacheKey = (serverUrl: string) => `mcptools:${serverUrl}`
+function cachedToolDiscovery<T>(serverUrl: string, fetchTools: () => Promise<T[]>): Promise<T[]> {
+  return cached(toolDiscoveryCacheKey(serverUrl), TOOL_DISCOVERY_TTL_MS, fetchTools).then((r) => r ?? [])
+}
+
 function metadataOf(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {}
 }
@@ -100,34 +110,38 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
       },
     })
 
-    for (const agent of agents) {
+    // Discover all Klavis providers in parallel (cached per server URL); a
+    // failing discovery for one provider degrades to empty, never aborts the
+    // run. Bindings are built afterward, sequentially, so dedup + order stay
+    // deterministic regardless of which discovery resolved first.
+    const discovered = await Promise.all(agents.map(async (agent) => {
       const provider = String(agent.agentType).toLowerCase()
-      // C2 — a failing tool-discovery for one provider must not abort the run.
-      // Degrade gracefully: log + skip this provider, keep whatever else loaded.
       try {
-        const available = await client.getServerTools(agent.mcpServerUrl)
-        if (available.length > 20) {
-          apiLogger.warn('loadTools: per-provider tool cap reached; some tools not exposed to the agent', {
-            provider, organizationId, discovered: available.length, cap: 20, dropped: available.length - 20,
-          })
-        }
-        for (const tool of available.slice(0, 20)) {
-          const name = toolName(provider, tool.name)
-          if (bindings.has(name)) continue
-          bindings.set(name, { provider, serverUrl: agent.mcpServerUrl, toolName: tool.name, client })
-          tools.push({
-            name,
-            description: tool.description || `${tool.name} via ${provider}`,
-            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-          })
-        }
+        const available = await cachedToolDiscovery(agent.mcpServerUrl, () => client.getServerTools(agent.mcpServerUrl))
+        return { provider, serverUrl: agent.mcpServerUrl, available }
       } catch (error) {
         apiLogger.warn('loadTools: Klavis tool discovery failed, skipping provider', {
-          provider,
-          organizationId,
-          error: error instanceof Error ? error.message : String(error),
+          provider, organizationId, error: error instanceof Error ? error.message : String(error),
         })
-        continue
+        return { provider, serverUrl: agent.mcpServerUrl, available: [] as Awaited<ReturnType<typeof client.getServerTools>> }
+      }
+    }))
+
+    for (const { provider, serverUrl, available } of discovered) {
+      if (available.length > 20) {
+        apiLogger.warn('loadTools: per-provider tool cap reached; some tools not exposed to the agent', {
+          provider, organizationId, discovered: available.length, cap: 20, dropped: available.length - 20,
+        })
+      }
+      for (const tool of available.slice(0, 20)) {
+        const name = toolName(provider, tool.name)
+        if (bindings.has(name)) continue
+        bindings.set(name, { provider, serverUrl, toolName: tool.name, client })
+        tools.push({
+          name,
+          description: tool.description || `${tool.name} via ${provider}`,
+          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+        })
       }
     }
   }
@@ -157,7 +171,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
             organizationId, ownerUserId: ownerUserId ?? null,
           })
         }
-        const available = await paiClient.listTools()
+        const available = await cachedToolDiscovery(paiClient.serverUrl, () => paiClient!.listTools())
         for (const tool of available.slice(0, 20)) {
           const name = toolName('backstory', tool.name)
           if (bindings.has(name)) continue
@@ -177,7 +191,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         })
         const backstoryUrl = process.env.BACKSTORY_MCP_URL!
         const backstoryClient = new BackstoryMcpClient()
-        const available = await backstoryClient.getServerTools(backstoryUrl)
+        const available = await cachedToolDiscovery(backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
         for (const tool of available.slice(0, 20)) {
           const name = toolName('backstory', tool.name)
           if (bindings.has(name)) continue
@@ -205,48 +219,48 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
     where: { organizationId, isActive: true },
   })
 
-  for (let conn of connections) {
-    // Slug used as the provider prefix (e.g. "my salesforce" → "my_salesforce")
+  // Discover all org MCP connections in parallel (cached per server URL); token
+  // refresh + client build happen per-connection, discovery is cached. Failures
+  // degrade to null and are skipped. Bindings built afterward, sequentially, so
+  // dedup + the 64-tool cap apply deterministically.
+  const orgMcp = await Promise.all(connections.map(async (conn) => {
     const slug = conn.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
     try {
-      conn = await ensureFreshConnectionToken(conn)
-      const config = mcpConfigFromConnection(conn)
+      const fresh = await ensureFreshConnectionToken(conn)
+      const config = mcpConfigFromConnection(fresh)
       // For authcode connections, let a mid-run token refresh persist the
       // rotated tokens back to this row so the next run reuses them.
       if (config.flow === 'authcode') {
-        const connectionId = conn.id
-        const baseAuthConfig = conn.authConfig as Record<string, unknown>
+        const connectionId = fresh.id
+        const baseAuthConfig = fresh.authConfig as Record<string, unknown>
         const fallbackRefresh = config.refreshToken ?? ''
         config.persistTokens = async (tokens) => {
           await persistRefreshedAuthcodeTokens(connectionId, baseAuthConfig, tokens, fallbackRefresh)
         }
       }
       const client = new McpClient(config)
-      const available = await client.getServerTools(conn.serverUrl)
-      for (const tool of available.slice(0, 20)) {
-        // Stop if we've hit the overall 64-tool cap
-        if (tools.length >= 64) break
-        const name = toolName(slug, tool.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, {
-          provider: slug,
-          serverUrl: conn.serverUrl,
-          toolName: tool.name,
-          client,
-        })
-        tools.push({
-          name,
-          description: tool.description || `${tool.name} via ${conn.name}`,
-          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-        })
-      }
+      const available = await cachedToolDiscovery(fresh.serverUrl, () => client.getServerTools(fresh.serverUrl))
+      return { slug, serverUrl: fresh.serverUrl, name: fresh.name, client, available }
     } catch (error) {
       apiLogger.warn('loadTools: org MCP connection tool discovery failed, skipping', {
-        connectionId: conn.id,
-        connectionName: conn.name,
-        serverUrl: conn.serverUrl,
-        organizationId,
-        error: error instanceof Error ? error.message : String(error),
+        connectionId: conn.id, connectionName: conn.name, serverUrl: conn.serverUrl,
+        organizationId, error: error instanceof Error ? error.message : String(error),
+      })
+      return null
+    }
+  }))
+
+  for (const entry of orgMcp) {
+    if (!entry) continue
+    for (const tool of entry.available.slice(0, 20)) {
+      if (tools.length >= 64) break
+      const name = toolName(entry.slug, tool.name)
+      if (bindings.has(name)) continue
+      bindings.set(name, { provider: entry.slug, serverUrl: entry.serverUrl, toolName: tool.name, client: entry.client })
+      tools.push({
+        name,
+        description: tool.description || `${tool.name} via ${entry.name}`,
+        inputSchema: tool.inputSchema || { type: 'object', properties: {} },
       })
     }
   }

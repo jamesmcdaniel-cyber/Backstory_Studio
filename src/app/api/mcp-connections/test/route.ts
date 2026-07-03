@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { McpClient } from '@/lib/mcp/mcp-client'
-import { withAuthenticatedApi } from '@/lib/server/api-handler'
+import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+import { rateLimit } from '@/lib/ratelimit'
+import { assertPublicUrl, SsrfError } from '@/lib/net/ssrf'
 
 // Same schema as the main route (without id, without isActive)
 const testSchema = z.object({
@@ -18,8 +20,21 @@ const testSchema = z.object({
   scopes: z.string().optional(),
 })
 
-export const POST = withAuthenticatedApi(async (request, _auth) => {
-  const data = testSchema.parse(await request.json())
+export const POST = withAuthenticatedApi(async (request, auth) => {
+  // Throttle: this endpoint makes server-side outbound requests to a
+  // caller-supplied URL, so cap it to blunt scanning/abuse.
+  const limited = await rateLimit(`mcp-test:${auth.dbUser.id}`, { limit: 10, windowMs: 60_000 })
+  if (!limited.ok) throw new ApiError('Too many connection tests — slow down.', 429, 'RATE_LIMITED')
+
+  const data = testSchema.parse(await request.json().catch(() => ({})))
+
+  // SSRF guard: reject internal/private/metadata targets before connecting.
+  try {
+    await assertPublicUrl(data.serverUrl)
+  } catch (error) {
+    if (error instanceof SsrfError) return { ok: false, error: 'That server URL is not allowed.' }
+    throw error
+  }
 
   // Build runtime config directly from plaintext input — do NOT persist
   const client = new McpClient({

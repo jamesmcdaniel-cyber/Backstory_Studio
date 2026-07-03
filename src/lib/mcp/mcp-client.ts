@@ -13,6 +13,7 @@
 
 import { decryptSecret } from '@/lib/crypto/secrets'
 import { refreshAccessToken } from '@/lib/mcp/oauth-authcode'
+import { assertPublicUrl } from '@/lib/net/ssrf'
 
 // ---------------------------------------------------------------------------
 // Runtime config (constructor argument — secrets already decrypted)
@@ -353,6 +354,10 @@ export class McpClient {
 
   private async initialize(serverUrl: string) {
     if (this.readyServers.has(serverUrl)) return
+    // SSRF guard: this serverUrl is user-provided (custom MCP connections), so
+    // validate it points at a public host before any request to it. Covers all
+    // subsequent rpc() calls for this server.
+    await assertPublicUrl(serverUrl)
     const response = await this.rpc(serverUrl, 'initialize', {
       protocolVersion: '2024-11-05',
       capabilities: { tools: {} },
