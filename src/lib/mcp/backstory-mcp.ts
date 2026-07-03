@@ -28,6 +28,18 @@ export function backstoryMcpConfigured(): boolean {
   return hasStaticToken || hasClientCreds
 }
 
+/**
+ * Per-request MCP timeout, read at call time (never at module load, per this
+ * file's env contract). This is the legacy Backstory/People.ai MCP fallback, so
+ * it honors the same PEOPLE_AI_MCP_TIMEOUT_MS knob; default 20s. Guarded so a
+ * truthy-but-invalid value can't reach AbortSignal.timeout (which throws on
+ * negatives/NaN).
+ */
+function requestTimeoutMs(): number {
+  const parsed = Math.floor(Number(process.env.PEOPLE_AI_MCP_TIMEOUT_MS))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20_000
+}
+
 // ---------------------------------------------------------------------------
 // Token cache (module scope — one cache per process / worker)
 // ---------------------------------------------------------------------------
@@ -171,7 +183,7 @@ export class BackstoryMcpClient {
         method,
         ...(params ? { params } : {}),
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(requestTimeoutMs()),
     })
 
     if (!response.ok) {

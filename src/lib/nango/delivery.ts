@@ -66,9 +66,35 @@ export interface NangoProxyArgs {
 
 export type NangoProxy = (args: NangoProxyArgs) => Promise<{ data: unknown }>
 
+/**
+ * Race a promise against a deadline. Nango's ProxyConfiguration exposes no
+ * timeout and its axios layer defaults to none, so a hung upstream (Slack/Gmail/
+ * Salesforce not responding) would block a delivery — and therefore an agent
+ * run — indefinitely. Racing rejects the caller at the deadline; the dangling
+ * request is left to settle and is ignored.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer)) as Promise<T>
+}
+
+/** Per-request Nango proxy ceiling, read at call time; env-tunable, default 20s. */
+function proxyTimeoutMs(): number {
+  const parsed = Math.floor(Number(process.env.NANGO_PROXY_TIMEOUT_MS))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 20_000
+}
+
 function defaultProxy(): NangoProxy {
   const nango = getNangoClient()
-  return (args) => nango.proxy(args as never) as Promise<{ data: unknown }>
+  return (args) =>
+    withTimeout(
+      nango.proxy(args as never) as Promise<{ data: unknown }>,
+      proxyTimeoutMs(),
+      `Nango proxy ${args.method} ${args.endpoint}`,
+    )
 }
 
 // ── Adapters ─────────────────────────────────────────────────────────────────
