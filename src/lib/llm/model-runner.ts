@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
+import { apiLogger } from '@/lib/logger'
 
 export type ToolDefinition = {
   name: string
@@ -258,51 +259,100 @@ export async function generateHeadline(summary: string): Promise<string | null> 
 
 /**
  * One-shot structured-output completion against a JSON schema, used by the
- * natural-language agent builder. Prefers OpenAI (strict json_schema) and falls
- * back to Anthropic; throws only when neither provider is configured. Returns
- * the raw JSON string (caller parses).
+ * natural-language agent builder and the assistant chat. Tries the preferred
+ * provider first and FALLS BACK to the other on availability failures (quota,
+ * auth, overload) — a dead key on one provider must not take the feature down
+ * when the other works. Throws only when every configured provider failed or
+ * none is configured. Returns the raw JSON string (caller parses).
  */
-export async function generateStructured(opts: {
+type StructuredOpts = {
   system: string
   user: string
   schema: Record<string, unknown>
   schemaName: string
   maxTokens?: number
-}): Promise<string> {
-  const wantsClaude = isClaude(DEFAULT_AGENT_MODEL)
-  const useAnthropic = hasAnthropic() && (wantsClaude || !hasOpenAI())
+}
 
-  if (useAnthropic) {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-    const response = await client.messages.create({
-      model: wantsClaude ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL,
-      max_tokens: opts.maxTokens ?? 4096,
-      system: opts.system,
-      messages: [{ role: 'user', content: opts.user }],
-      output_config: { format: { type: 'json_schema', schema: opts.schema } },
-    })
-    return response.content
-      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-      .map((block) => block.text)
-      .join('')
+/**
+ * Availability failures (retryable on the OTHER provider): quota/rate limits,
+ * bad or revoked keys, and provider-side outages. Schema/validation errors are
+ * ours — retrying elsewhere won't help, so they propagate immediately.
+ */
+export function isProviderAvailabilityError(error: unknown): boolean {
+  const status = (error as { status?: unknown })?.status
+  if (typeof status !== 'number') return false
+  return status === 401 || status === 403 || status === 429 || status >= 500
+}
+
+/** Provider order for structured calls: honor the default model's provider, try the other second. */
+export function structuredProviderOrder(input: {
+  defaultModel: string
+  openai: boolean
+  anthropic: boolean
+}): Array<'openai' | 'anthropic'> {
+  const wantsClaude = input.defaultModel.startsWith('claude')
+  const order: Array<'openai' | 'anthropic'> = wantsClaude
+    ? ['anthropic', 'openai']
+    : ['openai', 'anthropic']
+  return order.filter((provider) => (provider === 'openai' ? input.openai : input.anthropic))
+}
+
+async function anthropicStructured(opts: StructuredOpts): Promise<string> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const model = isClaude(DEFAULT_AGENT_MODEL) ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL
+  const response = await client.messages.create({
+    model,
+    max_tokens: opts.maxTokens ?? 4096,
+    system: opts.system,
+    messages: [{ role: 'user', content: opts.user }],
+    output_config: { format: { type: 'json_schema', schema: opts.schema } },
+  })
+  return response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('')
+}
+
+async function openaiStructured(opts: StructuredOpts): Promise<string> {
+  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  const response = await client.chat.completions.create({
+    model: isClaude(DEFAULT_AGENT_MODEL) ? 'gpt-4o' : DEFAULT_AGENT_MODEL,
+    max_tokens: opts.maxTokens ?? 4096,
+    messages: [
+      { role: 'system', content: opts.system },
+      { role: 'user', content: opts.user },
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
+    },
+  })
+  return response.choices[0]?.message?.content || ''
+}
+
+export async function generateStructured(opts: StructuredOpts): Promise<string> {
+  const order = structuredProviderOrder({
+    defaultModel: DEFAULT_AGENT_MODEL,
+    openai: hasOpenAI(),
+    anthropic: hasAnthropic(),
+  })
+  if (order.length === 0) {
+    throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
   }
 
-  if (hasOpenAI()) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-    const response = await client.chat.completions.create({
-      model: wantsClaude ? 'gpt-4o' : DEFAULT_AGENT_MODEL,
-      max_tokens: opts.maxTokens ?? 4096,
-      messages: [
-        { role: 'system', content: opts.system },
-        { role: 'user', content: opts.user },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
-      },
-    })
-    return response.choices[0]?.message?.content || ''
+  let lastError: unknown
+  for (const provider of order) {
+    try {
+      return provider === 'anthropic' ? await anthropicStructured(opts) : await openaiStructured(opts)
+    } catch (error) {
+      lastError = error
+      if (!isProviderAvailabilityError(error)) throw error
+      apiLogger.warn('generateStructured: provider unavailable, trying fallback', {
+        provider,
+        status: (error as { status?: number }).status,
+        error: error instanceof Error ? error.message.slice(0, 200) : String(error),
+      })
+    }
   }
-
-  throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
+  throw lastError
 }
