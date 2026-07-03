@@ -18,6 +18,7 @@ import {
   Play,
   Plug,
   Plus,
+  Radio,
   Search,
   Server,
   Trash2,
@@ -77,6 +78,7 @@ export function notifyAgentsChanged() {
 
 const navigation = [
   { name: 'Home', href: '/dashboard', icon: Brain },
+  { name: 'Signals', href: '/signals', icon: Radio },
   { name: 'Integrations', href: '/integrations', icon: Plug },
   { name: 'Explore', href: '/templates', icon: FileText },
   { name: 'MCP Servers', href: '/connections', icon: Server },
