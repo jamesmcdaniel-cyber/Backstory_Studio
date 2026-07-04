@@ -776,10 +776,15 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
       for (const call of turnResult.toolCalls) {
         if (call.name === ASK_USER_TOOL.name) {
-          if (pendingAsk) {
+          // At most ONE suspension per turn (a question OR an approval). A run
+          // suspends by leaving exactly one tool_use id unresolved (it becomes
+          // pendingQuestion.toolCallId, resolved on resume); a second unresolved
+          // id would orphan a tool call and make the persisted transcript
+          // unreplayable. So any further ask/approval gets a covering result.
+          if (pendingAsk || pendingApproval) {
             results.push({
               toolCallId: call.id,
-              content: JSON.stringify({ error: 'Ask one question at a time. Fold this into your pending question.' }),
+              content: JSON.stringify({ error: 'You can only pause once per turn (a question or an approval is already pending). Ask again after it resolves.' }),
               isError: true,
             })
             continue
@@ -828,15 +833,18 @@ export async function runAgentExecution(data: AgentExecutionJob) {
           // result injected, so the agent acts on the real outcome (rather than
           // continuing blind on a "queued" placeholder).
           if (requiresApproval(agentMetadata, binding.provider)) {
-            if (pendingApproval) {
-              // One approval at a time (mirrors ask_user) — re-propose after.
+            // Only ONE suspension per turn: if a question or another approval is
+            // already pending, defer this one with a covering result (and do NOT
+            // create an approval row, so nothing is orphaned) — the model
+            // re-proposes it once the run resumes.
+            if (pendingApproval || pendingAsk) {
               await prisma.workflowStep.update({
                 where: { id: step.id },
                 data: { status: 'succeeded', output: jsonValue({ deferred: true }), completedAt: new Date() },
               })
               results.push({
                 toolCallId: call.id,
-                content: JSON.stringify({ status: 'deferred', message: 'Another action is awaiting approval; re-propose this once it resolves.' }),
+                content: JSON.stringify({ status: 'deferred', message: 'Another action is already pending this turn; re-propose this once it resolves.' }),
               })
               continue
             }
