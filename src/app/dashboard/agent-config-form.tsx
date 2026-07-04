@@ -280,6 +280,11 @@ export function AgentConfigForm({
       .catch(() => {})
   }, [active])
 
+  // Populate the draft ONLY when the edited agent/template identity changes (or
+  // the form activates) — NOT on every editingAgent object-reference change. The
+  // dashboard polls agents every 10s, so depending on the object here would
+  // overwrite the user's in-progress edits (name/icon/instructions) each poll,
+  // making edits appear to "not save". Keying on the id preserves the draft.
   useEffect(() => {
     const source = editingAgent || template
     setDraft(source ? {
@@ -298,7 +303,8 @@ export function AgentConfigForm({
       // browser's resolved zone so daily/weekly times match the user's clock.
       schedule: { ...emptyDraft.schedule, timezone: browserTimezone() },
     })
-  }, [editingAgent, active, template])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingAgent?.id, template?.id, active])
 
   const toggleIntegration = (label: string) => {
     const next = draft.integrations.includes(label)

@@ -86,7 +86,11 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     ...(draft.schedule.cron ? { cron: draft.schedule.cron } : {}),
   }
 
-  const icon = draft.icon?.trim() || ''
+  // The model sometimes returns a word (e.g. "test") instead of an emoji for
+  // `icon`; that then shows as broken text. Accept it only if it looks like an
+  // emoji (no ASCII letters/digits, short), else fall back to a default mark.
+  const rawIcon = draft.icon?.trim() || ''
+  const icon = rawIcon && !/[A-Za-z0-9]/.test(rawIcon) && [...rawIcon].length <= 4 ? rawIcon : '🤖'
   const enrichedDraft = { ...draft, icon, schedule, model: DEFAULT_AGENT_MODEL, priority: 'medium', visibility: 'shared' as const, folder: null }
   if (!create) {
     return { success: true, draft: enrichedDraft }
