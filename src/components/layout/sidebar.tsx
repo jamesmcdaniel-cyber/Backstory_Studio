@@ -142,11 +142,19 @@ export function Sidebar() {
 
   useEffect(() => {
     load().catch(() => undefined)
-    const interval = window.setInterval(() => load().catch(() => undefined), 30000)
+    // Poll only while the tab is visible; refresh on return to the tab.
+    const interval = window.setInterval(() => {
+      if (!document.hidden) load().catch(() => undefined)
+    }, 30000)
+    const onVisible = () => {
+      if (!document.hidden) load().catch(() => undefined)
+    }
     const onChanged = () => load().catch(() => undefined)
+    document.addEventListener('visibilitychange', onVisible)
     window.addEventListener(AGENTS_CHANGED_EVENT, onChanged)
     return () => {
       window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener(AGENTS_CHANGED_EVENT, onChanged)
     }
   }, [load])

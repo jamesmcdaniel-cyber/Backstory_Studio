@@ -21,6 +21,16 @@ function copyCookies(source: NextResponse, target: NextResponse) {
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request })
+  const pathname = request.nextUrl.pathname
+  const isApi = pathname.startsWith('/api/')
+
+  // API routes authenticate themselves (withAuthenticatedApi → getUser), and a
+  // route handler CAN persist a refreshed session cookie (cookies().set works
+  // there) — so running getUser() here too was a fully redundant second
+  // Supabase Auth network round-trip on EVERY API call. Skip it: middleware
+  // auth is only for page navigations (login redirects + session refresh).
+  if (isApi) return response
+
   const { url, anonKey } = getSupabaseConfig()
   const supabase = createServerClient(url, anonKey, {
     cookies: {
@@ -34,8 +44,6 @@ export async function updateSession(request: NextRequest) {
   })
 
   const { data: { user } } = await supabase.auth.getUser()
-  const pathname = request.nextUrl.pathname
-  const isApi = pathname.startsWith('/api/')
   const isAuthPage = pathname.startsWith('/auth/')
 
   // Production is SSO/invite-only: password signup is disabled unless

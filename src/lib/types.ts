@@ -25,7 +25,8 @@ export type Activity = {
   agentTaskId?: string | null
   agentType: string
   status: string
-  input: any
+  /** Omitted from the polled activity list (lean payload); present on run detail. */
+  input?: any
   output?: any
   error?: string | null
   metadata?: any

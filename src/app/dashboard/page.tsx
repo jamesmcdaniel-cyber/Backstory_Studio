@@ -55,7 +55,7 @@ function AgentHQ() {
   const load = useCallback(async () => {
     const [agentResponse, activityResponse] = await Promise.all([
       fetch('/api/agents', { cache: 'no-store' }),
-      fetch('/api/agents/activity?limit=100', { cache: 'no-store' }),
+      fetch('/api/agents/activity?limit=50', { cache: 'no-store' }),
     ])
     if (agentResponse.ok) {
       const data = await agentResponse.json()
@@ -83,11 +83,20 @@ function AgentHQ() {
 
   useEffect(() => {
     load().catch(() => setLoading(false))
-    const interval = window.setInterval(() => load().catch(() => undefined), 10000)
+    // Poll only while the tab is visible — a hidden tab generating 2 API calls
+    // every 10s per user is pure load for nothing. Refresh on return instead.
+    const interval = window.setInterval(() => {
+      if (!document.hidden) load().catch(() => undefined)
+    }, 10000)
+    const onVisible = () => {
+      if (!document.hidden) load().catch(() => undefined)
+    }
     const onChanged = () => load().catch(() => undefined)
+    document.addEventListener('visibilitychange', onVisible)
     window.addEventListener(AGENTS_CHANGED_EVENT, onChanged)
     return () => {
       window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener(AGENTS_CHANGED_EVENT, onChanged)
     }
   }, [load])

@@ -9,6 +9,23 @@ function findDbUser(supabaseId: string) {
   })
 }
 
+// Per-instance cache of the supabaseId → app user (+org) lookup. This query
+// runs on EVERY authenticated API request via requireAuthContext; the row
+// changes rarely (role/org edits), so a short TTL removes a DB round-trip from
+// the hot path on warm instances while bounding staleness to one minute.
+type DbUserRow = Awaited<ReturnType<typeof findDbUser>>
+const DB_USER_TTL_MS = 60_000
+const dbUserCache = new Map<string, { row: NonNullable<DbUserRow>; ts: number }>()
+
+async function findDbUserCached(supabaseId: string): Promise<DbUserRow> {
+  const hit = dbUserCache.get(supabaseId)
+  if (hit && Date.now() - hit.ts < DB_USER_TTL_MS) return hit.row
+  const row = await findDbUser(supabaseId)
+  if (row) dbUserCache.set(supabaseId, { row, ts: Date.now() })
+  else dbUserCache.delete(supabaseId)
+  return row
+}
+
 // Self-healing bootstrap: the handle_new_user Postgres trigger is optional
 // infra that may never be installed, so provision the app user + organization
 // on first authenticated request when they don't exist yet.
@@ -48,7 +65,7 @@ export async function getAuthWithUser() {
 
   if (error || !user) return null
 
-  const dbUser = (await findDbUser(user.id)) ?? (await provisionUser(user))
+  const dbUser = (await findDbUserCached(user.id)) ?? (await provisionUser(user))
 
   return {
     user,

@@ -6,9 +6,10 @@ import { PROVIDERS, PROVIDER_CAPABILITIES, type MCPProvider } from './provider-c
 export type ConnectionStatus = 'pending_auth' | 'active' | 'error' | 'not_connected'
 
 // getConnectionStatuses hits the Klavis API live (status + tool list per
-// connection). That's slow and re-run on every integrations page load, so cache
-// the assembled result briefly per (org,user). Busted on connect/disconnect.
-const MCP_STATUS_TTL_MS = 45_000
+// connection) — measured ~2.4s cold. It's re-run on every integrations page
+// load, so cache the assembled result per (org,user). A long TTL is safe:
+// the status only changes on connect/disconnect, which bust this key.
+const MCP_STATUS_TTL_MS = 10 * 60 * 1000
 const mcpStatusKey = (organizationId: string, userId: string) => `mcpstatus:${organizationId}:${userId}`
 export async function bustConnectionStatuses(organizationId: string, userId: string): Promise<void> {
   await cacheDelete(mcpStatusKey(organizationId, userId))
@@ -192,7 +193,13 @@ export async function getConnectionStatuses(
   const result = PROVIDERS.map((provider) => byProvider.get(provider) || { provider, status: 'not_connected' as const })
 
   // Don't pin a transient Klavis outage: only cache a clean (no-error) result.
-  if (!result.some((r) => r.status === 'error')) await cacheSet(cacheKey, result, MCP_STATUS_TTL_MS)
+  // Adaptive TTL: while any connection is mid-OAuth (pending_auth), its flip to
+  // active happens on Klavis's side (no API of ours is hit), so keep the cache
+  // short; a stable result holds for the full TTL. Errors are never cached.
+  const hasPending = result.some((r) => r.status === 'pending_auth')
+  if (!result.some((r) => r.status === 'error')) {
+    await cacheSet(cacheKey, result, hasPending ? 30_000 : MCP_STATUS_TTL_MS)
+  }
   return result
 }
 

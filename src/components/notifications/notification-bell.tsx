@@ -52,8 +52,18 @@ export function NotificationBell() {
 
   useEffect(() => {
     load().catch(() => {})
-    const timer = window.setInterval(() => load().catch(() => {}), 15000)
-    return () => window.clearInterval(timer)
+    // Poll only while the tab is visible; refresh on return to the tab.
+    const timer = window.setInterval(() => {
+      if (!document.hidden) load().catch(() => {})
+    }, 15000)
+    const onVisible = () => {
+      if (!document.hidden) load().catch(() => {})
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [load])
 
   useEffect(() => {
