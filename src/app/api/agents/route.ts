@@ -5,6 +5,7 @@ import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { readAgentMetadata } from '@/lib/agents/metadata'
 import { indexAgent, removeAgentFromGraph } from '@/lib/rag/indexer'
+import { syncAgentConnectors } from '@/lib/connectors/agent-connectors'
 
 /** Best-effort graph-RAG indexing of an agent node (gated on embeddings). */
 function indexAgentRow(agent: { id: string; organizationId: string; objective: string; description: string; metadata: unknown; userId?: string | null; visibility?: string }): Promise<void> {
@@ -103,6 +104,9 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       },
     },
   })
+  // Project the selection into typed connector bindings (await: a fresh agent
+  // has no rows yet, so the very next run must see them, not the fallback).
+  await syncAgentConnectors(agent.id, auth.organizationId, data.integrations)
   void indexAgentRow(agent)
   return { success: true, agent: serializeAgent(agent) }
 })
@@ -134,6 +138,11 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       },
     },
   })
+  // Re-sync typed connector bindings when the selection changed. Await so a
+  // run enqueued right after the edit reads the updated bindings.
+  if (body.integrations !== undefined) {
+    await syncAgentConnectors(agent.id, auth.organizationId, body.integrations)
+  }
   void indexAgentRow(agent)
   return { success: true, agent: serializeAgent(agent) }
 })

@@ -20,6 +20,7 @@ import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integra
 import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailTools } from '@/lib/integrations/email'
 import { BUILTIN_CONNECTORS, nangoConnector, isSelected } from '@/lib/connectors/registry'
+import { resolveAgentConnectorKeys } from '@/lib/connectors/agent-connectors'
 import { notify } from '@/lib/notifications/service'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 import { cacheGet, cacheSet } from '@/lib/cache'
@@ -680,7 +681,9 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       )
     }
 
-    const providers = Array.isArray(agentMetadata.integrations) ? agentMetadata.integrations.map(String) : []
+    // Typed connector bindings gate tool loading; falls back to
+    // metadata.integrations for agents created before the FK existed.
+    const providers = await resolveAgentConnectorKeys(agent.id, agentMetadata)
     const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
     const toolQuery = [agent.objective, data.input].filter(Boolean).join('\n')
     const { tools, bindings } = await loadTools(organizationId, providers, userId, toolQuery)

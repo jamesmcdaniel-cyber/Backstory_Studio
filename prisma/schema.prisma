@@ -105,10 +105,38 @@ model AgentTask {
   signalSubscriptions SignalSubscription[]
   chatMessages AgentChatMessage[]
   chatSessions AgentChatSession[]
+  connectors   AgentConnector[]
 
   @@index([organizationId, status])
   @@index([userId])
   @@map("agent_tasks")
+}
+
+/// Typed binding between an agent and a connector it uses. Replaces matching
+/// fuzzy strings against the agent's `metadata.integrations` JSON with real
+/// rows: a canonical connector key, its plane (kind), and — for a per-org MCP
+/// connection — a foreign key with referential integrity (deleting the
+/// connection nulls the binding instead of leaving a dangling string).
+model AgentConnector {
+  id              String   @id @default(cuid())
+  agentTaskId     String
+  organizationId  String   @db.Uuid
+  /// Canonical selection key (registry key, Klavis agentType, or connection name).
+  connectorKey    String
+  /// Plane: 'builtin' | 'nango' | 'backstory' | 'klavis' | 'mcp' | 'external'.
+  kind            String   @default("external")
+  /// Optional FK to a specific per-org MCP connection this binding targets.
+  mcpConnectionId String?
+  config          Json     @default("{}")
+  createdAt       DateTime @default(now())
+
+  agentTask     AgentTask      @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
+  mcpConnection McpConnection? @relation(fields: [mcpConnectionId], references: [id], onDelete: SetNull)
+
+  @@unique([agentTaskId, connectorKey])
+  @@index([organizationId])
+  @@index([mcpConnectionId])
+  @@map("agent_connectors")
 }
 
 // Agent-scoped assistant chat (persistent per agent + user, not per execution).
@@ -498,6 +526,7 @@ model McpConnection {
   updatedAt      DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agentBindings AgentConnector[]
 
   @@index([organizationId, isActive])
   @@map("mcp_connections")
