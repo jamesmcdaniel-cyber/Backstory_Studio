@@ -28,21 +28,25 @@ export function getRedisConnection() {
 
 export const workerConfig = {
   concurrency: Number(process.env.AGENT_WORKER_CONCURRENCY) || 3,
-  // Agent runs are long (multi-turn) and have external side effects (emails,
-  // Slack posts). Hold the lock long enough that a live run isn't declared
-  // stalled, and never re-run a stalled job — a half-finished run must not be
-  // replayed from the top. runAgentExecution is also idempotent per execution.
+  // Agent runs are long (multi-turn) with external side effects. The lock is
+  // held long enough that a live run isn't declared stalled. A retry/stall
+  // recovery is now SAFE because runAgentExecution checkpoints the transcript
+  // per turn and resumes from the last completed turn (not from the top), and
+  // already-completed tool calls are replayed from the step ledger instead of
+  // re-fired — so we allow one stall recovery.
   lockDuration: 300_000,
-  maxStalledCount: 0,
+  maxStalledCount: 1,
 } satisfies Partial<WorkerOptions>
 
 export function createQueue(name: string, overrides: Partial<QueueOptions> = {}) {
   return new Queue(name, {
     connection: getRedisConnection(),
     defaultJobOptions: {
-      // No automatic retries: a retry replays the whole tool loop and re-fires
-      // side effects. Failures surface in the UI where a user can re-run.
-      attempts: 1,
+      // One retry: durable resume means a retry continues from the last
+      // checkpointed turn and replays completed side effects as no-ops, so a
+      // transient failure recovers instead of dead-lettering the whole run.
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 2_000 },
       removeOnComplete: 100,
       removeOnFail: 100,
     },

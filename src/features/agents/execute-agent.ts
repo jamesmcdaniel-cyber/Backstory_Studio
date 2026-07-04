@@ -1,4 +1,5 @@
 import type { Job } from 'bullmq'
+import { createHash } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
@@ -98,6 +99,31 @@ async function cachedToolDiscovery<T>(organizationId: string, serverUrl: string,
 
 function metadataOf(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {}
+}
+
+// ── Idempotency ledger (durable resume) ──────────────────────────────────────
+// A tool call is keyed by its node + a stable hash of its input. On resume, a
+// re-issued call whose key matches an already-succeeded step replays that step's
+// stored output instead of re-executing (and re-firing side effects).
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  const obj = value as Record<string, unknown>
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`
+}
+
+function toolStepKey(node: string, input: unknown): string {
+  return `${node}:${createHash('sha256').update(stableStringify(input)).digest('hex')}`
+}
+
+async function loadCompletedToolSteps(executionId: string): Promise<Map<string, unknown>> {
+  const steps = await prisma.workflowStep.findMany({
+    where: { executionId, status: 'succeeded' },
+    select: { node: true, input: true, output: true },
+  })
+  const map = new Map<string, unknown>()
+  for (const step of steps) map.set(toolStepKey(step.node, step.input), step.output)
+  return map
 }
 
 async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null) {
@@ -422,16 +448,25 @@ export async function runAgentExecution(data: AgentExecutionJob) {
   const resuming = Boolean(data.resume)
   if (resuming && !queuedExecution) throw new Error('Resume requested without an execution')
 
-  // Idempotency guard: a fresh run may only start from a `pending` row. If a
-  // duplicate delivery or (despite maxStalledCount:0) a re-queue hands us an
-  // execution that already started, finished, or failed, do not replay it —
-  // that would re-fire every side effect from the top.
+  // A re-delivered execution: skip terminal/waiting ones, but RESUME a run that
+  // was interrupted mid-flight (status 'running' with a checkpointed transcript)
+  // from its last completed turn instead of restarting from the top and
+  // re-firing every side effect.
+  let resumeFromCrash = false
   if (queuedExecution && !resuming && queuedExecution.status !== 'pending') {
-    return { status: queuedExecution.status, skipped: true as const }
+    if (queuedExecution.status === 'running' && Array.isArray(queuedExecution.transcript)) {
+      resumeFromCrash = true
+    } else {
+      return { status: queuedExecution.status, skipped: true as const }
+    }
   }
 
   let transcript: unknown[]
   let pendingResults: ToolResult[] | null = null
+  let startTurn = 0
+  // On any resume, already-succeeded tool steps form an idempotency ledger so a
+  // replayed call reuses its stored output instead of re-firing.
+  let completedToolSteps = new Map<string, unknown>()
 
   if (resuming && queuedExecution) {
     const executionMetadata = metadataOf(queuedExecution.metadata)
@@ -440,6 +475,8 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       throw new Error('Execution is not waiting for input')
     }
     transcript = queuedExecution.transcript as unknown[]
+    startTurn = Number(executionMetadata.turnCursor) || 0
+    completedToolSteps = await loadCompletedToolSteps(queuedExecution.id)
     const reply = data.reply?.trim() || 'The user did not provide an answer. Use your best judgment.'
     pendingResults = [
       ...(pending.collectedResults || []),
@@ -452,6 +489,11 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       })
     }
     await recordEvent(queuedExecution.id, pending.stepId || null, 'user.replied', { answer: reply })
+  } else if (resumeFromCrash && queuedExecution) {
+    transcript = queuedExecution.transcript as unknown[]
+    startTurn = Number(metadataOf(queuedExecution.metadata).turnCursor) || 0
+    completedToolSteps = await loadCompletedToolSteps(queuedExecution.id)
+    await recordEvent(queuedExecution.id, null, 'run.resumed', { fromTurn: startTurn })
   } else {
     transcript = runner.start(data.input || agent.objective)
   }
@@ -552,7 +594,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const monthlyLimit = budget.limit
     let finalText = ''
 
-    for (let turn = 0; turn < maxTurns; turn += 1) {
+    for (let turn = startTurn; turn < maxTurns; turn += 1) {
       const turnResult = await runner.next(transcript, system, [...tools, ASK_USER_TOOL])
       usage.inputTokens += turnResult.usage.inputTokens
       usage.outputTokens += turnResult.usage.outputTokens
@@ -620,6 +662,21 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
         try {
           if (!binding) throw new Error(`Tool binding not found: ${call.name}`)
+
+          // Durable replay: if this exact call already succeeded in a prior
+          // attempt of this run (crash/retry), reuse its stored output instead
+          // of re-executing and re-firing side effects.
+          const replayKey = toolStepKey(step.node, call.input)
+          if (completedToolSteps.has(replayKey)) {
+            const cached = completedToolSteps.get(replayKey)
+            await prisma.workflowStep.update({
+              where: { id: step.id },
+              data: { status: 'succeeded', output: jsonValue(cached), completedAt: new Date() },
+            })
+            await recordEvent(execution.id, step.id, 'tool.replayed', { name: step.node })
+            results.push({ toolCallId: call.id, content: JSON.stringify(cached) })
+            continue
+          }
 
           // Approval gate: if this agent requires approval and the tool is an
           // outbound write, queue it instead of executing — an approver runs
@@ -701,6 +758,8 @@ export async function runAgentExecution(data: AgentExecutionJob) {
             executionTime: { increment: Date.now() - segmentStart },
             metadata: jsonValue({
               ...executionMetadata,
+              // Resume continues at the next turn (the reply completes this one).
+              turnCursor: turn + 1,
               pendingQuestion: {
                 toolCallId: pendingAsk.toolCallId,
                 question: pendingAsk.question,
@@ -724,6 +783,17 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       }
 
       runner.appendToolResults(transcript, results)
+
+      // Durable checkpoint at a clean turn boundary (results appended → the
+      // stored transcript is a valid, resumable conversation). A crash/retry
+      // after this resumes from turn+1 instead of losing prior turns.
+      await prisma.agentExecution.update({
+        where: { id: execution.id },
+        data: {
+          transcript: jsonValue(transcript),
+          metadata: jsonValue({ ...executionMetadata, turnCursor: turn + 1 }),
+        },
+      })
     }
 
     const summary = finalText || 'Agent reached the maximum number of tool-call turns.'
