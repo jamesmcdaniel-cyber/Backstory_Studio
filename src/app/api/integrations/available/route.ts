@@ -1,8 +1,11 @@
 import { prisma } from '@/lib/prisma'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
-import { slackConfigured } from '@/lib/integrations/slack'
-import { emailConfigured } from '@/lib/integrations/email'
 import { granolaConfigured } from '@/lib/integrations/granola'
+import {
+  BUILTIN_CONNECTORS,
+  fromNangoProviderKey,
+  fromKlavisAgentType,
+} from '@/lib/connectors/registry'
 
 /**
  * GET /api/integrations/available
@@ -11,8 +14,9 @@ import { granolaConfigured } from '@/lib/integrations/granola'
  * create-agent form shows what's ACTUALLY configured (not just env builtins):
  *  - `tools`: a deduped, logo-tagged list merging built-ins (Slack/Email/
  *    Granola), Nango-connected accounts, and Klavis-provisioned MCP servers.
- *    Each `key` is the string the agent runtime matches (loadTools): built-ins
- *    and Nango by capability regex (/slack/i, /gmail/i, …), Klavis by agentType.
+ *    Each `key` is the string the agent runtime matches — both this endpoint
+ *    and loadTools derive keys/matching from the shared connector registry, so
+ *    a chip the UI shows is a chip the runtime activates.
  *  - `connections`: the org's custom Backstory-MCP connections (id + name),
  *    which the runtime loads for every agent regardless of selection.
  *
@@ -22,32 +26,6 @@ import { granolaConfigured } from '@/lib/integrations/granola'
  */
 
 type ToolChip = { key: string; label: string; slug: string; connected: boolean }
-
-const titleCase = (s: string) =>
-  s.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-
-// Nango providerConfigKey → a runtime-matchable key + display + Simple Icons slug.
-function fromNango(providerConfigKey: string): { key: string; label: string; slug: string } {
-  const k = providerConfigKey.toLowerCase()
-  if (k.includes('slack')) return { key: 'slack', label: 'Slack', slug: 'slack' }
-  if (k.includes('mail') || k.includes('gmail')) return { key: 'gmail', label: 'Gmail', slug: 'gmail' }
-  if (k.includes('salesforce')) return { key: 'salesforce', label: 'Salesforce', slug: 'salesforce' }
-  return { key: k, label: titleCase(k), slug: k }
-}
-
-// Klavis agentType (e.g. "GITHUB", "GOOGLE_DRIVE") → key (lowercase, matches the
-// runtime's agentType.toUpperCase() check) + display + Simple Icons slug.
-const KLAVIS_LABELS: Record<string, string> = {
-  github: 'GitHub', google_drive: 'Google Drive', google_sheets: 'Google Sheets',
-  hubspot: 'HubSpot', clickup: 'ClickUp',
-}
-const KLAVIS_SLUGS: Record<string, string> = {
-  google_drive: 'googledrive', google_sheets: 'googlesheets', monday: 'mondaydotcom',
-}
-function fromKlavis(agentType: string): { key: string; label: string; slug: string } {
-  const key = agentType.toLowerCase()
-  return { key, label: KLAVIS_LABELS[key] ?? titleCase(key), slug: KLAVIS_SLUGS[key] ?? key }
-}
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const organizationId = auth.organizationId
@@ -78,16 +56,19 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
     else byKey.set(id, chip)
   }
 
-  add({ key: 'Slack', label: 'Slack', slug: 'slack', connected: slackConfigured() })
-  add({ key: 'Email', label: 'Email', slug: 'resend', connected: emailConfigured() })
-  add({ key: 'Granola', label: 'Granola', slug: 'granola', connected: hasGranola })
+  // Built-in delivery/meeting planes, straight from the registry. Granola's
+  // availability is per-org (an API key), the rest come from env via available().
+  for (const c of BUILTIN_CONNECTORS) {
+    if (c.kind !== 'builtin') continue
+    add({ key: c.key, label: c.label, slug: c.slug, connected: c.key === 'Granola' ? hasGranola : c.available() })
+  }
 
   for (const c of nango) {
-    const m = fromNango(c.providerConfigKey)
+    const m = fromNangoProviderKey(c.providerConfigKey)
     add({ ...m, connected: true })
   }
   for (const a of klavis) {
-    const m = fromKlavis(a.agentType)
+    const m = fromKlavisAgentType(a.agentType)
     add({ ...m, connected: true })
   }
 

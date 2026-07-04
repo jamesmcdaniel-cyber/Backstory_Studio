@@ -16,8 +16,9 @@ import { indexExecution } from '@/lib/rag/indexer'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
-import { SlackToolClient, slackConfigured, slackTools } from '@/lib/integrations/slack'
-import { EmailToolClient, emailConfigured, emailTools } from '@/lib/integrations/email'
+import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
+import { EmailToolClient, emailTools } from '@/lib/integrations/email'
+import { BUILTIN_CONNECTORS, nangoConnector, isSelected } from '@/lib/connectors/registry'
 import { notify } from '@/lib/notifications/service'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 import { cacheGet, cacheSet } from '@/lib/cache'
@@ -351,8 +352,8 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // GRANOLA_API_KEY env fallback) AND the agent's providers list must include
   // an entry matching /granola/i. A failure here must not abort the run or
   // prevent other tools from loading.
-  const hasGranolaProvider = providers.some((p) => /granola/i.test(p))
-  if (hasGranolaProvider) {
+  const granolaConn = BUILTIN_CONNECTORS.find((c) => c.providerId === 'granola')!
+  if (isSelected(granolaConn, providers)) {
     try {
       const granolaKey = await getGranolaApiKey(organizationId)
       if (granolaKey) {
@@ -364,7 +365,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
             description: def.description,
             inputSchema: def.inputSchema,
             binding: { provider: 'granola', serverUrl, toolName: def.name, client },
-            isWrite: false,
+            isWrite: granolaConn.isWrite,
           })
         }
       }
@@ -381,8 +382,8 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // Gate: SLACK_BOT_TOKEN must be set AND the agent's providers list must
   // include an entry matching /slack/i. A failure here must not abort the
   // run or prevent other tools from loading.
-  const hasSlackProvider = providers.some((p) => /slack/i.test(p))
-  if (slackConfigured() && hasSlackProvider) {
+  const slackConn = BUILTIN_CONNECTORS.find((c) => c.kind === 'builtin' && c.providerId === 'slack')!
+  if (slackConn.available() && isSelected(slackConn, providers)) {
     try {
       const client = new SlackToolClient()
       const serverUrl = 'https://slack.com/api'
@@ -392,7 +393,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
           description: def.description,
           inputSchema: def.inputSchema,
           binding: { provider: 'slack', serverUrl, toolName: def.name, client },
-          isWrite: true,
+          isWrite: slackConn.isWrite,
         })
       }
     } catch (error) {
@@ -408,8 +409,8 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // Gate: RESEND_API_KEY must be set AND the agent's providers list must
   // include an entry matching /email/i. A failure here must not abort the
   // run or prevent other tools from loading.
-  const hasEmailProvider = providers.some((p) => /email/i.test(p))
-  if (emailConfigured() && hasEmailProvider) {
+  const emailConn = BUILTIN_CONNECTORS.find((c) => c.providerId === 'email')!
+  if (emailConn.available() && isSelected(emailConn, providers)) {
     try {
       const client = new EmailToolClient()
       const serverUrl = 'https://api.resend.com'
@@ -419,7 +420,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
           description: def.description,
           inputSchema: def.inputSchema,
           binding: { provider: 'email', serverUrl, toolName: def.name, client },
-          isWrite: true,
+          isWrite: emailConn.isWrite,
         })
       }
     } catch (error) {
@@ -438,8 +439,8 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // connection. Failures never abort the run.
   if (nangoConfigured()) {
     for (const spec of DELIVERY_TOOLS) {
-      const requested = providers.some((p) => new RegExp(spec.capability, 'i').test(p))
-      if (!requested) continue
+      const connector = nangoConnector(spec.capability)
+      if (!connector || !isSelected(connector, providers)) continue
       try {
         const connection = await resolveDeliveryConnection(organizationId, spec.capability, ownerUserId)
         if (!connection) continue
@@ -450,8 +451,8 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
           name: toolName('nango', spec.name),
           description: spec.description,
           inputSchema: spec.inputSchema,
-          binding: { provider: `nango:${spec.capability}`, serverUrl: 'nango', toolName: spec.name, client: deliveryClient },
-          isWrite: true,
+          binding: { provider: connector.providerId, serverUrl: 'nango', toolName: spec.name, client: deliveryClient },
+          isWrite: connector.isWrite,
         })
       } catch (error) {
         apiLogger.warn('loadTools: Nango delivery setup failed, skipping capability', {
