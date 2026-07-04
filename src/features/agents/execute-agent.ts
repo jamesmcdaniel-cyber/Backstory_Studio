@@ -128,9 +128,57 @@ async function loadCompletedToolSteps(executionId: string): Promise<Map<string, 
   return map
 }
 
-async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null) {
+// A tool discovered from some plane, before the global cap is applied. `isWrite`
+// marks consequential outbound-delivery tools so they can be reserved a slice of
+// the cap instead of being crowded out by many read tools.
+export type DiscoveredTool = {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
+  binding: ToolBinding
+  isWrite: boolean
+}
+
+const TOOL_CAP = 64
+const WRITE_RESERVE = 16
+
+/**
+ * Apply the global tool cap with a reserved write-tool budget: keep all write
+ * tools (up to WRITE_RESERVE), then fill the rest with reads up to TOOL_CAP,
+ * then any remaining writes. Dedupes by name (first wins). This is the single
+ * place the cap/priority policy lives — previously each plane capped inline, so
+ * write tools (loaded last) were silently dropped once reads filled 64.
+ */
+export function capDiscoveredTools(discovered: DiscoveredTool[], organizationId: string): { tools: ToolDefinition[]; bindings: Map<string, ToolBinding> } {
+  const seen = new Set<string>()
+  const dedupe = (list: DiscoveredTool[]) => list.filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)))
+  const writes = dedupe(discovered.filter((d) => d.isWrite))
+  const reads = dedupe(discovered.filter((d) => !d.isWrite))
+
+  const picked: DiscoveredTool[] = [...writes.slice(0, WRITE_RESERVE)]
+  for (const d of reads) { if (picked.length >= TOOL_CAP) break; picked.push(d) }
+  for (const d of writes.slice(WRITE_RESERVE)) { if (picked.length >= TOOL_CAP) break; picked.push(d) }
+
+  const dropped = writes.length + reads.length - picked.length
+  if (dropped > 0) {
+    apiLogger.warn('loadTools: tool cap reached; some discovered tools not exposed', {
+      organizationId, discovered: writes.length + reads.length, cap: TOOL_CAP, dropped, writesKept: Math.min(writes.length, picked.filter((p) => p.isWrite).length),
+    })
+  }
+
   const tools: ToolDefinition[] = []
   const bindings = new Map<string, ToolBinding>()
+  for (const d of picked) {
+    bindings.set(d.name, d.binding)
+    tools.push({ name: d.name, description: d.description, inputSchema: d.inputSchema })
+  }
+  return { tools, bindings }
+}
+
+async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null) {
+  // Every plane contributes to one list; the cap/priority policy is applied once
+  // at the end (capDiscoveredTools) so write tools aren't crowded out.
+  const discovered: DiscoveredTool[] = []
 
   // ---- Klavis-managed MCP servers ----------------------------------------
   const hasBackstoryProvider = providers.some((p) => /backstory/i.test(p))
@@ -151,7 +199,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
     // failing discovery for one provider degrades to empty, never aborts the
     // run. Bindings are built afterward, sequentially, so dedup + order stay
     // deterministic regardless of which discovery resolved first.
-    const discovered = await Promise.all(agents.map(async (agent) => {
+    const klavisResults = await Promise.all(agents.map(async (agent) => {
       const provider = String(agent.agentType).toLowerCase()
       try {
         const available = await cachedToolDiscovery(organizationId, agent.mcpServerUrl, () => client.getServerTools(agent.mcpServerUrl))
@@ -164,20 +212,19 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
       }
     }))
 
-    for (const { provider, serverUrl, available } of discovered) {
+    for (const { provider, serverUrl, available } of klavisResults) {
       if (available.length > 20) {
         apiLogger.warn('loadTools: per-provider tool cap reached; some tools not exposed to the agent', {
           provider, organizationId, discovered: available.length, cap: 20, dropped: available.length - 20,
         })
       }
       for (const tool of available.slice(0, 20)) {
-        const name = toolName(provider, tool.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, { provider, serverUrl, toolName: tool.name, client })
-        tools.push({
-          name,
+        discovered.push({
+          name: toolName(provider, tool.name),
           description: tool.description || `${tool.name} via ${provider}`,
           inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+          binding: { provider, serverUrl, toolName: tool.name, client },
+          isWrite: false,
         })
       }
     }
@@ -210,16 +257,15 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         }
         const available = await cachedToolDiscovery(organizationId, paiClient.serverUrl, () => paiClient!.listTools())
         for (const tool of available.slice(0, 20)) {
-          const name = toolName('backstory', tool.name)
-          if (bindings.has(name)) continue
-          bindings.set(name, { provider: 'backstory', serverUrl: paiClient.serverUrl, toolName: tool.name, client: adapter })
-          tools.push({
-            name,
+          discovered.push({
+            name: toolName('backstory', tool.name),
             description: tool.description || `${tool.name} via People.ai`,
             inputSchema:
               tool.inputSchema && typeof tool.inputSchema === 'object'
                 ? (tool.inputSchema as Record<string, unknown>)
                 : { type: 'object', properties: {} },
+            binding: { provider: 'backstory', serverUrl: paiClient.serverUrl, toolName: tool.name, client: adapter },
+            isWrite: false,
           })
         }
       } else if (backstoryMcpConfigured()) {
@@ -230,13 +276,12 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         const backstoryClient = new BackstoryMcpClient()
         const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
         for (const tool of available.slice(0, 20)) {
-          const name = toolName('backstory', tool.name)
-          if (bindings.has(name)) continue
-          bindings.set(name, { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient })
-          tools.push({
-            name,
+          discovered.push({
+            name: toolName('backstory', tool.name),
             description: tool.description || `${tool.name} via backstory`,
             inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+            binding: { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient },
+            isWrite: false,
           })
         }
       }
@@ -290,14 +335,12 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   for (const entry of orgMcp) {
     if (!entry) continue
     for (const tool of entry.available.slice(0, 20)) {
-      if (tools.length >= 64) break
-      const name = toolName(entry.slug, tool.name)
-      if (bindings.has(name)) continue
-      bindings.set(name, { provider: entry.slug, serverUrl: entry.serverUrl, toolName: tool.name, client: entry.client })
-      tools.push({
-        name,
+      discovered.push({
+        name: toolName(entry.slug, tool.name),
         description: tool.description || `${tool.name} via ${entry.name}`,
         inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+        binding: { provider: entry.slug, serverUrl: entry.serverUrl, toolName: tool.name, client: entry.client },
+        isWrite: false,
       })
     }
   }
@@ -315,11 +358,13 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         const client = new GranolaToolClient(granolaKey.apiKey)
         const serverUrl = 'https://public-api.granola.ai/v1'
         for (const def of granolaTools()) {
-          if (tools.length >= 64) break
-          const name = toolName('granola', def.name)
-          if (bindings.has(name)) continue
-          bindings.set(name, { provider: 'granola', serverUrl, toolName: def.name, client })
-          tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+          discovered.push({
+            name: toolName('granola', def.name),
+            description: def.description,
+            inputSchema: def.inputSchema,
+            binding: { provider: 'granola', serverUrl, toolName: def.name, client },
+            isWrite: false,
+          })
         }
       }
     } catch (error) {
@@ -341,11 +386,13 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
       const client = new SlackToolClient()
       const serverUrl = 'https://slack.com/api'
       for (const def of slackTools()) {
-        if (tools.length >= 64) break
-        const name = toolName('slack', def.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, { provider: 'slack', serverUrl, toolName: def.name, client })
-        tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+        discovered.push({
+          name: toolName('slack', def.name),
+          description: def.description,
+          inputSchema: def.inputSchema,
+          binding: { provider: 'slack', serverUrl, toolName: def.name, client },
+          isWrite: true,
+        })
       }
     } catch (error) {
       apiLogger.warn('loadTools: Slack tool setup failed, skipping provider', {
@@ -366,11 +413,13 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
       const client = new EmailToolClient()
       const serverUrl = 'https://api.resend.com'
       for (const def of emailTools()) {
-        if (tools.length >= 64) break
-        const name = toolName('email', def.name)
-        if (bindings.has(name)) continue
-        bindings.set(name, { provider: 'email', serverUrl, toolName: def.name, client })
-        tools.push({ name, description: def.description, inputSchema: def.inputSchema })
+        discovered.push({
+          name: toolName('email', def.name),
+          description: def.description,
+          inputSchema: def.inputSchema,
+          binding: { provider: 'email', serverUrl, toolName: def.name, client },
+          isWrite: true,
+        })
       }
     } catch (error) {
       apiLogger.warn('loadTools: Email tool setup failed, skipping provider', {
@@ -388,19 +437,21 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // connection. Failures never abort the run.
   if (nangoConfigured()) {
     for (const spec of DELIVERY_TOOLS) {
-      if (tools.length >= 64) break
       const requested = providers.some((p) => new RegExp(spec.capability, 'i').test(p))
       if (!requested) continue
       try {
         const connection = await resolveDeliveryConnection(organizationId, spec.capability, ownerUserId)
         if (!connection) continue
-        const name = toolName('nango', spec.name)
-        if (bindings.has(name)) continue
         const deliveryClient: McpToolClient = {
           executeTool: (_serverUrl, _toolName, args) => spec.run(connection, args),
         }
-        bindings.set(name, { provider: `nango:${spec.capability}`, serverUrl: 'nango', toolName: spec.name, client: deliveryClient })
-        tools.push({ name, description: spec.description, inputSchema: spec.inputSchema })
+        discovered.push({
+          name: toolName('nango', spec.name),
+          description: spec.description,
+          inputSchema: spec.inputSchema,
+          binding: { provider: `nango:${spec.capability}`, serverUrl: 'nango', toolName: spec.name, client: deliveryClient },
+          isWrite: true,
+        })
       } catch (error) {
         apiLogger.warn('loadTools: Nango delivery setup failed, skipping capability', {
           capability: spec.capability,
@@ -411,12 +462,9 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
     }
   }
 
-  if (tools.length > 64) {
-    apiLogger.warn('loadTools: global tool cap reached; some discovered tools are not available to the agent', {
-      organizationId, discovered: tools.length, cap: 64, dropped: tools.length - 64,
-    })
-  }
-  return { tools: tools.slice(0, 64), bindings }
+  // Apply the cap once, reserving a write-tool budget so delivery tools aren't
+  // crowded out by many read tools.
+  return capDiscoveredTools(discovered, organizationId)
 }
 
 async function recordEvent(executionId: string, stepId: string | null, kind: string, payload?: unknown) {
