@@ -11,6 +11,7 @@ import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection } from '@/li
 import { recordAudit } from '@/lib/audit'
 import { createApproval, requiresApproval } from '@/lib/agents/approval'
 import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
+import { embeddingsConfigured, embedQuery, embedTexts, cosineSimilarity } from '@/lib/rag/embeddings'
 import { getGraphRagStore } from '@/lib/rag/get-store'
 import { indexExecution } from '@/lib/rag/indexer'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
@@ -151,6 +152,16 @@ const WRITE_RESERVE = 16
  * place the cap/priority policy lives — previously each plane capped inline, so
  * write tools (loaded last) were silently dropped once reads filled 64.
  */
+function materializeTools(picked: DiscoveredTool[]): { tools: ToolDefinition[]; bindings: Map<string, ToolBinding> } {
+  const tools: ToolDefinition[] = []
+  const bindings = new Map<string, ToolBinding>()
+  for (const d of picked) {
+    bindings.set(d.name, d.binding)
+    tools.push({ name: d.name, description: d.description, inputSchema: d.inputSchema })
+  }
+  return { tools, bindings }
+}
+
 export function capDiscoveredTools(discovered: DiscoveredTool[], organizationId: string): { tools: ToolDefinition[]; bindings: Map<string, ToolBinding> } {
   const seen = new Set<string>()
   const dedupe = (list: DiscoveredTool[]) => list.filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)))
@@ -168,16 +179,66 @@ export function capDiscoveredTools(discovered: DiscoveredTool[], organizationId:
     })
   }
 
-  const tools: ToolDefinition[] = []
-  const bindings = new Map<string, ToolBinding>()
-  for (const d of picked) {
-    bindings.set(d.name, d.binding)
-    tools.push({ name: d.name, description: d.description, inputSchema: d.inputSchema })
-  }
-  return { tools, bindings }
+  return materializeTools(picked)
 }
 
-async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null) {
+/**
+ * Choose which discovered tools to expose when there are more than the cap.
+ *
+ * Over the cap, the deterministic policy (capDiscoveredTools) fills reads in
+ * arbitrary discovery order — so a large connector can crowd out the handful of
+ * tools this agent actually needs. Instead, rank the over-budget tools by
+ * embedding similarity to the agent's objective and keep the most relevant.
+ * Write tools keep their reserved slice (consequential; never relevance-dropped)
+ * and overflow writes compete on relevance like reads.
+ *
+ * Best-effort: under the cap, without a query, without embeddings configured, or
+ * on any embedding failure, it falls back to the deterministic cap so tool
+ * loading never depends on the embeddings provider being up.
+ */
+export async function selectDiscoveredTools(
+  discovered: DiscoveredTool[],
+  organizationId: string,
+  query?: string,
+): Promise<{ tools: ToolDefinition[]; bindings: Map<string, ToolBinding> }> {
+  const seen = new Set<string>()
+  const unique = discovered.filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)))
+
+  if (unique.length <= TOOL_CAP || !query?.trim() || !embeddingsConfigured()) {
+    return capDiscoveredTools(discovered, organizationId)
+  }
+
+  try {
+    const writes = unique.filter((d) => d.isWrite)
+    const reads = unique.filter((d) => !d.isWrite)
+    const keptWrites = writes.slice(0, WRITE_RESERVE)
+    const budget = Math.max(0, TOOL_CAP - keptWrites.length)
+    const candidates = [...reads, ...writes.slice(WRITE_RESERVE)]
+
+    const [queryVec, docVecs] = await Promise.all([
+      embedQuery(query.slice(0, 2000)),
+      embedTexts(candidates.map((d) => `${d.name}: ${d.description}`.slice(0, 2000)), { inputType: 'document' }),
+    ])
+    const ranked = candidates
+      .map((d, i) => ({ d, score: cosineSimilarity(queryVec, docVecs[i]) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, budget)
+      .map((r) => r.d)
+
+    const picked = [...keptWrites, ...ranked]
+    apiLogger.info('loadTools: selected tools by relevance to the objective', {
+      organizationId, discovered: unique.length, cap: TOOL_CAP, kept: picked.length, dropped: unique.length - picked.length,
+    })
+    return materializeTools(picked)
+  } catch (error) {
+    apiLogger.warn('loadTools: relevance selection failed, using deterministic cap', {
+      organizationId, error: error instanceof Error ? error.message : String(error),
+    })
+    return capDiscoveredTools(discovered, organizationId)
+  }
+}
+
+async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null, query?: string) {
   // Every plane contributes to one list; the cap/priority policy is applied once
   // at the end (capDiscoveredTools) so write tools aren't crowded out.
   const discovered: DiscoveredTool[] = []
@@ -464,9 +525,10 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
     }
   }
 
-  // Apply the cap once, reserving a write-tool budget so delivery tools aren't
-  // crowded out by many read tools.
-  return capDiscoveredTools(discovered, organizationId)
+  // Select which tools to expose: over the cap, rank by relevance to the
+  // objective (best-effort, embeddings-gated) with a reserved write budget;
+  // otherwise the deterministic cap. Delivery tools aren't crowded out either way.
+  return selectDiscoveredTools(discovered, organizationId, query)
 }
 
 async function recordEvent(executionId: string, stepId: string | null, kind: string, payload?: unknown) {
@@ -620,7 +682,8 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
     const providers = Array.isArray(agentMetadata.integrations) ? agentMetadata.integrations.map(String) : []
     const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
-    const { tools, bindings } = await loadTools(organizationId, providers, userId)
+    const toolQuery = [agent.objective, data.input].filter(Boolean).join('\n')
+    const { tools, bindings } = await loadTools(organizationId, providers, userId, toolQuery)
     let system = buildAgentSystemPrompt(agent.objective, skillIds)
 
     // Graph-RAG: give the agent correlated context (Sales AI signals,
