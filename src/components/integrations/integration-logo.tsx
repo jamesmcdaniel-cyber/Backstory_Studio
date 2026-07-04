@@ -47,11 +47,20 @@ function simpleIconUrl(slug: string): string {
 
 // Bundled brand assets (public/logos), preferred over any passed src or the
 // Simple Icons CDN — used wherever a provider's logo renders (run logs, cards,
-// integrations catalogue). Keyed by lowercased slug.
+// integrations catalogue). Keyed by NORMALIZED slug (separators stripped) so
+// "google_drive", "google-drive" and "googledrive" all resolve to one asset.
 const LOCAL_LOGOS: Record<string, string> = {
   slack: '/logos/slack.png',
   granola: '/logos/granola.jpg',
   backstory: '/backstory-mark-blue.svg',
+  googledrive: '/logos/googledrive.svg',
+  googlesheets: '/logos/googlesheets.webp',
+  monday: '/logos/monday.jpg',
+  mondaydotcom: '/logos/monday.jpg',
+}
+
+function localLogo(slug: string): string | undefined {
+  return LOCAL_LOGOS[slug.replace(/[-_]/g, '')]
 }
 
 export function IntegrationLogo({
@@ -67,7 +76,7 @@ export function IntegrationLogo({
 }) {
   const key = (slug || '').toLowerCase()
   // A bundled asset for this provider wins over any passed src or the CDN.
-  const effectiveSrc = LOCAL_LOGOS[key] ?? src
+  const effectiveSrc = localLogo(key) ?? src
   const iconSlug = SIMPLE_ICON_SLUGS[key] ?? (key || null)
   // 0 = explicit/local src, 1 = simple-icons, 2 = initial fallback.
   const initialStage = effectiveSrc ? 0 : slug ? 1 : 2
