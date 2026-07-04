@@ -46,7 +46,7 @@ const has = (needle: string) => (selected: string) => selected.toLowerCase().inc
 export const BUILTIN_CONNECTORS: ConnectorDescriptor[] = [
   {
     key: 'backstory',
-    label: 'People.ai',
+    label: 'Backstory',
     slug: 'backstory',
     kind: 'backstory',
     isWrite: false,

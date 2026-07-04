@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowRight, Check, Loader2, Unplug } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { useCachedJson } from '@/lib/client/use-cached-json'
 
 type Status = {
@@ -13,9 +14,9 @@ type Status = {
 }
 
 /**
- * People.ai Sales AI connection card. Connecting runs the MCP OAuth flow
- * (Salesforce identity via People.ai); the connection powers the entitlement
- * gate and gives this user's agents their People.ai read tools.
+ * Backstory Sales AI connection card. Connecting runs the MCP OAuth flow
+ * (Salesforce identity via Backstory); the connection powers the entitlement
+ * gate and gives this user's agents their Backstory read tools.
  */
 export function PeopleAiCard() {
   // Cached (stale-while-revalidate) so a revisit paints the last-seen status
@@ -29,10 +30,10 @@ export function PeopleAiCard() {
       const response = await fetch('/api/peopleai/connect', { method: 'DELETE' })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
-        toast.error(data.error || 'Could not disconnect People.ai.')
+        toast.error(data.error || 'Could not disconnect Backstory.')
         return
       }
-      toast.success('People.ai disconnected.')
+      toast.success('Backstory disconnected.')
       await refresh()
     } finally {
       setDisconnecting(false)
@@ -46,10 +47,12 @@ export function PeopleAiCard() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="eyebrow">Sales AI</p>
-          <h3 className="mt-1 font-semibold text-gray-900">People.ai</h3>
+          <h3 className="mt-1 flex items-center gap-2 font-semibold text-gray-900">
+            <IntegrationLogo slug="backstory" name="Backstory" className="h-5 w-5" /> Backstory
+          </h3>
           <p className="mt-1 text-sm text-gray-500">
             Read accounts, opportunities, activity, and Sales AI insights with
-            your own People.ai permissions.
+            your own Backstory permissions.
           </p>
         </div>
         {connected && (
@@ -75,7 +78,7 @@ export function PeopleAiCard() {
         <div className="mt-4">
           <Button asChild size="sm">
             <a href="/api/peopleai/connect?return_to=/integrations">
-              Connect People.ai <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              Connect Backstory <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
             </a>
           </Button>
           {status.connection?.status === 'refresh_failed' && (
@@ -86,7 +89,7 @@ export function PeopleAiCard() {
         </div>
       ) : (
         <p className="mt-4 text-xs text-gray-400">
-          People.ai OAuth isn&apos;t configured for this environment.
+          Backstory OAuth isn&apos;t configured for this environment.
         </p>
       )}
     </div>

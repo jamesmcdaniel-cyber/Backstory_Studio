@@ -51,6 +51,7 @@ function simpleIconUrl(slug: string): string {
 const LOCAL_LOGOS: Record<string, string> = {
   slack: '/logos/slack.png',
   granola: '/logos/granola.jpg',
+  backstory: '/backstory-mark-blue.svg',
 }
 
 export function IntegrationLogo({

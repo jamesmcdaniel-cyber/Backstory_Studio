@@ -57,7 +57,7 @@ function SignalsList() {
     return (
       <div className="rounded-xl border border-dashed p-10 text-center">
         <Radio className="mx-auto h-6 w-6 text-gray-300" />
-        <p className="mt-2 text-sm text-gray-500">No signals yet. When People.ai sends an event, it appears here.</p>
+        <p className="mt-2 text-sm text-gray-500">No signals yet. When Backstory sends an event, it appears here.</p>
       </div>
     )
   }
@@ -89,7 +89,7 @@ function SignalsList() {
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 text-xs text-horizon-600 hover:underline"
                   >
-                    People.ai <ArrowUpRight className="h-3 w-3" />
+                    Backstory <ArrowUpRight className="h-3 w-3" />
                   </a>
                 )}
               </td>
@@ -212,7 +212,7 @@ type CustomSignal = {
   updatedAt: string
 }
 
-// Rep-defined saved SalesAI questions ("custom signals"). People.ai exposes no
+// Rep-defined saved SalesAI questions ("custom signals"). Backstory exposes no
 // signal catalog, so they're defined here and run via ask_sales_ai; results feed
 // the graph so agents can use them.
 function CustomSignalsManager() {
@@ -375,7 +375,7 @@ export default function SignalsPage() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-semibold">Signals</h1>
-          <p className="text-sm text-gray-500">People.ai Sales AI events, your custom signals, and the agents they trigger.</p>
+          <p className="text-sm text-gray-500">Backstory Sales AI events, your custom signals, and the agents they trigger.</p>
         </div>
         <Tabs defaultValue="feed">
           <TabsList>

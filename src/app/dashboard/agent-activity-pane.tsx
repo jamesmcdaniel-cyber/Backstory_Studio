@@ -83,7 +83,7 @@ function asJson(value: unknown): string {
 // non-provider steps (e.g. "ask_user") so those keep the wrench.
 const PROVIDER_NAMES: Record<string, string> = {
   slack: 'Slack', gmail: 'Gmail', salesforce: 'Salesforce', granola: 'Granola',
-  email: 'Email', backstory: 'People.ai', jira: 'Jira', github: 'GitHub',
+  email: 'Email', backstory: 'Backstory', jira: 'Jira', github: 'GitHub',
   notion: 'Notion', hubspot: 'HubSpot', clickup: 'ClickUp', linear: 'Linear',
   asana: 'Asana', confluence: 'Confluence', trello: 'Trello',
 }

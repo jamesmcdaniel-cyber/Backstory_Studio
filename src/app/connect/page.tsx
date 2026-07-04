@@ -6,7 +6,7 @@ import { AlertCircle, ArrowRight, Check } from 'lucide-react'
 
 /**
  * The entitlement gate's front door. Signed-in users without an active
- * People.ai Sales AI connection land here; connecting runs the People.ai MCP
+ * Backstory Sales AI connection land here; connecting runs the Backstory MCP
  * OAuth flow (Glass → Salesforce) and unlocks the workspace.
  */
 function ConnectInner() {
@@ -21,10 +21,10 @@ function ConnectInner() {
 
         <p className="eyebrow mt-8">Sales AI required</p>
         <h1 className="mt-2 text-2xl font-semibold text-gray-900">
-          Connect your People.ai account
+          Connect your Backstory account
         </h1>
         <p className="mt-3 text-sm leading-6 text-gray-600">
-          Backstory Studio is available to People.ai Sales AI customers. Sign in
+          Backstory Studio is available to Backstory Sales AI customers. Sign in
           with your Salesforce identity to link this workspace to your team —
           your agents will read Sales AI with your own permissions.
         </p>
@@ -38,7 +38,7 @@ function ConnectInner() {
         {status === 'team-mismatch' && (
           <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>This workspace belongs to a different People.ai team. Ask your workspace admin, or sign in with the matching account.</p>
+            <p>This workspace belongs to a different Backstory team. Ask your workspace admin, or sign in with the matching account.</p>
           </div>
         )}
         {status === 'state-mismatch' && (
@@ -58,11 +58,11 @@ function ConnectInner() {
           href="/api/peopleai/connect?return_to=/dashboard"
           className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-gray-800"
         >
-          Connect People.ai <ArrowRight className="h-4 w-4" />
+          Connect Backstory <ArrowRight className="h-4 w-4" />
         </a>
 
         <p className="mt-4 text-xs leading-5 text-gray-400">
-          You&apos;ll authenticate with Salesforce through People.ai. Backstory
+          You&apos;ll authenticate with Salesforce through Backstory. Backstory
           only receives tokens scoped to your permissions — no passwords.
         </p>
       </div>

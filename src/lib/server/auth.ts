@@ -38,7 +38,7 @@ export async function assertEntitled(organizationId: string): Promise<void> {
   const entitlement = await resolveEntitlement(organizationId)
   if (!entitlement.entitled) {
     throw new AuthContextError(
-      'An active People.ai Sales AI connection is required.',
+      'An active Backstory Sales AI connection is required.',
       403,
       'ENTITLEMENT_REQUIRED',
     )

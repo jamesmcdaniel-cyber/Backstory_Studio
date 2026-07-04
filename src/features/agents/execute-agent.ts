@@ -323,7 +323,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         for (const tool of available.slice(0, 20)) {
           discovered.push({
             name: toolName('backstory', tool.name),
-            description: tool.description || `${tool.name} via People.ai`,
+            description: tool.description || `${tool.name} via Backstory`,
             inputSchema:
               tool.inputSchema && typeof tool.inputSchema === 'object'
                 ? (tool.inputSchema as Record<string, unknown>)
