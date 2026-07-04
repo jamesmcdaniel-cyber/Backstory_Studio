@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Markdown } from '@/components/ui/markdown'
+import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import type { Activity, Agent } from '@/lib/types'
 
@@ -76,6 +77,29 @@ function asJson(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 }
 
+// A step node is `provider.tool` (e.g. "granola.list_notes", "jira.discover_…",
+// "nango:slack.send_message"). Derive the provider's brand logo so the process
+// log shows real company marks instead of a generic wrench. Returns null for
+// non-provider steps (e.g. "ask_user") so those keep the wrench.
+const PROVIDER_NAMES: Record<string, string> = {
+  slack: 'Slack', gmail: 'Gmail', salesforce: 'Salesforce', granola: 'Granola',
+  email: 'Email', backstory: 'People.ai', jira: 'Jira', github: 'GitHub',
+  notion: 'Notion', hubspot: 'HubSpot', clickup: 'ClickUp', linear: 'Linear',
+  asana: 'Asana', confluence: 'Confluence', trello: 'Trello',
+}
+// Where the logo slug differs from the provider key (Simple Icons has no
+// "email"/"people.ai" mark; use Resend / fall through to an initial tile).
+const PROVIDER_LOGO_SLUGS: Record<string, string> = { email: 'resend' }
+
+function stepProvider(node: string): { slug: string; name: string } | null {
+  if (!node.includes('.')) return null // ask_user and other non-tool steps
+  let provider = node.split('.')[0]
+  if (provider.startsWith('nango:')) provider = provider.slice('nango:'.length) // nango:slack → slack
+  if (!provider) return null
+  const name = PROVIDER_NAMES[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1)
+  return { slug: PROVIDER_LOGO_SLUGS[provider] ?? provider, name }
+}
+
 // One tool call: header always visible; inputs/outputs expand on click so a
 // successful call's data is inspectable, not hidden behind a bare status badge.
 // A call still in flight shows a live spinner ("Calling…") rather than a badge.
@@ -98,7 +122,14 @@ function ToolCallCard({ step }: { step: RunStep }) {
         className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors duration-150 hover:bg-gray-50 disabled:cursor-default disabled:hover:bg-transparent"
       >
         <span className="flex min-w-0 items-center gap-2">
-          <Wrench className={cn('h-3.5 w-3.5 shrink-0', running ? 'text-blue-500' : 'text-gray-400')} />
+          {(() => {
+            const provider = stepProvider(step.node)
+            return provider ? (
+              <IntegrationLogo slug={provider.slug} name={provider.name} className="h-4 w-4 shrink-0 rounded-sm" />
+            ) : (
+              <Wrench className={cn('h-3.5 w-3.5 shrink-0', running ? 'text-blue-500' : 'text-gray-400')} />
+            )
+          })()}
           <span className="truncate font-mono text-xs">{step.node}</span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
