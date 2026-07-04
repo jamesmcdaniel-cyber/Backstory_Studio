@@ -68,6 +68,42 @@ function createMemoryCache(): Cache {
   }
 }
 
+/**
+ * Upstash Redis over its REST API (HTTP + Bearer) — the ideal cache backend on
+ * serverless (Vercel), where long-lived TCP connections churn. No SDK needed:
+ * the REST protocol is a POST of a command array. Best-effort like the others.
+ */
+function createUpstashRestCache(url: string, token: string): Cache {
+  const base = url.replace(/\/$/, '')
+  const run = async (command: (string | number)[]): Promise<unknown> => {
+    const res = await fetch(base, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(command),
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!res.ok) throw new Error(`Upstash REST ${res.status}`)
+    return (await res.json() as { result?: unknown }).result ?? null
+  }
+  return {
+    async get<T>(key: string): Promise<T | null> {
+      const raw = await run(['GET', key])
+      return typeof raw === 'string' ? (JSON.parse(raw) as T) : null
+    },
+    async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
+      await run(['SET', key, JSON.stringify(value), 'PX', Math.max(1, Math.floor(ttlMs))])
+    },
+    async del(key: string): Promise<void> {
+      await run(['DEL', key])
+    },
+    async incrBy(key: string, amount: number, ttlMs: number): Promise<number> {
+      const next = Number(await run(['INCRBY', key, amount]))
+      if (next === amount) await run(['PEXPIRE', key, Math.max(1, Math.floor(ttlMs))])
+      return next
+    },
+  }
+}
+
 function createRedisCache(url: string): Cache {
   // Fail fast (best-effort): one retry, no ready-check, lazy connect so an
   // unreachable Redis degrades to source-of-truth reads instead of hanging.
@@ -102,14 +138,20 @@ let instance: Cache | null = null
 
 export function getCache(): Cache {
   if (instance) return instance
-  const url = process.env.REDIS_URL
-  instance = url ? createRedisCache(url) : createMemoryCache()
+  // Prefer Upstash REST (serverless-native), then an ioredis TCP URL, then a
+  // bounded in-memory fallback.
+  const upstashUrl = process.env.UPSTASH_REDIS_REST_URL
+  const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN
+  const redisUrl = process.env.REDIS_URL
+  if (upstashUrl && upstashToken) instance = createUpstashRestCache(upstashUrl, upstashToken)
+  else if (redisUrl) instance = createRedisCache(redisUrl)
+  else instance = createMemoryCache()
   return instance
 }
 
-/** True when a shared (Redis) cache is configured; false = per-process memory. */
+/** True when a shared cache is configured (Upstash REST or Redis); false = memory. */
 export function cacheConfigured(): boolean {
-  return Boolean(process.env.REDIS_URL)
+  return Boolean((process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) || process.env.REDIS_URL)
 }
 
 function warn(op: string, key: string, error: unknown): void {
