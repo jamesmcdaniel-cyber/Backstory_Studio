@@ -69,6 +69,15 @@ function resizeImageToDataUrl(file: File, size = 128): Promise<string> {
 }
 type Usage = { executions: number; inputTokens: number; outputTokens: number }
 
+// Module-level snapshot of the sidebar's fetched data, persisted across the
+// component's remounts. Each top-level page renders its own <DashboardLayout>,
+// so App Router remounts the Sidebar on every nav; without this it would reset
+// to empty state and flash the default logo + no agents until the refetch
+// resolves. Seeding state from this snapshot makes a remounted sidebar paint the
+// real org logo + agents instantly, then revalidate in the background.
+type SidebarSnapshot = { organizations: Organization[]; activeOrgId: string | null; agents: Agent[]; usage: Usage | null }
+let sidebarCache: SidebarSnapshot | null = null
+
 const CREDIT_TOKENS = 1_000_000
 export const AGENTS_CHANGED_EVENT = 'backstory:agents-changed'
 
@@ -96,12 +105,12 @@ export function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [orgMenuOpen, setOrgMenuOpen] = useState(false)
-  const [organizations, setOrganizations] = useState<Organization[]>([])
+  const [organizations, setOrganizations] = useState<Organization[]>(() => sidebarCache?.organizations ?? [])
   const [uploadingLogo, setUploadingLogo] = useState(false)
   const logoInputRef = useRef<HTMLInputElement>(null)
-  const [activeOrgId, setActiveOrgId] = useState<string | null>(null)
-  const [agents, setAgents] = useState<Agent[]>([])
-  const [usage, setUsage] = useState<Usage | null>(null)
+  const [activeOrgId, setActiveOrgId] = useState<string | null>(() => sidebarCache?.activeOrgId ?? null)
+  const [agents, setAgents] = useState<Agent[]>(() => sidebarCache?.agents ?? [])
+  const [usage, setUsage] = useState<Usage | null>(() => sidebarCache?.usage ?? null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
@@ -112,19 +121,23 @@ export function Sidebar() {
       fetch('/api/usage', { cache: 'no-store' }),
       fetch('/api/organizations', { cache: 'no-store' }),
     ])
-    if (agentResponse.ok) {
-      const data = await agentResponse.json()
-      setAgents(data.agents || [])
-    }
-    if (usageResponse.ok) {
-      const data = await usageResponse.json()
-      setUsage(data.usage || null)
-    }
+    // Carry forward the current snapshot so a failed sub-request doesn't wipe
+    // that slice; update state + the module cache together.
+    const next: SidebarSnapshot = sidebarCache
+      ? { ...sidebarCache }
+      : { organizations: [], activeOrgId: null, agents: [], usage: null }
+    if (agentResponse.ok) next.agents = (await agentResponse.json()).agents || []
+    if (usageResponse.ok) next.usage = (await usageResponse.json()).usage || null
     if (orgResponse.ok) {
       const data = await orgResponse.json()
-      setOrganizations(data.organizations || [])
-      setActiveOrgId(data.activeOrganizationId || null)
+      next.organizations = data.organizations || []
+      next.activeOrgId = data.activeOrganizationId || null
     }
+    sidebarCache = next
+    setAgents(next.agents)
+    setUsage(next.usage)
+    setOrganizations(next.organizations)
+    setActiveOrgId(next.activeOrgId)
   }, [])
 
   useEffect(() => {
@@ -168,9 +181,15 @@ export function Sidebar() {
         toast.error(data.error || 'Could not update the workspace logo.')
         return
       }
-      setOrganizations((previous) =>
-        previous.map((org) => (org.id === data.organization?.id ? { ...org, logoUrl: data.organization.logoUrl } : org)),
-      )
+      setOrganizations((previous) => {
+        const updated = previous.map((org) =>
+          org.id === data.organization?.id ? { ...org, logoUrl: data.organization.logoUrl } : org,
+        )
+        // Keep the cross-navigation snapshot in sync so the new logo doesn't
+        // briefly revert on the next navigation before load() revalidates.
+        if (sidebarCache) sidebarCache = { ...sidebarCache, organizations: updated }
+        return updated
+      })
       toast.success(logoUrl ? 'Workspace logo updated.' : 'Workspace logo removed.')
     } finally {
       setUploadingLogo(false)
