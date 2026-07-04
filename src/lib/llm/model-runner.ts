@@ -1,6 +1,16 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { apiLogger } from '@/lib/logger'
+import {
+  type IRMessage,
+  type ProviderKind,
+  irUser,
+  irToolResults,
+  irFromAnthropic,
+  irFromOpenAI,
+  toAnthropicMessages,
+  toOpenAIMessages,
+} from './ir'
 
 export type ToolDefinition = {
   name: string
@@ -72,7 +82,21 @@ function withRollingCache(messages: Anthropic.MessageParam[]): Anthropic.Message
   return out
 }
 
-class AnthropicRunner implements ModelRunner {
+/**
+ * One concrete provider. Stateless except for its SDK client: it translates the
+ * IR transcript to its native format, calls the API, and (on success) appends
+ * the assistant reply back onto the IR transcript as an IRAssistantMessage. It
+ * never mutates the transcript on failure, so the AgentRunner can retry the same
+ * IR on the next provider in the chain.
+ */
+interface Provider {
+  readonly kind: ProviderKind
+  readonly model: string
+  next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn>
+}
+
+class AnthropicProvider implements Provider {
+  readonly kind = 'anthropic' as const
   private readonly client: Anthropic
 
   constructor(readonly model: string) {
@@ -80,27 +104,7 @@ class AnthropicRunner implements ModelRunner {
     this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
   }
 
-  start(input: string): unknown[] {
-    return [{ role: 'user', content: input }]
-  }
-
-  appendUserMessage(transcript: unknown[], content: string) {
-    transcript.push({ role: 'user', content })
-  }
-
-  appendToolResults(transcript: unknown[], results: ToolResult[]) {
-    transcript.push({
-      role: 'user',
-      content: results.map((result) => ({
-        type: 'tool_result',
-        tool_use_id: result.toolCallId,
-        content: result.content,
-        ...(result.isError ? { is_error: true } : {}),
-      })),
-    })
-  }
-
-  async next(transcript: unknown[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
+  async next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
     const stream = this.client.messages.stream({
       model: this.model,
       max_tokens: 32000,
@@ -118,10 +122,12 @@ class AnthropicRunner implements ModelRunner {
             })),
           }
         : {}),
-      messages: withRollingCache(transcript as Anthropic.MessageParam[]),
+      // Rolling cache is applied to the TRANSLATED native messages, never to the
+      // persisted IR (which is replayed verbatim and must stay unmodified).
+      messages: withRollingCache(toAnthropicMessages(ir)),
     }, { signal: AbortSignal.timeout(STREAM_DEADLINE_MS) })
     const message = await stream.finalMessage()
-    transcript.push({ role: 'assistant', content: message.content })
+    ir.push(irFromAnthropic(message))
 
     return {
       text: message.content
@@ -147,7 +153,8 @@ class AnthropicRunner implements ModelRunner {
   }
 }
 
-class OpenAIRunner implements ModelRunner {
+class OpenAIProvider implements Provider {
+  readonly kind = 'openai' as const
   private readonly client: OpenAI
 
   constructor(readonly model: string) {
@@ -155,27 +162,10 @@ class OpenAIRunner implements ModelRunner {
     this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
   }
 
-  start(input: string): unknown[] {
-    return [{ role: 'user', content: input }]
-  }
-
-  appendUserMessage(transcript: unknown[], content: string) {
-    transcript.push({ role: 'user', content })
-  }
-
-  appendToolResults(transcript: unknown[], results: ToolResult[]) {
-    for (const result of results) {
-      transcript.push({ role: 'tool', tool_call_id: result.toolCallId, content: result.content })
-    }
-  }
-
-  async next(transcript: unknown[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
+  async next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
     const response = await this.client.chat.completions.create({
       model: this.model,
-      messages: [
-        { role: 'system', content: system },
-        ...(transcript as OpenAI.ChatCompletionMessageParam[]),
-      ],
+      messages: toOpenAIMessages(ir, system),
       ...(tools.length
         ? {
             tools: tools.map((tool) => ({
@@ -192,7 +182,7 @@ class OpenAIRunner implements ModelRunner {
     })
     const message = response.choices[0]?.message
     if (!message) throw new Error('Model returned no message')
-    transcript.push(message)
+    ir.push(irFromOpenAI(message))
 
     return {
       text: (message.content || '').trim(),
@@ -211,6 +201,59 @@ class OpenAIRunner implements ModelRunner {
   }
 }
 
+/**
+ * The agent-facing runner. Holds an ordered chain of providers over ONE
+ * provider-neutral IR transcript. Each turn tries the primary provider; on an
+ * availability failure (quota/auth/overload) it falls back to the next provider
+ * IN THE SAME TURN, on the same transcript — so a provider outage degrades to
+ * the other instead of failing the run. Non-availability errors (a real bug in
+ * our request) propagate immediately; retrying elsewhere wouldn't help.
+ */
+class AgentRunner implements ModelRunner {
+  readonly model: string
+
+  constructor(private readonly chain: Provider[]) {
+    if (chain.length === 0) throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
+    this.model = chain[0].model
+  }
+
+  start(input: string): unknown[] {
+    return [irUser(input)]
+  }
+
+  appendUserMessage(transcript: unknown[], content: string) {
+    ;(transcript as IRMessage[]).push(irUser(content))
+  }
+
+  appendToolResults(transcript: unknown[], results: ToolResult[]) {
+    ;(transcript as IRMessage[]).push(
+      irToolResults(results.map((r) => ({ toolCallId: r.toolCallId, content: r.content, isError: r.isError }))),
+    )
+  }
+
+  async next(transcript: unknown[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
+    const ir = transcript as IRMessage[]
+    let lastError: unknown
+    for (let i = 0; i < this.chain.length; i += 1) {
+      const provider = this.chain[i]
+      try {
+        return await provider.next(ir, system, tools)
+      } catch (error) {
+        lastError = error
+        // Only fall back on availability failures, and only if a fallback exists.
+        if (!isProviderAvailabilityError(error) || i === this.chain.length - 1) throw error
+        apiLogger.warn('model-runner: provider unavailable mid-run, falling back', {
+          from: `${provider.kind}:${provider.model}`,
+          to: `${this.chain[i + 1].kind}:${this.chain[i + 1].model}`,
+          status: (error as { status?: number }).status,
+          error: error instanceof Error ? error.message.slice(0, 200) : String(error),
+        })
+      }
+    }
+    throw lastError
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Default models. OpenAI is the default provider — override either via env.
 // AGENT_MODEL drives agent runs; SUMMARY_MODEL drives cheap surfaces (headlines,
@@ -219,27 +262,47 @@ class OpenAIRunner implements ModelRunner {
 export const DEFAULT_AGENT_MODEL = process.env.AGENT_MODEL?.trim() || 'gpt-4o'
 export const DEFAULT_SUMMARY_MODEL = process.env.SUMMARY_MODEL?.trim() || 'gpt-4o-mini'
 const FALLBACK_CLAUDE_MODEL = 'claude-opus-4-8'
+const FALLBACK_OPENAI_MODEL = 'gpt-4o'
 
 const hasOpenAI = () => !!process.env.OPENAI_API_KEY
 const hasAnthropic = () => !!process.env.ANTHROPIC_API_KEY
 const isClaude = (model: string) => model.startsWith('claude')
 
+/** A routed step in the provider chain: the provider and the model to use on it. */
+type RouteStep = { provider: ProviderKind; model: string }
+
 /**
- * Build a runner for the requested model, falling back to whichever provider is
- * actually configured. This means an agent saved with a claude-* model still
- * runs when only OPENAI_API_KEY is set (and vice-versa) instead of hard-failing.
+ * Explicit model routing. Returns the ORDERED provider chain for a run: the
+ * requested model's provider first (its own model), then the OTHER provider as a
+ * fallback (with a sensible default model for it). Only providers whose key is
+ * configured appear — so an agent saved with a claude-* model still runs when
+ * only OPENAI_API_KEY is set, and every run gains a cross-provider fallback when
+ * both keys are present. This is the single source of truth for run routing.
+ */
+export function routeModel(requested?: string): RouteStep[] {
+  const model = requested?.trim() || DEFAULT_AGENT_MODEL
+  const wantsClaude = isClaude(model)
+  const anthropicStep: RouteStep = { provider: 'anthropic', model: wantsClaude ? model : FALLBACK_CLAUDE_MODEL }
+  const openaiStep: RouteStep = { provider: 'openai', model: wantsClaude ? FALLBACK_OPENAI_MODEL : model }
+  const ordered = wantsClaude ? [anthropicStep, openaiStep] : [openaiStep, anthropicStep]
+  return ordered.filter((step) => (step.provider === 'openai' ? hasOpenAI() : hasAnthropic()))
+}
+
+function buildProvider(step: RouteStep): Provider {
+  return step.provider === 'anthropic' ? new AnthropicProvider(step.model) : new OpenAIProvider(step.model)
+}
+
+/**
+ * Build the agent runner for the requested model: an AgentRunner over the routed
+ * provider chain (primary + cross-provider fallback). Keeps the same signature
+ * and ModelRunner contract as before; callers are unchanged.
  */
 export function createModelRunner(requested?: string): ModelRunner {
-  const model = requested?.trim() || DEFAULT_AGENT_MODEL
-
-  if (isClaude(model)) {
-    if (hasAnthropic()) return new AnthropicRunner(model)
-    if (hasOpenAI()) return new OpenAIRunner(DEFAULT_AGENT_MODEL)
-  } else {
-    if (hasOpenAI()) return new OpenAIRunner(model)
-    if (hasAnthropic()) return new AnthropicRunner(FALLBACK_CLAUDE_MODEL)
+  const chain = routeModel(requested).map(buildProvider)
+  if (chain.length === 0) {
+    throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
   }
-  throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
+  return new AgentRunner(chain)
 }
 
 // Resolve which provider/model to use for a cheap "summary" call, honoring

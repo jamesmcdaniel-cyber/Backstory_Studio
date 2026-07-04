@@ -29,6 +29,7 @@ import {
   type ToolDefinition,
   type ToolResult,
 } from '@/lib/llm/model-runner'
+import { coerceToIR } from '@/lib/llm/ir'
 
 export type AgentExecutionJob = {
   executionId?: string
@@ -546,7 +547,9 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     if (!waiting || !pending || !Array.isArray(queuedExecution.transcript)) {
       throw new Error('Execution is not waiting for input or approval')
     }
-    transcript = queuedExecution.transcript as unknown[]
+    // Normalize to the provider-neutral IR so a run persisted in a native shape
+    // (pre-IR, or by the other provider) resumes on whatever provider routes now.
+    transcript = coerceToIR(queuedExecution.transcript as unknown[])
     startTurn = Number(executionMetadata.turnCursor) || 0
     completedToolSteps = await loadCompletedToolSteps(queuedExecution.id)
     const reply = data.reply?.trim() || 'The user did not provide an answer. Use your best judgment.'
@@ -562,7 +565,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     }
     await recordEvent(queuedExecution.id, pending.stepId || null, 'user.replied', { answer: reply })
   } else if (resumeFromCrash && queuedExecution) {
-    transcript = queuedExecution.transcript as unknown[]
+    transcript = coerceToIR(queuedExecution.transcript as unknown[])
     startTurn = Number(metadataOf(queuedExecution.metadata).turnCursor) || 0
     completedToolSteps = await loadCompletedToolSteps(queuedExecution.id)
     await recordEvent(queuedExecution.id, null, 'run.resumed', { fromTurn: startTurn })
