@@ -67,9 +67,27 @@ export async function createApproval(input: {
   return { id: approval.id }
 }
 
+export interface ResumeInfo {
+  executionId: string
+  agentId: string
+  organizationId: string
+  userId: string
+  reply: string
+}
+
 export interface DecideResult {
   status: 'approved' | 'rejected'
   executed: boolean
+  /** Set when a suspended run should be resumed with the decision result — the
+   *  caller (approval route) triggers resumeAgentExecution to avoid a cycle. */
+  resume?: ResumeInfo
+}
+
+/** Resume info for a run suspended on this approval, or undefined if not suspended. */
+async function resumeInfoFor(executionId: string, organizationId: string, reply: string): Promise<ResumeInfo | undefined> {
+  const execution = await prisma.agentExecution.findFirst({ where: { id: executionId, organizationId } })
+  if (!execution || execution.status !== 'waiting_for_approval' || !execution.agentTaskId) return undefined
+  return { executionId: execution.id, agentId: execution.agentTaskId, organizationId, userId: execution.userId, reply }
 }
 
 /**
@@ -106,7 +124,12 @@ export async function decideApproval(input: {
       tool: approval.tool,
       resourceId: approval.id,
     })
-    return { status: 'rejected', executed: false }
+    const resume = await resumeInfoFor(
+      approval.executionId,
+      input.organizationId,
+      JSON.stringify({ status: 'rejected', message: 'The approver rejected this action. Do not retry it; continue without it.' }),
+    )
+    return { status: 'rejected', executed: false, resume }
   }
 
   // Approve: atomically claim the pending request (pending→approving) so exactly
@@ -126,12 +149,13 @@ export async function decideApproval(input: {
     userId: string
   }
   let executed = false
+  let writeResult: unknown = null
   try {
     if (payload.capability) {
       const spec = DELIVERY_TOOLS.find((tool) => tool.capability === payload.capability)
       const connection = await resolveDeliveryConnection(input.organizationId, payload.capability, payload.userId)
       if (spec && connection) {
-        await spec.run(connection, payload.args)
+        writeResult = await spec.run(connection, payload.args)
         executed = true
       }
     }
@@ -165,7 +189,12 @@ export async function decideApproval(input: {
     resourceId: approval.id,
     payload: payload.args,
   })
-  return { status: 'approved', executed }
+  const resume = await resumeInfoFor(
+    approval.executionId,
+    input.organizationId,
+    JSON.stringify({ status: 'approved', executed, result: writeResult }),
+  )
+  return { status: 'approved', executed, resume }
 }
 
 /** Report the settled decision for a request another caller already claimed. */

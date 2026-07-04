@@ -1,6 +1,8 @@
 import type { Job } from 'bullmq'
 import { createHash } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
+import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
+import { inlineExecution } from '@/lib/queue/execution-mode'
 import { apiLogger } from '@/lib/logger'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
@@ -423,6 +425,27 @@ async function recordEvent(executionId: string, stepId: string | null, kind: str
   })
 }
 
+/**
+ * Resume a suspended run (ask_user reply or approval decision) — inline in dev,
+ * enqueued on the worker in prod. Shared by the reply route and the approval
+ * decision route.
+ */
+export async function resumeAgentExecution(params: {
+  executionId: string
+  agentId: string
+  organizationId: string
+  userId: string
+  reply: string
+}): Promise<void> {
+  if (inlineExecution) {
+    await runAgentExecution({ ...params, resume: true })
+    return
+  }
+  if (!workersEnabled) throw new Error('Agent worker is disabled')
+  const queue = createQueue(QUEUE_NAMES.AGENT_EXECUTION)
+  await queue.add('resume-agent', { ...params, resume: true }, { jobId: `${params.executionId}-resume-${Date.now()}` })
+}
+
 export async function runAgentExecution(data: AgentExecutionJob) {
   const { agentId, organizationId, userId } = data
   const agent = await prisma.agentTask.findFirst({
@@ -471,8 +494,9 @@ export async function runAgentExecution(data: AgentExecutionJob) {
   if (resuming && queuedExecution) {
     const executionMetadata = metadataOf(queuedExecution.metadata)
     const pending = executionMetadata.pendingQuestion as PendingQuestion | undefined
-    if (queuedExecution.status !== 'waiting_for_input' || !pending || !Array.isArray(queuedExecution.transcript)) {
-      throw new Error('Execution is not waiting for input')
+    const waiting = queuedExecution.status === 'waiting_for_input' || queuedExecution.status === 'waiting_for_approval'
+    if (!waiting || !pending || !Array.isArray(queuedExecution.transcript)) {
+      throw new Error('Execution is not waiting for input or approval')
     }
     transcript = queuedExecution.transcript as unknown[]
     startTurn = Number(executionMetadata.turnCursor) || 0
@@ -630,6 +654,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
       const results: ToolResult[] = []
       let pendingAsk: { toolCallId: string; question: string } | null = null
+      let pendingApproval: { toolCallId: string; approvalId: string; stepId: string; summary: string } | null = null
 
       for (const call of turnResult.toolCalls) {
         if (call.name === ASK_USER_TOOL.name) {
@@ -680,8 +705,23 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
           // Approval gate: if this agent requires approval and the tool is an
           // outbound write, queue it instead of executing — an approver runs
-          // it out-of-band. The model is told the action is pending.
+          // it out-of-band, and the RUN SUSPENDS until the decision. On approve,
+          // decideApproval executes the write and resumes this run with its
+          // result injected, so the agent acts on the real outcome (rather than
+          // continuing blind on a "queued" placeholder).
           if (requiresApproval(agentMetadata, binding.provider)) {
+            if (pendingApproval) {
+              // One approval at a time (mirrors ask_user) — re-propose after.
+              await prisma.workflowStep.update({
+                where: { id: step.id },
+                data: { status: 'succeeded', output: jsonValue({ deferred: true }), completedAt: new Date() },
+              })
+              results.push({
+                toolCallId: call.id,
+                content: JSON.stringify({ status: 'deferred', message: 'Another action is awaiting approval; re-propose this once it resolves.' }),
+              })
+              continue
+            }
             const approval = await createApproval({
               organizationId,
               executionId: execution.id,
@@ -692,13 +732,10 @@ export async function runAgentExecution(data: AgentExecutionJob) {
             })
             await prisma.workflowStep.update({
               where: { id: step.id },
-              data: { status: 'succeeded', output: jsonValue({ queuedForApproval: approval.id }), completedAt: new Date() },
+              data: { status: 'waiting', output: jsonValue({ approvalId: approval.id }) },
             })
             await recordEvent(execution.id, step.id, 'tool.queued_for_approval', { name: step.node, approvalId: approval.id })
-            results.push({
-              toolCallId: call.id,
-              content: JSON.stringify({ status: 'queued_for_approval', approvalId: approval.id, message: 'This action requires approval and has been queued. It will run once approved.' }),
-            })
+            pendingApproval = { toolCallId: call.id, approvalId: approval.id, stepId: step.id, summary: step.node }
             continue
           }
 
@@ -780,6 +817,43 @@ export async function runAgentExecution(data: AgentExecutionJob) {
           executionId: execution.id,
         })
         return { status: 'waiting_for_input', question: pendingAsk.question }
+      }
+
+      // Suspend for approval: persist state (reusing the pendingQuestion marker,
+      // so the existing resume path injects the approver's result) and return.
+      // decideApproval runs the write and resumes this run with the result.
+      if (pendingApproval) {
+        await prisma.agentExecution.update({
+          where: { id: execution.id },
+          data: {
+            status: 'waiting_for_approval',
+            transcript: jsonValue(transcript),
+            inputTokens: { increment: usage.inputTokens },
+            outputTokens: { increment: usage.outputTokens },
+            executionTime: { increment: Date.now() - segmentStart },
+            metadata: jsonValue({
+              ...executionMetadata,
+              turnCursor: turn + 1,
+              pendingQuestion: {
+                toolCallId: pendingApproval.toolCallId,
+                question: `Awaiting approval: ${pendingApproval.summary}`,
+                stepId: pendingApproval.stepId,
+                collectedResults: results,
+              } satisfies PendingQuestion,
+            }),
+          },
+        })
+        await notify({
+          organizationId,
+          userId,
+          type: 'agent.needs_approval',
+          level: 'action',
+          title: `${agentMetadata.title || agent.description} needs approval`,
+          body: `Approve or reject: ${pendingApproval.summary}`,
+          agentTaskId: agent.id,
+          executionId: execution.id,
+        })
+        return { status: 'waiting_for_approval', approvalId: pendingApproval.approvalId }
       }
 
       runner.appendToolResults(transcript, results)
