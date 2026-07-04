@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { AlertCircle, ChevronDown, Loader2, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { useCachedJson } from '@/lib/client/use-cached-json'
 
 type Tool = { name: string; description?: string }
 
@@ -23,53 +24,40 @@ function toolLabel(name: string) {
 }
 
 export function MCPIntegrationCards() {
-  const [connections, setConnections] = useState<Connection[]>([])
-  const [loading, setLoading] = useState(true)
+  // Cached (stale-while-revalidate): a revisit paints instantly from the client
+  // cache, then revalidates — no flash. The server also caches the Klavis status
+  // per org, so the revalidation itself is fast.
+  const { data, loading, error: loadError, refresh } = useCachedJson<{ connections?: Connection[] }>('/api/mcp/connections')
+  const connections = data?.connections ?? []
   const [connecting, setConnecting] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [error, setError] = useState('')
-
-  const load = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const response = await fetch('/api/mcp/connections', { cache: 'no-store' })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Failed to load Klavis connections')
-      setConnections(data.connections || [])
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Failed to load Klavis connections')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    load()
-  }, [])
+  const [actionError, setActionError] = useState('')
 
   const connect = async (provider: string) => {
     setConnecting(provider)
-    setError('')
+    setActionError('')
     try {
       const response = await fetch('/api/mcp/connections', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ providers: [provider] }),
       })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Connection failed')
-      const oauthUrl = data.results?.[0]?.oauthUrl
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'Connection failed')
+      const oauthUrl = result.results?.[0]?.oauthUrl
       if (oauthUrl) window.open(oauthUrl, '_blank', 'width=600,height=700')
-      await load()
+      await refresh() // server cache is busted on connect; pull the fresh status
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Connection failed')
+      setActionError(caught instanceof Error ? caught.message : 'Connection failed')
     } finally {
       setConnecting(null)
     }
   }
 
-  if (loading) return <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading Klavis connections...</div>
+  const error = actionError || (loadError ? (loadError instanceof Error ? loadError.message : 'Failed to load Klavis connections') : '')
+
+  // Only block on the spinner when there's no cached data to show yet.
+  if (loading && !connections.length) return <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading Klavis connections...</div>
 
   return (
     <div className="space-y-4">

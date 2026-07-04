@@ -1,8 +1,18 @@
 import { prisma } from '@/lib/prisma'
+import { cacheGet, cacheSet, cacheDelete } from '@/lib/cache'
 import { KlavisClient, type KlavisServer } from './klavis-client'
 import { PROVIDERS, PROVIDER_CAPABILITIES, type MCPProvider } from './provider-capabilities'
 
 export type ConnectionStatus = 'pending_auth' | 'active' | 'error' | 'not_connected'
+
+// getConnectionStatuses hits the Klavis API live (status + tool list per
+// connection). That's slow and re-run on every integrations page load, so cache
+// the assembled result briefly per (org,user). Busted on connect/disconnect.
+const MCP_STATUS_TTL_MS = 45_000
+const mcpStatusKey = (organizationId: string, userId: string) => `mcpstatus:${organizationId}:${userId}`
+export async function bustConnectionStatuses(organizationId: string, userId: string): Promise<void> {
+  await cacheDelete(mcpStatusKey(organizationId, userId))
+}
 
 export type ServerCreationResult = {
   provider: MCPProvider
@@ -112,6 +122,7 @@ export async function createServersForTenant(
     })
   }
 
+  await bustConnectionStatuses(organizationId, userId)
   return results
 }
 
@@ -127,49 +138,62 @@ export async function getConnectionStatuses(
   organizationId: string,
   userId: string,
 ): Promise<ConnectionStatusInfo[]> {
+  const cacheKey = mcpStatusKey(organizationId, userId)
+  const cached = await cacheGet<ConnectionStatusInfo[]>(cacheKey)
+  if (cached) return cached
+
   const connections = await prisma.mCPAgent.findMany({
     where: { organizationId, userId },
     orderBy: { updatedAt: 'desc' },
   })
   const klavis = process.env.KLAVIS_API_KEY ? client() : null
-  const byProvider = new Map<string, ConnectionStatusInfo>()
 
-  for (const connection of connections) {
-    const provider = connection.agentType.toLowerCase() as MCPProvider
-    if (!PROVIDERS.includes(provider)) continue
-    const metadata = (connection.metadata as Record<string, any> | null) || {}
-    let status = (metadata.status || (connection.isActive ? 'active' : 'pending_auth')) as ConnectionStatus
-    let oauthUrl = metadata.oauthUrl as string | undefined
-    let toolCount: number | undefined
-    // Start from any previously cached tool list so the card still has detail
-    // when Klavis is momentarily unreachable.
-    let tools: McpToolInfo[] | undefined = Array.isArray(metadata.tools) ? metadata.tools : undefined
+  // Resolve every connection's live status/tools concurrently (was sequential —
+  // N connections × up to 2 Klavis round-trips each, serialized on every load).
+  const resolved = await Promise.all(
+    connections.map(async (connection): Promise<ConnectionStatusInfo | null> => {
+      const provider = connection.agentType.toLowerCase() as MCPProvider
+      if (!PROVIDERS.includes(provider)) return null
+      const metadata = (connection.metadata as Record<string, any> | null) || {}
+      let status = (metadata.status || (connection.isActive ? 'active' : 'pending_auth')) as ConnectionStatus
+      let oauthUrl = metadata.oauthUrl as string | undefined
+      let toolCount: number | undefined
+      // Start from any previously cached tool list so the card still has detail
+      // when Klavis is momentarily unreachable.
+      let tools: McpToolInfo[] | undefined = Array.isArray(metadata.tools) ? metadata.tools : undefined
 
-    if (klavis && metadata.instanceId) {
-      try {
-        const server = await klavis.getServerStatus(metadata.instanceId)
-        status = connectionStatus(server)
-        oauthUrl = server.oauthUrl
-        // The GET response omits serverUrl; reuse the one stored at create time.
-        if (status === 'active' && connection.mcpServerUrl) {
-          const fetched = (await klavis.getServerTools(connection.mcpServerUrl)) as McpToolInfo[]
-          tools = fetched.map((tool) => ({ name: tool.name, description: tool.description }))
-          toolCount = tools.length
+      if (klavis && metadata.instanceId) {
+        try {
+          const server = await klavis.getServerStatus(metadata.instanceId)
+          status = connectionStatus(server)
+          oauthUrl = server.oauthUrl
+          // The GET response omits serverUrl; reuse the one stored at create time.
+          if (status === 'active' && connection.mcpServerUrl) {
+            const fetched = (await klavis.getServerTools(connection.mcpServerUrl)) as McpToolInfo[]
+            tools = fetched.map((tool) => ({ name: tool.name, description: tool.description }))
+            toolCount = tools.length
+          }
+          await saveConnection(provider, userId, organizationId, {
+            ...server,
+            serverUrl: server.serverUrl ?? connection.mcpServerUrl,
+          }, tools)
+        } catch {
+          status = 'error'
         }
-        await saveConnection(provider, userId, organizationId, {
-          ...server,
-          serverUrl: server.serverUrl ?? connection.mcpServerUrl,
-        }, tools)
-      } catch {
-        status = 'error'
       }
-    }
 
-    if (tools && toolCount === undefined) toolCount = tools.length
-    byProvider.set(provider, { provider, status, oauthUrl, toolCount, tools })
-  }
+      if (tools && toolCount === undefined) toolCount = tools.length
+      return { provider, status, oauthUrl, toolCount, tools }
+    }),
+  )
 
-  return PROVIDERS.map((provider) => byProvider.get(provider) || { provider, status: 'not_connected' as const })
+  const byProvider = new Map<string, ConnectionStatusInfo>()
+  for (const info of resolved) if (info) byProvider.set(info.provider, info)
+  const result = PROVIDERS.map((provider) => byProvider.get(provider) || { provider, status: 'not_connected' as const })
+
+  // Don't pin a transient Klavis outage: only cache a clean (no-error) result.
+  if (!result.some((r) => r.status === 'error')) await cacheSet(cacheKey, result, MCP_STATUS_TTL_MS)
+  return result
 }
 
 export async function removeServerConnection(organizationId: string, provider: MCPProvider, userId: string) {
@@ -183,4 +207,5 @@ export async function removeServerConnection(organizationId: string, provider: M
     await client().deleteServerInstance(metadata.instanceId)
   }
   await prisma.mCPAgent.delete({ where: { id: connection.id } })
+  await bustConnectionStatuses(organizationId, userId)
 }
