@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { AlertCircle, FileText, List, Loader2, Play, Plus, Settings2, Sparkles, X } from 'lucide-react'
-import { AgentActivityPane } from './agent-activity-pane'
+import { AgentActivityPane, resultText } from './agent-activity-pane'
 import { AgentConfigForm, type AgentDraft } from './agent-config-form'
 import { AssistantPanel } from './assistant-panel'
 import { Button } from '@/components/ui/button'
@@ -40,6 +40,8 @@ function AgentHQ() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [configureOpen, setConfigureOpen] = useState(false)
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
+  // The run expanded in the left pane, whose output renders in the right pane.
+  const [selectedRun, setSelectedRun] = useState<Activity | null>(null)
   const [describe, setDescribe] = useState('')
   const [building, setBuilding] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
@@ -162,6 +164,24 @@ function AgentHQ() {
     () => agentActivities.some((activity) => activity.status.toLowerCase() === 'failed'),
     [agentActivities],
   )
+
+  // The expanded run's output, shown in the right (assistant) pane.
+  const runOutput = useMemo(() => {
+    if (!selectedRun) return null
+    const text = resultText(selectedRun)
+    if (!text) return null
+    return {
+      title: selectedRun.metadata?.title || selectedRun.agentType,
+      at: selectedRun.startedAt,
+      status: selectedRun.status.toLowerCase(),
+      text,
+    }
+  }, [selectedRun])
+
+  // A different agent's runs are unrelated — clear the shown output on switch.
+  useEffect(() => {
+    setSelectedRun(null)
+  }, [selectedAgentId])
 
   // Setup pane shows when nothing usable is selected, the selected agent is
   // not fully configured, or the user explicitly opened configuration.
@@ -484,6 +504,7 @@ function AgentHQ() {
               activities={agentActivities}
               focusRunId={focusRunId}
               onChanged={() => load().catch(() => undefined)}
+              onSelectRun={setSelectedRun}
             />
           )}
         </section>
@@ -494,6 +515,7 @@ function AgentHQ() {
             key={selectedAgent?.id ?? 'none'}
             agent={selectedAgent}
             hasFailedRun={hasFailedRun}
+            runOutput={runOutput}
             onAgentUpdated={() => load().catch(() => undefined)}
           />
         </section>

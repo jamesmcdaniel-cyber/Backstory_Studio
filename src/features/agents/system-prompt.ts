@@ -16,5 +16,6 @@ export function buildAgentSystemPrompt(objective: string, skillIds: string[]): s
     composeInstructions(objective, skillIds),
     'Use the connected tools when needed. If you are blocked on a decision, missing information, or approval that only the user can provide, call the ask_user tool and wait for the reply; for minor choices, use your best judgment and note it.',
     'When finished, report completed work, blockers, and errors factually. Only claim actions that are supported by tool results from this run.',
+    'Keep the final response brief and skimmable: lead with the answer or key outcome in 1–2 sentences, then a few tight bullets for the essentials. Avoid long preambles, restating the task, and section headers unless the user asked for a detailed report. Prefer the shortest response that fully answers.',
   ].join('\n')
 }

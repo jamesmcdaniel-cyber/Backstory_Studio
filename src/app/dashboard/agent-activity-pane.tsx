@@ -58,7 +58,7 @@ function activityStatus(activity: Activity) {
   return activity.status.toLowerCase()
 }
 
-function resultText(activity?: Activity | null) {
+export function resultText(activity?: Activity | null) {
   if (!activity) return ''
   if (activity.error) return activity.error
   const value = activity.output?.summary ?? activity.output?.response ?? activity.output
@@ -367,14 +367,9 @@ function RunRow({
             </div>
           </div>
 
-          {(resultText(activity) || !isActive) && (
-            <div>
-              <h4 className="eyebrow mb-2">Output</h4>
-              {resultText(activity)
-                ? <div className="rounded-lg border bg-white p-3"><Markdown>{resultText(activity)}</Markdown></div>
-                : <p className="rounded-lg border bg-white p-3 text-sm text-gray-500">No output yet.</p>}
-            </div>
-          )}
+          {/* The run's OUTPUT is shown in the assistant pane on the right (that
+              surface holds agent output + the conversation); the left pane is
+              logs + status only. */}
         </div>
       )}
     </div>
@@ -386,12 +381,15 @@ export function AgentActivityPane({
   activities,
   focusRunId,
   onChanged,
+  onSelectRun,
 }: {
   agent: Agent
   activities: Activity[]
   /** Deep-linked run to auto-expand (e.g. ?run= or a fresh manual run). */
   focusRunId?: string | null
   onChanged: () => void
+  /** Fires with the expanded run (or null) so the right pane can show its output. */
+  onSelectRun?: (activity: Activity | null) => void
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
@@ -399,6 +397,12 @@ export function AgentActivityPane({
   useEffect(() => {
     setExpandedId(focusRunId ?? null)
   }, [focusRunId, agent.id])
+
+  // Surface the expanded run (kept fresh as activities poll) to the parent so
+  // the assistant pane can render its output.
+  useEffect(() => {
+    onSelectRun?.(activities.find((activity) => activity.id === expandedId) ?? null)
+  }, [expandedId, activities, onSelectRun])
 
   if (!activities.length) {
     return (

@@ -137,10 +137,13 @@ function ProposalCard({
 export function AssistantPanel({
   agent,
   hasFailedRun,
+  runOutput,
   onAgentUpdated,
 }: {
   agent: Agent | null
   hasFailedRun?: boolean
+  /** The run expanded on the left, whose output renders at the top here. */
+  runOutput?: { title: string; at: string; status: string; text: string } | null
   onAgentUpdated: () => void
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -316,11 +319,16 @@ export function AssistantPanel({
     }
   }
 
+  // Task-oriented starters that reflect what these agents do (research,
+  // briefing) plus quick config — not just "what did the last run do".
   const suggestions = agent
     ? [
-        'What did the last run do?',
-        ...(hasFailedRun ? ['Why did the last run fail?'] : []),
-        'Change the schedule to run daily at 9am.',
+        'Summarize the key findings from the latest run',
+        ...(hasFailedRun
+          ? ['Why did the last run fail?']
+          : ['Draft a short brief from the most recent run']),
+        'What should I follow up on next?',
+        'Change the schedule to run daily at 9am',
       ]
     : []
 
@@ -397,62 +405,83 @@ export function AssistantPanel({
         </p>
       </div>
 
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div ref={scrollRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {!agent && (
-          <div className="mx-auto mt-8 max-w-sm text-center">
-            <MessageSquare className="mx-auto h-6 w-6 text-gray-300" />
-            <p className="mt-2 text-sm text-gray-500">
-              This is where you talk to your agents — ask what a run did, walk through an error, or describe a change. Select an agent to begin.
-            </p>
-          </div>
-        )}
-        {agent && loading && (
-          <div className="p-6 text-center text-gray-500"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
-        )}
-        {agent && !loading && messages.length === 0 && (
-          <div className="mx-auto mt-8 max-w-sm text-center">
-            <MessageSquare className="mx-auto h-6 w-6 text-gray-300" />
-            <p className="mt-2 text-sm text-gray-500">
-              Backstory grounds answers in this agent&apos;s configuration and recent runs.
-            </p>
-            <div className="mt-4 space-y-2">
-              {suggestions.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  disabled={sending}
-                  onClick={() => send(suggestion)}
-                  className="w-full rounded-lg border bg-white px-3 py-2 text-left text-sm text-gray-700 transition-colors duration-150 hover:border-indigo-200 hover:bg-indigo-50"
-                >
-                  {suggestion}
-                </button>
-              ))}
+          <div className="flex flex-1 items-center justify-center p-4">
+            <div className="max-w-sm text-center">
+              <MessageSquare className="mx-auto h-6 w-6 text-gray-300" />
+              <p className="mt-2 text-sm text-gray-500">
+                This is where you talk to your agents — ask what a run did, walk through an error, or describe a change. Select an agent to begin.
+              </p>
             </div>
           </div>
         )}
-        {agent && messages.map((message) => (
-          <div
-            key={message.id}
-            className={cn(
-              'rounded-lg p-3 text-sm transition-colors duration-150',
-              message.role === 'user' ? 'ml-8 bg-indigo-50' : 'mr-8 border bg-gray-50',
-            )}
-          >
-            {message.role === 'user'
-              ? <p className="whitespace-pre-wrap">{message.content}</p>
-              : <Markdown>{message.content}</Markdown>}
-            {message.role !== 'user' && message.proposal && (
-              <ProposalCard
-                message={message}
-                applying={applyingId === message.id}
-                onApply={() => applyProposal(message)}
-              />
-            )}
+        {agent && loading && (
+          <div className="flex flex-1 items-center justify-center p-6 text-gray-500"><Loader2 className="h-5 w-5 animate-spin" /></div>
+        )}
+        {/* Empty chat (no output, no messages): center the starters vertically. */}
+        {agent && !loading && !runOutput && messages.length === 0 && (
+          <div className="flex flex-1 items-center justify-center p-4">
+            <div className="w-full max-w-sm text-center">
+              <MessageSquare className="mx-auto h-6 w-6 text-gray-300" />
+              <p className="mt-2 text-sm text-gray-500">
+                Backstory grounds answers in this agent&apos;s configuration and recent runs.
+              </p>
+              <div className="mt-4 space-y-2">
+                {suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    disabled={sending}
+                    onClick={() => send(suggestion)}
+                    className="w-full rounded-lg border bg-white px-3 py-2 text-left text-sm text-gray-700 transition-colors duration-150 hover:border-indigo-200 hover:bg-indigo-50"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        ))}
-        {agent && sending && (
-          <div className="mr-8 flex items-center gap-2 rounded-lg border bg-gray-50 p-3 text-sm text-gray-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
+        )}
+        {/* Content flow: the selected run's output on top, then the conversation. */}
+        {agent && !loading && (runOutput || messages.length > 0 || sending) && (
+          <div className="space-y-3 p-4">
+            {runOutput && (
+              <div className={cn('rounded-lg border p-3', runOutput.status === 'failed' ? 'border-red-200 bg-red-50' : 'bg-white')}>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="eyebrow">{runOutput.status === 'failed' ? 'Run error' : 'Output'} · {runOutput.title}</p>
+                  <span className="shrink-0 text-xs text-gray-400">{new Date(runOutput.at).toLocaleString()}</span>
+                </div>
+                <div className={cn('text-sm', runOutput.status === 'failed' && 'whitespace-pre-wrap text-red-700')}>
+                  {runOutput.status === 'failed' ? runOutput.text : <Markdown>{runOutput.text}</Markdown>}
+                </div>
+              </div>
+            )}
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={cn(
+                  'rounded-lg p-3 text-sm transition-colors duration-150',
+                  message.role === 'user' ? 'ml-8 bg-indigo-50' : 'mr-8 border bg-gray-50',
+                )}
+              >
+                {message.role === 'user'
+                  ? <p className="whitespace-pre-wrap">{message.content}</p>
+                  : <Markdown>{message.content}</Markdown>}
+                {message.role !== 'user' && message.proposal && (
+                  <ProposalCard
+                    message={message}
+                    applying={applyingId === message.id}
+                    onApply={() => applyProposal(message)}
+                  />
+                )}
+              </div>
+            ))}
+            {sending && (
+              <div className="mr-8 flex items-center gap-2 rounded-lg border bg-gray-50 p-3 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" /> Thinking…
+              </div>
+            )}
           </div>
         )}
       </div>
