@@ -49,6 +49,29 @@ const LLM_TIMEOUT_MS = 120_000
 const LLM_MAX_RETRIES = 1
 const STREAM_DEADLINE_MS = 240_000
 
+const CACHE_CONTROL = { type: 'ephemeral' as const }
+
+/**
+ * Add a rolling prompt-cache breakpoint on the last message so the growing
+ * transcript prefix is cached turn-over-turn (cache reads bill ~0.1x). Operates
+ * on a COPY — the persisted transcript (replayed verbatim on resume, where the
+ * API rejects modified blocks) is never mutated.
+ */
+function withRollingCache(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  if (messages.length === 0) return messages
+  const out = messages.slice()
+  const i = out.length - 1
+  const last = out[i]
+  if (typeof last.content === 'string') {
+    out[i] = { ...last, content: [{ type: 'text', text: last.content, cache_control: CACHE_CONTROL }] }
+  } else if (Array.isArray(last.content) && last.content.length > 0) {
+    const blocks = last.content.slice()
+    blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: CACHE_CONTROL } as (typeof blocks)[number]
+    out[i] = { ...last, content: blocks }
+  }
+  return out
+}
+
 class AnthropicRunner implements ModelRunner {
   private readonly client: Anthropic
 
@@ -81,7 +104,10 @@ class AnthropicRunner implements ModelRunner {
     const stream = this.client.messages.stream({
       model: this.model,
       max_tokens: 32000,
-      system,
+      // Cache the stable prefix: a breakpoint on the system block caches tools +
+      // system together (they precede messages in the cache prefix), so they
+      // bill at ~0.1x on every repeat turn instead of full price each turn.
+      system: [{ type: 'text', text: system, cache_control: CACHE_CONTROL }],
       ...(ADAPTIVE_THINKING_MODELS.test(this.model) ? { thinking: { type: 'adaptive' as const } } : {}),
       ...(tools.length
         ? {
@@ -92,7 +118,7 @@ class AnthropicRunner implements ModelRunner {
             })),
           }
         : {}),
-      messages: transcript as Anthropic.MessageParam[],
+      messages: withRollingCache(transcript as Anthropic.MessageParam[]),
     }, { signal: AbortSignal.timeout(STREAM_DEADLINE_MS) })
     const message = await stream.finalMessage()
     transcript.push({ role: 'assistant', content: message.content })
