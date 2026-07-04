@@ -45,6 +45,14 @@ function simpleIconUrl(slug: string): string {
   return `https://cdn.simpleicons.org/${slug}`
 }
 
+// Bundled brand assets (public/logos), preferred over any passed src or the
+// Simple Icons CDN — used wherever a provider's logo renders (run logs, cards,
+// integrations catalogue). Keyed by lowercased slug.
+const LOCAL_LOGOS: Record<string, string> = {
+  slack: '/logos/slack.png',
+  granola: '/logos/granola.jpg',
+}
+
 export function IntegrationLogo({
   src,
   slug,
@@ -56,19 +64,21 @@ export function IntegrationLogo({
   name: string
   className?: string
 }) {
-  // 0 = explicit src, 1 = simple-icons, 2 = initial fallback.
-  const initialStage = src ? 0 : slug ? 1 : 2
+  const key = (slug || '').toLowerCase()
+  // A bundled asset for this provider wins over any passed src or the CDN.
+  const effectiveSrc = LOCAL_LOGOS[key] ?? src
+  const iconSlug = SIMPLE_ICON_SLUGS[key] ?? (key || null)
+  // 0 = explicit/local src, 1 = simple-icons, 2 = initial fallback.
+  const initialStage = effectiveSrc ? 0 : slug ? 1 : 2
   const [stage, setStage] = useState(initialStage)
 
-  const key = (slug || '').toLowerCase()
-  const iconSlug = SIMPLE_ICON_SLUGS[key] ?? (key || null)
   const box = cn('flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded', className)
 
-  if (stage === 0 && src) {
+  if (stage === 0 && effectiveSrc) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={src}
+        src={effectiveSrc}
         alt=""
         className={box}
         onError={() => setStage(iconSlug ? 1 : 2)}
