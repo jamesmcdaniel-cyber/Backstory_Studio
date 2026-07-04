@@ -72,11 +72,24 @@ export async function resolveAgentConnectorKeys(
   agentTaskId: string,
   metadata: Record<string, unknown> | null | undefined,
 ): Promise<string[]> {
-  const rows = await prisma.agentConnector.findMany({
-    where: { agentTaskId },
-    select: { connectorKey: true },
-  })
-  if (rows.length) return rows.map((r) => r.connectorKey)
-  const integrations = (metadata as { integrations?: unknown } | null | undefined)?.integrations
-  return Array.isArray(integrations) ? integrations.map(String) : []
+  const fromMetadata = () => {
+    const integrations = (metadata as { integrations?: unknown } | null | undefined)?.integrations
+    return Array.isArray(integrations) ? integrations.map(String) : []
+  }
+  try {
+    const rows = await prisma.agentConnector.findMany({
+      where: { agentTaskId },
+      select: { connectorKey: true },
+    })
+    if (rows.length) return rows.map((r) => r.connectorKey)
+    return fromMetadata()
+  } catch (error) {
+    // Deploy-order safety: prod applies no schema on deploy, so this code can
+    // ship before the agent_connectors migration is applied. Fall back to the
+    // metadata selection rather than failing every run on a missing relation.
+    apiLogger.warn('resolveAgentConnectorKeys: falling back to metadata.integrations', {
+      agentTaskId, error: error instanceof Error ? error.message : String(error),
+    })
+    return fromMetadata()
+  }
 }
