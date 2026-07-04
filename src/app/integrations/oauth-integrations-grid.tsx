@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { useCachedJson } from '@/lib/client/use-cached-json'
 
 type Integration = {
   id: string
@@ -26,39 +27,31 @@ type Connection = {
 }
 
 export function OAuthIntegrationsGrid() {
-  const [integrations, setIntegrations] = useState<Integration[]>([])
-  const [connections, setConnections] = useState<Record<string, Connection>>({})
+  // Cached (stale-while-revalidate): the integration catalog is static (also
+  // server-cached), connections revalidate in the background. A revisit paints
+  // the last-seen grid instantly instead of the loading skeleton.
+  const { data: integrationsData, loading: loadingIntegrations, refresh: refreshIntegrations } =
+    useCachedJson<{ integrations?: Integration[] }>('/api/nango/integrations')
+  const { data: statusData, loading: loadingStatus, refresh: refreshStatus } =
+    useCachedJson<{ connections?: Record<string, Connection> }>('/api/nango/status')
+  const integrations = useMemo(() => integrationsData?.integrations ?? [], [integrationsData])
+  const connections = statusData?.connections ?? {}
+  const loading = loadingIntegrations || loadingStatus
   const [search, setSearch] = useState('')
-  const [busy, setBusy] = useState<string | null>('loading')
+  const [busy, setBusy] = useState<string | null>(null)
   const connectUIRef = useRef<ConnectUI | null>(null)
 
-  const load = useCallback(async () => {
-    setBusy('loading')
-    try {
-      const [integrationsResponse, statusResponse] = await Promise.all([
-        fetch('/api/nango/integrations', { cache: 'no-store' }),
-        fetch('/api/nango/status', { cache: 'no-store' }),
-      ])
-      const integrationsData = await integrationsResponse.json()
-      const statusData = await statusResponse.json()
-      if (!integrationsResponse.ok) throw new Error(integrationsData.error || 'Unable to load available integrations')
-      if (!statusResponse.ok) throw new Error(statusData.error || 'Unable to load connected accounts')
-      setIntegrations(integrationsData.integrations || [])
-      setConnections(statusData.connections || {})
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Unable to load integrations')
-    } finally {
-      setBusy(null)
-    }
-  }, [])
+  const refreshAll = useCallback(() => {
+    void refreshIntegrations()
+    void refreshStatus()
+  }, [refreshIntegrations, refreshStatus])
 
   useEffect(() => {
-    load()
     return () => {
       connectUIRef.current?.close()
       connectUIRef.current = null
     }
-  }, [load])
+  }, [])
 
   const visibleIntegrations = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -79,7 +72,7 @@ export function OAuthIntegrationsGrid() {
             toast.success(`${integration.name} connected`)
             connectUIRef.current = null
             setBusy(null)
-            load()
+            void refreshStatus()
           } else if (event.type === 'close') {
             connectUIRef.current = null
             setBusy(null)
@@ -115,7 +108,7 @@ export function OAuthIntegrationsGrid() {
       const response = await fetch(`/api/nango/connections/${encodeURIComponent(integration.id)}`, { method: 'DELETE' })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Unable to disconnect account')
-      await load()
+      await refreshStatus()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to disconnect account')
       setBusy(null)
@@ -126,8 +119,8 @@ export function OAuthIntegrationsGrid() {
     <div className="space-y-4">
       <div className="flex gap-2">
         <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search integrations" />
-        <Button variant="outline" size="icon" onClick={load} disabled={busy === 'loading'}>
-          <RefreshCw className={busy === 'loading' ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+        <Button variant="outline" size="icon" onClick={refreshAll} disabled={loading}>
+          <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
         </Button>
       </div>
 

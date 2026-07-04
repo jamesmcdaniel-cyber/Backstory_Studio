@@ -1,9 +1,10 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowRight, Check, Loader2, Unplug } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useCachedJson } from '@/lib/client/use-cached-json'
 
 type Status = {
   configured: boolean
@@ -17,23 +18,10 @@ type Status = {
  * gate and gives this user's agents their People.ai read tools.
  */
 export function PeopleAiCard() {
-  const [status, setStatus] = useState<Status | null>(null)
-  const [loading, setLoading] = useState(true)
+  // Cached (stale-while-revalidate) so a revisit paints the last-seen status
+  // instantly instead of a spinner.
+  const { data: status, loading, refresh } = useCachedJson<Status>('/api/peopleai/status')
   const [disconnecting, setDisconnecting] = useState(false)
-
-  const load = useCallback(async () => {
-    try {
-      const response = await fetch('/api/peopleai/status', { cache: 'no-store' })
-      const data = await response.json().catch(() => null)
-      if (response.ok && data?.success) setStatus(data)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load])
 
   const disconnect = async () => {
     setDisconnecting(true)
@@ -45,7 +33,7 @@ export function PeopleAiCard() {
         return
       }
       toast.success('People.ai disconnected.')
-      await load()
+      await refresh()
     } finally {
       setDisconnecting(false)
     }

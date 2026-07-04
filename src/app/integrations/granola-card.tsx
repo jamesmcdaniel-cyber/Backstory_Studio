@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { CheckCircle2, Loader2, NotebookPen } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useCachedJson } from '@/lib/client/use-cached-json'
 
 type GranolaState = {
   configured: boolean
@@ -15,27 +16,11 @@ type GranolaState = {
 }
 
 export function GranolaCard() {
-  const [state, setState] = useState<GranolaState | null>(null)
+  // Cached (stale-while-revalidate): a revisit paints the last-seen status
+  // instantly; mutations below update the cache via mutate().
+  const { data: state, loading, mutate } = useCachedJson<GranolaState>('/api/integrations/granola')
   const [apiKey, setApiKey] = useState('')
-  const [busy, setBusy] = useState<'load' | 'test' | 'save' | 'remove' | null>('load')
-
-  const load = useCallback(async () => {
-    setBusy('load')
-    try {
-      const response = await fetch('/api/integrations/granola', { cache: 'no-store' })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.error || 'Unable to load Granola status')
-      setState({ configured: data.configured, source: data.source })
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Unable to load Granola status')
-    } finally {
-      setBusy(null)
-    }
-  }, [])
-
-  useEffect(() => {
-    load()
-  }, [load])
+  const [busy, setBusy] = useState<'test' | 'save' | 'remove' | null>(null)
 
   const test = async () => {
     setBusy('test')
@@ -69,7 +54,7 @@ export function GranolaCard() {
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Unable to save the key')
-      setState({ configured: data.configured, source: data.source })
+      mutate({ configured: data.configured, source: data.source })
       setApiKey('')
       toast.success('Granola connected')
     } catch (error) {
@@ -86,7 +71,7 @@ export function GranolaCard() {
       const response = await fetch('/api/integrations/granola', { method: 'DELETE' })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Unable to remove the key')
-      setState({ configured: data.configured, source: data.source })
+      mutate({ configured: data.configured, source: data.source })
       toast.success('Granola key removed')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Unable to remove the key')
@@ -105,7 +90,7 @@ export function GranolaCard() {
         <CardTitle className="flex items-center justify-between gap-3 text-base">
           <span className="flex items-center gap-2"><NotebookPen className="h-4 w-4" />Granola</span>
           <Badge variant="outline">
-            {busy === 'load'
+            {loading
               ? 'Checking...'
               : connected
                 ? <><CheckCircle2 className="mr-1 h-3 w-3 text-green-600" />Connected</>
