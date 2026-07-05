@@ -9,7 +9,6 @@ import { AgentConfigForm, type AgentDraft } from './agent-config-form'
 import { AssistantPanel } from './assistant-panel'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
 import { useAuth } from '@/hooks/use-auth'
 import { getSnapshot, SnapshotError } from '@/lib/client/snapshot'
@@ -323,7 +322,7 @@ function AgentHQ() {
   }
 
   return (
-    <DashboardLayout fullscreen>
+    <>
       <div className="flex flex-col lg:grid lg:h-screen lg:grid-cols-[minmax(420px,1fr)_minmax(400px,1fr)] lg:overflow-hidden">
         {/* ── Left pane: activity for the selected agent, or the setup flow ── */}
         <section className="min-w-0 border-b bg-white lg:overflow-y-auto lg:border-b-0 lg:border-r">
@@ -522,7 +521,7 @@ function AgentHQ() {
           />
         </section>
       </div>
-    </DashboardLayout>
+    </>
   )
 }
 

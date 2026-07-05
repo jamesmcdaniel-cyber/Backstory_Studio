@@ -12,7 +12,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 
@@ -194,18 +193,18 @@ function ExplorePage() {
 
   if (loading || error) {
     return (
-      <DashboardLayout>
+      <>
         <div className="max-w-6xl mx-auto p-6">
           <h1 className="text-2xl font-bold mb-4">Explore</h1>
           {loading && <p className="text-muted-foreground">Loading…</p>}
           {error && <p className="text-red-500">{error}</p>}
         </div>
-      </DashboardLayout>
+      </>
     )
   }
 
   return (
-    <DashboardLayout>
+    <>
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         <h1 className="text-2xl font-bold">Explore</h1>
 
@@ -373,7 +372,7 @@ function ExplorePage() {
           </TabsContent>
         </Tabs>
       </div>
-    </DashboardLayout>
+    </>
   )
 }
 

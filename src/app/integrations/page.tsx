@@ -2,7 +2,6 @@
 
 import { Suspense } from 'react'
 import { Bot, Cable } from 'lucide-react'
-import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { MCPIntegrationCards } from '@/components/integrations/mcp-integration-cards'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { GranolaCard } from './granola-card'
@@ -11,7 +10,7 @@ import { PeopleAiCard } from './people-ai-card'
 
 export default function IntegrationsPage() {
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-semibold">Integrations</h1>
@@ -34,6 +33,6 @@ export default function IntegrationsPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </DashboardLayout>
+    </>
   )
 }

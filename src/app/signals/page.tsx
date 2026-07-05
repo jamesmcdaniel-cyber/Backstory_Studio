@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUpRight, Loader2, Play, Plus, Radio, Sparkles, Trash2 } from 'lucide-react'
-import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -366,7 +365,7 @@ function CustomSignalsManager() {
 
 export default function SignalsPage() {
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-semibold">Signals</h1>
@@ -383,6 +382,6 @@ export default function SignalsPage() {
           <TabsContent value="rules" className="mt-6"><SubscriptionsManager /></TabsContent>
         </Tabs>
       </div>
-    </DashboardLayout>
+    </>
   )
 }

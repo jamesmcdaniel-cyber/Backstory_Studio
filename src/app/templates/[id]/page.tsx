@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
@@ -47,7 +46,7 @@ export default function TemplateDetails() {
   }
 
   return (
-    <DashboardLayout>
+    <>
       <div className="mx-auto max-w-3xl space-y-5 p-6">
         {!template ? <p className="text-sm text-gray-500">Loading template...</p> : (
           <>
@@ -65,6 +64,6 @@ export default function TemplateDetails() {
           </>
         )}
       </div>
-    </DashboardLayout>
+    </>
   )
 }

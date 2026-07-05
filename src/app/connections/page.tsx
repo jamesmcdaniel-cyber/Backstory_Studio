@@ -8,7 +8,6 @@ import { McpConnectionDialog, type McpConnectionDraft, type SerializedConnection
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { DashboardLayout } from '@/components/layout/dashboard-layout'
 
 // ── Auth-badge labels ─────────────────────────────────────────────────────────
 
@@ -135,7 +134,7 @@ function ConnectionsPage() {
   }
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
@@ -273,7 +272,7 @@ function ConnectionsPage() {
         onSave={saveConnection}
         editingConnection={editingConnection}
       />
-    </DashboardLayout>
+    </>
   )
 }
 

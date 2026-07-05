@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import localFont from 'next/font/local'
 import { Anonymous_Pro } from 'next/font/google'
 import { ClientProviders } from '@/components/providers/client-providers'
+import { AppShell } from '@/components/layout/app-shell'
 import './globals.css'
 
 // PRIMARY DISPLAY/BODY — KMR Waldenburg (proprietary, self-hosted). Arimo is the
@@ -37,7 +38,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
     <html lang="en" className={`${waldenburg.variable} ${anonymousPro.variable}`}>
       <body>
         <ClientProviders>
-          <main id="main-content">{children}</main>
+          <AppShell>{children}</AppShell>
         </ClientProviders>
       </body>
     </html>
