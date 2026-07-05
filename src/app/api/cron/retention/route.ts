@@ -11,6 +11,7 @@
  */
 
 import { timingSafeEqual } from 'crypto'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 
@@ -55,8 +56,30 @@ export async function GET(request: Request) {
       ? (await prisma.signal.deleteMany({ where: { id: { in: staleSignals.map((s) => s.id) } } })).count
       : 0
 
-    apiLogger.info('cron/retention complete', { days, executionsDeleted, signalsDeleted })
-    return Response.json({ success: true, days, executionsDeleted, signalsDeleted })
+    // Transcripts are the fattest column (provider message JSON, growing per
+    // turn — can reach MBs per run). They only matter for RESUMING a run, so
+    // terminal runs older than TRANSCRIPT_RETENTION_DAYS (default 14) have
+    // theirs nulled long before the row itself is deleted at RETENTION_DAYS.
+    const transcriptDays = Number(process.env.TRANSCRIPT_RETENTION_DAYS) || 14
+    const transcriptCutoff = new Date(Date.now() - transcriptDays * 24 * 60 * 60 * 1000)
+    const staleTranscripts = await prisma.agentExecution.findMany({
+      where: {
+        completedAt: { lt: transcriptCutoff },
+        status: { in: ['completed', 'failed'] },
+        NOT: { transcript: { equals: Prisma.DbNull } },
+      },
+      select: { id: true },
+      take: CAP,
+    })
+    const transcriptsPruned = staleTranscripts.length
+      ? (await prisma.agentExecution.updateMany({
+          where: { id: { in: staleTranscripts.map((e) => e.id) } },
+          data: { transcript: Prisma.DbNull },
+        })).count
+      : 0
+
+    apiLogger.info('cron/retention complete', { days, executionsDeleted, signalsDeleted, transcriptsPruned })
+    return Response.json({ success: true, days, executionsDeleted, signalsDeleted, transcriptsPruned })
   } catch (error) {
     apiLogger.error('cron/retention failed', { error: error instanceof Error ? error.message : String(error) })
     return Response.json({ success: false, error: 'Internal server error' }, { status: 500 })

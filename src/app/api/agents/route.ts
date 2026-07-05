@@ -74,6 +74,9 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
       ...agentVisibilityScope(auth.dbUser.id),
     },
     orderBy: { updatedAt: 'desc' },
+    // Bounded: this list is polled by the sidebar + dashboard; an org with a
+    // runaway number of agents must not turn every poll into a full scan.
+    take: 300,
   })
   return { success: true, agents: agents.map(serializeAgent) }
 })
