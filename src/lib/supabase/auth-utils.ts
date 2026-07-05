@@ -61,9 +61,35 @@ async function provisionUser(user: User) {
 
 export async function getAuthWithUser() {
   const supabase = await createClient()
-  const { data: { user }, error } = await supabase.auth.getUser()
 
-  if (error || !user) return null
+  // Prefer getClaims(): on projects with asymmetric JWT signing keys the token
+  // verifies LOCALLY against a cached JWKS — zero network on the auth hot path.
+  // On legacy symmetric-key projects supabase-js falls back to a server check
+  // itself, so behavior (and cost) is never worse than getUser(). Consumers
+  // only use identity fields (id/email/user_metadata), all present in claims.
+  let user: User | null = null
+  try {
+    const { data } = await supabase.auth.getClaims()
+    const claims = data?.claims
+    if (claims?.sub) {
+      user = {
+        id: claims.sub,
+        email: typeof claims.email === 'string' ? claims.email : undefined,
+        user_metadata: (claims.user_metadata as Record<string, unknown> | undefined) ?? {},
+        app_metadata: (claims.app_metadata as Record<string, unknown> | undefined) ?? {},
+        aud: typeof claims.aud === 'string' ? claims.aud : 'authenticated',
+        created_at: '',
+      } as User
+    }
+  } catch {
+    // Fall through to getUser below (e.g. token needs a refresh round-trip).
+  }
+
+  if (!user) {
+    const { data, error } = await supabase.auth.getUser()
+    if (error || !data.user) return null
+    user = data.user
+  }
 
   const dbUser = (await findDbUserCached(user.id)) ?? (await provisionUser(user))
 
