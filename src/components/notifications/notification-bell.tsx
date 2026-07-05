@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, Bell, CheckCircle2, HelpCircle, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { getSnapshot } from '@/lib/client/snapshot'
 import { cn } from '@/lib/utils'
 
 type NotificationItem = {
@@ -43,11 +44,15 @@ export function NotificationBell() {
   const [pushState, setPushState] = useState<PushState>('unknown')
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/notifications?limit=30', { cache: 'no-store' })
-    if (!res.ok) return
-    const data = await res.json()
-    setItems(data.notifications || [])
-    setUnread(data.unread || 0)
+    // Shared app-shell snapshot (deduped with the dashboard + sidebar) rather
+    // than a dedicated notifications request each tick.
+    try {
+      const snapshot = await getSnapshot()
+      setItems((snapshot.notifications || []) as NotificationItem[])
+      setUnread(snapshot.unread || 0)
+    } catch {
+      // leave the last-known list on a transient failure
+    }
   }, [])
 
   useEffect(() => {

@@ -28,6 +28,7 @@ import { CommandPalette } from '@/components/search/command-palette'
 import { NotificationBell } from '@/components/notifications/notification-bell'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
+import { getSnapshot } from '@/lib/client/snapshot'
 import { cn } from '@/lib/utils'
 import type { Agent as AgentType } from '@/lib/types'
 
@@ -115,23 +116,15 @@ export function Sidebar() {
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    const [agentResponse, usageResponse, orgResponse] = await Promise.all([
-      fetch('/api/agents', { cache: 'no-store' }),
-      fetch('/api/usage', { cache: 'no-store' }),
-      fetch('/api/organizations', { cache: 'no-store' }),
-    ])
-    // Carry forward the current snapshot so a failed sub-request doesn't wipe
-    // that slice; update state + the module cache together.
-    const next: SidebarSnapshot = sidebarCache
-      ? { ...sidebarCache }
-      : { organizations: [], activeOrgId: null, agents: [], usage: null }
-    if (agentResponse.ok) next.agents = (await agentResponse.json()).agents || []
-    if (usageResponse.ok) next.usage = (await usageResponse.json()).usage || null
-    if (orgResponse.ok) {
-      const data = await orgResponse.json()
-      next.organizations = data.organizations || []
-      next.activeOrgId = data.activeOrganizationId || null
+  const load = useCallback(async (force = false) => {
+    // One shared snapshot (deduped across the dashboard + bell within an ~8s
+    // window) instead of three separate authenticated requests per poll.
+    const snapshot = await getSnapshot(force ? 0 : undefined)
+    const next: SidebarSnapshot = {
+      organizations: snapshot.organizations || [],
+      activeOrgId: snapshot.activeOrganizationId || null,
+      agents: snapshot.agents || [],
+      usage: snapshot.usage || null,
     }
     sidebarCache = next
     setAgents(next.agents)
@@ -149,7 +142,7 @@ export function Sidebar() {
     const onVisible = () => {
       if (!document.hidden) load().catch(() => undefined)
     }
-    const onChanged = () => load().catch(() => undefined)
+    const onChanged = () => load(true).catch(() => undefined)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener(AGENTS_CHANGED_EVENT, onChanged)
     return () => {

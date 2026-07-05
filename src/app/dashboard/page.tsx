@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
 import { useAuth } from '@/hooks/use-auth'
+import { getSnapshot, SnapshotError } from '@/lib/client/snapshot'
 import { cn } from '@/lib/utils'
 
 import type { Agent, Activity } from '@/lib/types'
@@ -52,33 +53,25 @@ function AgentHQ() {
   const [granolaFetchingNote, setGranolaFetchingNote] = useState(false)
   const [granolaNotes, setGranolaNotes] = useState<GranolaNote[]>([])
 
-  const load = useCallback(async () => {
-    const [agentResponse, activityResponse] = await Promise.all([
-      fetch('/api/agents', { cache: 'no-store' }),
-      fetch('/api/agents/activity?limit=50', { cache: 'no-store' }),
-    ])
-    if (agentResponse.ok) {
-      const data = await agentResponse.json()
-      setAgents(data.agents || [])
+  const load = useCallback(async (force = false) => {
+    try {
+      const snapshot = await getSnapshot(force ? 0 : undefined)
+      setAgents(snapshot.agents || [])
+      setActivities(snapshot.activities || [])
       setAuthError(null)
       setAuthStatus(null)
-    } else {
-      // Surface the real reason instead of rendering an empty shell.
-      const data = await agentResponse.json().catch(() => ({}))
-      if (data.code === 'ENTITLEMENT_REQUIRED') {
-        // The gate: this workspace has no active People.ai Sales AI
-        // connection — send the user to the connect flow.
+    } catch (error) {
+      // The gate: no active Sales AI connection — send to the connect flow.
+      if (error instanceof SnapshotError && error.code === 'ENTITLEMENT_REQUIRED') {
         window.location.assign('/connect')
         return
       }
-      setAuthStatus(agentResponse.status)
-      setAuthError(data.error || `Couldn't load agents (HTTP ${agentResponse.status}).`)
+      const status = error instanceof SnapshotError ? error.status ?? 500 : 500
+      setAuthStatus(status)
+      setAuthError(error instanceof Error ? error.message : `Couldn't load agents (HTTP ${status}).`)
+    } finally {
+      setLoading(false)
     }
-    if (activityResponse.ok) {
-      const data = await activityResponse.json()
-      setActivities(data.activities || [])
-    }
-    setLoading(false)
   }, [])
 
   useEffect(() => {
@@ -91,7 +84,7 @@ function AgentHQ() {
     const onVisible = () => {
       if (!document.hidden) load().catch(() => undefined)
     }
-    const onChanged = () => load().catch(() => undefined)
+    const onChanged = () => load(true).catch(() => undefined)
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener(AGENTS_CHANGED_EVENT, onChanged)
     return () => {
@@ -235,7 +228,7 @@ function AgentHQ() {
     notifyAgentsChanged()
     toast.success(editingAgent ? 'Agent updated.' : 'Agent created.')
     setConfigureOpen(false)
-    await load()
+    await load(true)
     if (!editingAgent && data.agent?.id) setSelectedAgentId(data.agent.id)
   }
 
@@ -256,7 +249,7 @@ function AgentHQ() {
       setDescribe('')
       notifyAgentsChanged()
       toast.success(`Created "${data.draft?.title || 'agent'}".`)
-      await load()
+      await load(true)
       if (data.agentId) setSelectedAgentId(data.agentId)
     } finally {
       setBuilding(false)
@@ -320,7 +313,7 @@ function AgentHQ() {
         setSelectedAgentId(agent.id)
         setConfigureOpen(false)
         if (data.executionId) setFocusRunId(data.executionId)
-        await load()
+        await load(true)
       } else {
         toast.error(data.error || 'Run failed')
       }
@@ -512,7 +505,7 @@ function AgentHQ() {
               agent={selectedAgent}
               activities={agentActivities}
               focusRunId={focusRunId}
-              onChanged={() => load().catch(() => undefined)}
+              onChanged={() => load(true).catch(() => undefined)}
               onSelectRun={setSelectedRun}
             />
           )}
@@ -525,7 +518,7 @@ function AgentHQ() {
             agent={selectedAgent}
             hasFailedRun={hasFailedRun}
             runOutput={runOutput}
-            onAgentUpdated={() => load().catch(() => undefined)}
+            onAgentUpdated={() => load(true).catch(() => undefined)}
           />
         </section>
       </div>

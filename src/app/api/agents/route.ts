@@ -4,6 +4,7 @@ import { DEFAULT_AGENT_MODEL } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { readAgentMetadata } from '@/lib/agents/metadata'
+import { serializeAgent } from '@/lib/agents/serialize'
 import { indexAgent, removeAgentFromGraph } from '@/lib/rag/indexer'
 import { syncAgentConnectors } from '@/lib/connectors/agent-connectors'
 
@@ -44,27 +45,8 @@ const agentSchema = z.object({
   schedule: scheduleSchema.default({ type: 'manual', timezone: 'UTC', isActive: false }),
 })
 
-function serializeAgent(agent: any) {
-  const metadata = readAgentMetadata(agent.metadata)
-  return {
-    id: agent.id,
-    title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',
-    description: metadata.description || agent.description,
-    instructions: agent.objective,
-    model: metadata.model || DEFAULT_AGENT_MODEL,
-    integrations: metadata.integrations || [],
-    skills: metadata.skills || [],
-    icon: metadata.icon || '',
-    folder: agent.folder || null,
-    visibility: agent.visibility || 'shared',
-    status: agent.status.toLowerCase(),
-    priority: agent.priority.toLowerCase(),
-    schedule: agent.schedule,
-    createdAt: agent.createdAt,
-    lastExecutedAt: agent.lastExecutedAt,
-    executionCount: agent.executionCount,
-  }
-}
+// serializeAgent lives in @/lib/agents/serialize so /api/snapshot returns the
+// exact same agent shape as this route.
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const agents = await prisma.agentTask.findMany({
