@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Markdown } from '@/components/ui/markdown'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { useCachedJson } from '@/lib/client/use-cached-json'
 
 const SIGNAL_TYPES = [
   'deal.score_updated',
@@ -41,18 +42,12 @@ type Subscription = {
 type Agent = { id: string; title: string }
 
 function SignalsList() {
-  const [signals, setSignals] = useState<Signal[]>([])
-  const [loading, setLoading] = useState(true)
+  // Cached (stale-while-revalidate): a revisit paints the last-seen feed
+  // instantly instead of a spinner, then refreshes in the background.
+  const { data, loading } = useCachedJson<{ signals?: Signal[] }>('/api/signals?limit=100')
+  const signals = data?.signals ?? []
 
-  useEffect(() => {
-    fetch('/api/signals?limit=100', { cache: 'no-store' })
-      .then((response) => response.json())
-      .then((data) => setSignals(data.signals || []))
-      .catch(() => setSignals([]))
-      .finally(() => setLoading(false))
-  }, [])
-
-  if (loading) return <div className="p-8 text-center text-gray-400"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
+  if (loading && !signals.length) return <div className="p-8 text-center text-gray-400"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
   if (signals.length === 0) {
     return (
       <div className="rounded-xl border border-dashed p-10 text-center">
