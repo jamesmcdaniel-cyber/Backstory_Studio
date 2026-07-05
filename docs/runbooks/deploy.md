@@ -65,8 +65,15 @@ DROP TYPE "IntegrationType"; DROP TYPE "MCPAgentType";`
   - `OPENAI_API_KEY` → set (default agent model is GPT-4o), or change the
     default model to a `claude-*` id via `AGENT_MODEL`.
   - `SENTRY_DSN` → set to enable error tracking (optional but recommended).
-- **Worker (Phase 4)**: deploy the BullMQ worker via `render.yaml` with
-  `EXECUTION_MODE=queue`, `REDIS_URL`, and the same `DATABASE_URL`/model keys.
+- **Worker (Phase 4)**: deploy the BullMQ worker via `render.yaml`
+  (Render → New → Blueprint → this repo), setting every `sync: false` secret in
+  the Render dashboard. `REDIS_URL` must be the **same Upstash TCP URL**
+  (`rediss://…:6379`) Vercel uses to enqueue — NOT a separate Redis, or the
+  worker listens to an empty queue. Rollout order: worker deploys green and its
+  logs show the queues consuming → then flip Vercel `EXECUTION_MODE` to `queue`
+  (or remove the var; prod defaults to queue) and redeploy. Until then,
+  production runs inline (`EXECUTION_MODE=inline`), bounded by the 5-minute
+  serverless ceiling.
 
 ## Secrets
 
