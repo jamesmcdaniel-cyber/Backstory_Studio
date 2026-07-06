@@ -270,17 +270,31 @@ export function AgentConfigForm({
       .catch(() => {})
   }, [])
 
-  // Load available integrations when the form becomes active
+  // Load available integrations when the form becomes active, and refetch when
+  // the user returns to the tab — so a tool connected elsewhere (the
+  // Connections/MCP pages, or a Klavis OAuth popup) shows up here promptly
+  // instead of only after a full reload.
   useEffect(() => {
     if (!active) return
-    fetch('/api/integrations/available')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
+    let cancelled = false
+    const loadAvailable = () => {
+      fetch('/api/integrations/available', { cache: 'no-store' })
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled || !data.success) return
           setAvailableIntegrations({ tools: data.tools ?? [], connections: data.connections ?? [] })
-        }
-      })
-      .catch(() => {})
+        })
+        .catch(() => {})
+    }
+    loadAvailable()
+    const refetchOnReturn = () => { if (!document.hidden) loadAvailable() }
+    window.addEventListener('focus', refetchOnReturn)
+    document.addEventListener('visibilitychange', refetchOnReturn)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', refetchOnReturn)
+      document.removeEventListener('visibilitychange', refetchOnReturn)
+    }
   }, [active])
 
   // Populate the draft ONLY when the edited agent/template identity changes (or
@@ -507,6 +521,10 @@ export function AgentConfigForm({
                 })}
               </div>
             )}
+            <p className="text-xs text-muted-foreground">
+              Click a tool to attach it to this agent — a green dot means it&apos;s connected and
+              ready, but the agent only uses tools you attach here.
+            </p>
             <div className="flex items-center gap-2">
               <Link
                 href="/connections"
