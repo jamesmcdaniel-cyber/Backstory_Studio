@@ -60,7 +60,11 @@ const LOCAL_LOGOS: Record<string, string> = {
 }
 
 function localLogo(slug: string): string | undefined {
-  return LOCAL_LOGOS[slug.replace(/[-_]/g, '')]
+  const key = slug.replace(/[-_\s]/g, '')
+  // Custom Backstory MCP connections slugify to backstory_mcp / backstorymcp /
+  // "backstory mcp" etc.; any variant containing "backstory" gets the mark.
+  if (key.includes('backstory')) return LOCAL_LOGOS.backstory
+  return LOCAL_LOGOS[key]
 }
 
 export function IntegrationLogo({

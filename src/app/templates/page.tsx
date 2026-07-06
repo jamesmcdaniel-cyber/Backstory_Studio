@@ -79,10 +79,11 @@ function categoryIcon(category: string) {
 }
 
 // Map an integration display name ("Slack", "Email", "Backstory MCP") to a
-// Simple Icons slug so IntegrationLogo can render the real brand mark. Anything
-// unmapped (Backstory MCP, custom tools) falls through to its initial tile.
+// logo slug so IntegrationLogo can render the real brand mark. Anything
+// unmapped (custom tools) falls through to its initial tile.
 function integrationSlug(name: string): string | null {
   const n = name.toLowerCase()
+  if (n.includes('backstory')) return 'backstory'
   if (n.includes('slack')) return 'slack'
   if (n.includes('salesforce')) return 'salesforce'
   if (n.includes('hubspot')) return 'hubspot'
