@@ -4,8 +4,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { ArrowUpRight, Loader2, Play, Plus, Radio, Sparkles, Trash2 } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { Markdown } from '@/components/ui/markdown'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -46,52 +51,60 @@ function SignalsList() {
   const { data, loading } = useCachedJson<{ signals?: Signal[] }>('/api/signals?limit=100')
   const signals = data?.signals ?? []
 
-  if (loading && !signals.length) return <div className="p-8 text-center text-gray-400"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
+  if (loading && !signals.length) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-10 rounded-xl" />
+        <Skeleton className="h-10 rounded-xl" />
+        <Skeleton className="h-10 rounded-xl" />
+        <Skeleton className="h-10 rounded-xl" />
+      </div>
+    )
+  }
   if (signals.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed p-10 text-center">
-        <Radio className="mx-auto h-6 w-6 text-gray-300" />
-        <p className="mt-2 text-sm text-gray-500">No signals yet. When Backstory sends an event, it appears here.</p>
-      </div>
+      <EmptyState
+        icon={Radio}
+        title="No signals yet"
+        description="When Backstory sends an event, it appears here."
+      />
     )
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-white">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b bg-gray-50 text-left">
-            <th className="px-4 py-2.5 font-medium text-gray-600">Signal</th>
-            <th className="px-4 py-2.5 font-medium text-gray-600">Entity</th>
-            <th className="px-4 py-2.5 font-medium text-gray-600">Runs</th>
-            <th className="px-4 py-2.5 font-medium text-gray-600">Received</th>
-            <th className="px-4 py-2.5"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {signals.map((signal) => (
-            <tr key={signal.id} className="border-b last:border-b-0">
-              <td className="px-4 py-2.5"><span className="mono-label">{signal.type}</span></td>
-              <td className="px-4 py-2.5 text-gray-600">{signal.opportunityId || signal.accountId || '—'}</td>
-              <td className="px-4 py-2.5 text-gray-600">{signal._count.subscriptionRuns}</td>
-              <td className="px-4 py-2.5 text-gray-500">{new Date(signal.receivedAt).toLocaleString()}</td>
-              <td className="px-4 py-2.5 text-right">
-                {signal.provenanceUrl && (
-                  <a
-                    href={signal.provenanceUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-horizon-600 hover:underline"
-                  >
-                    Backstory <ArrowUpRight className="h-3 w-3" />
-                  </a>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Signal</TableHead>
+          <TableHead>Entity</TableHead>
+          <TableHead>Runs</TableHead>
+          <TableHead>Received</TableHead>
+          <TableHead></TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {signals.map((signal) => (
+          <TableRow key={signal.id}>
+            <TableCell><span className="mono-label">{signal.type}</span></TableCell>
+            <TableCell className="text-gray-600">{signal.opportunityId || signal.accountId || '—'}</TableCell>
+            <TableCell className="font-mono tabular-nums text-gray-600">{signal._count.subscriptionRuns}</TableCell>
+            <TableCell className="font-mono text-xs tabular-nums text-gray-500">{new Date(signal.receivedAt).toLocaleString()}</TableCell>
+            <TableCell className="text-right">
+              {signal.provenanceUrl && (
+                <a
+                  href={signal.provenanceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-horizon-600 hover:underline"
+                >
+                  Backstory <ArrowUpRight className="h-3 w-3" />
+                </a>
+              )}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -149,11 +162,18 @@ function SubscriptionsManager() {
     }
   }
 
-  if (loading) return <div className="p-8 text-center text-gray-400"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-28 rounded-xl" />
+        <Skeleton className="h-12 rounded-xl" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border bg-white p-5">
+      <div className="rounded-xl border bg-white p-5 shadow-1">
         <p className="eyebrow">New rule</p>
         <h3 className="mt-1 font-semibold text-gray-900">When a signal arrives, run an agent</h3>
         <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -171,19 +191,22 @@ function SubscriptionsManager() {
               {agents.map((agent) => <SelectItem key={agent.id} value={agent.id}>{agent.title}</SelectItem>)}
             </SelectContent>
           </Select>
-          <Button size="sm" disabled={saving} onClick={create}>
-            {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+          <Button size="sm" loading={saving} onClick={create}>
+            {!saving && <Plus className="h-4 w-4" />}
             Add rule
           </Button>
         </div>
       </div>
 
       {subscriptions.length === 0 ? (
-        <p className="text-sm text-gray-500">No routing rules yet.</p>
+        <EmptyState
+          title="No routing rules yet"
+          description="Add a rule above to run an agent whenever a signal arrives."
+        />
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-white">
+        <div className="overflow-hidden rounded-xl border bg-white shadow-1">
           {subscriptions.map((subscription) => (
-            <div key={subscription.id} className="flex items-center gap-3 border-b px-4 py-3 last:border-b-0">
+            <div key={subscription.id} className="flex items-center gap-3 border-b px-4 py-3 transition-colors duration-fast last:border-b-0 hover:bg-graphite-50/70">
               <span className="mono-label">{subscription.signalType}</span>
               <span className="text-sm text-gray-400">→</span>
               <span className="flex-1 text-sm text-gray-700">{subscription.agentTask?.description || 'agent'}</span>
@@ -287,11 +310,18 @@ function CustomSignalsManager() {
     }
   }
 
-  if (loading) return <div className="p-8 text-center text-gray-400"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-44 rounded-xl" />
+        <Skeleton className="h-24 rounded-xl" />
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border bg-white p-5">
+      <div className="rounded-xl border bg-white p-5 shadow-1">
         <p className="eyebrow">New custom signal</p>
         <h3 className="mt-1 font-semibold text-gray-900">A saved SalesAI question you can reuse</h3>
         <p className="mt-1 text-sm text-gray-500">
@@ -309,27 +339,28 @@ function CustomSignalsManager() {
             </Select>
           </div>
           <Textarea rows={3} placeholder="The question SalesAI should answer…" value={question} onChange={(e) => setQuestion(e.target.value)} />
-          <Button size="sm" disabled={saving} onClick={create}>
-            {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+          <Button size="sm" loading={saving} onClick={create}>
+            {!saving && <Plus className="h-4 w-4" />}
             Save signal
           </Button>
         </div>
       </div>
 
       {signals.length === 0 ? (
-        <div className="rounded-xl border border-dashed p-10 text-center">
-          <Sparkles className="mx-auto h-6 w-6 text-gray-300" />
-          <p className="mt-2 text-sm text-gray-500">No custom signals yet. Save one above to reuse it across accounts.</p>
-        </div>
+        <EmptyState
+          icon={Sparkles}
+          title="No custom signals yet"
+          description="Save one above to reuse it across accounts."
+        />
       ) : (
-        <div className="space-y-4">
+        <div className="stagger-children space-y-4">
           {signals.map((signal) => (
-            <div key={signal.id} className="rounded-xl border bg-white p-4">
+            <div key={signal.id} className="rounded-xl border bg-white p-4 shadow-1">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-gray-900">{signal.name}</span>
-                    <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-500">{signal.scope}</span>
+                    <Badge variant="info" className="rounded-full text-[10px] uppercase tracking-wide">{signal.scope}</Badge>
                   </div>
                   <p className="mt-1 text-sm text-gray-500">{signal.question}</p>
                 </div>
@@ -351,7 +382,7 @@ function CustomSignalsManager() {
                 </Button>
               </div>
               {results[signal.id] && (
-                <div className="mt-3 rounded-lg border bg-gray-50 p-3 text-sm">
+                <div className="mt-3 animate-fade-in rounded-lg border bg-gray-50 p-3 text-sm">
                   <Markdown>{results[signal.id]}</Markdown>
                 </div>
               )}
@@ -367,10 +398,11 @@ export default function SignalsPage() {
   return (
     <>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold">Signals</h1>
-          <p className="text-sm text-gray-500">Backstory Sales AI events, your custom signals, and the agents they trigger.</p>
-        </div>
+        <PageHeader
+          eyebrow="Sales AI"
+          title="Signals"
+          description="Backstory Sales AI events, your custom signals, and the agents they trigger."
+        />
         <Tabs defaultValue="feed">
           <TabsList>
             <TabsTrigger value="feed">Signal feed</TabsTrigger>

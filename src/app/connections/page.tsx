@@ -7,6 +7,9 @@ import { AlertCircle, Plug, Plus, Server, Trash2 } from 'lucide-react'
 import { McpConnectionDialog, type McpConnectionDraft, type SerializedConnection } from './mcp-connection-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 
 // ── Auth-badge labels ─────────────────────────────────────────────────────────
@@ -137,18 +140,17 @@ function ConnectionsPage() {
     <>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold">MCP Servers</h1>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              Connect external Model Context Protocol servers to your agents.
-            </p>
-          </div>
-          <Button onClick={openAdd}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            Add MCP server
-          </Button>
-        </div>
+        <PageHeader
+          eyebrow="Connections"
+          title="MCP Servers"
+          description="Connect external Model Context Protocol servers to your agents."
+          actions={
+            <Button onClick={openAdd}>
+              <Plus className="h-4 w-4" />
+              Add MCP server
+            </Button>
+          }
+        />
 
         {/* Auth error */}
         {authError && (
@@ -177,35 +179,35 @@ function ConnectionsPage() {
 
         {/* Loading */}
         {loading && (
-          <div className="py-12 text-center text-sm text-muted-foreground">
-            Loading…
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Skeleton className="h-36 rounded-xl" />
+            <Skeleton className="h-36 rounded-xl" />
+            <Skeleton className="h-36 rounded-xl" />
           </div>
         )}
 
         {/* Empty state */}
         {!loading && !authError && connections.length === 0 && (
-          <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed py-16 text-center">
-            <Server className="h-10 w-10 text-muted-foreground/40" />
-            <div>
-              <p className="font-medium text-muted-foreground">No MCP servers yet</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Add a server to give your agents access to external tools.
-              </p>
-            </div>
-            <Button variant="outline" onClick={openAdd}>
-              <Plus className="mr-1.5 h-4 w-4" />
-              Add your first server
-            </Button>
-          </div>
+          <EmptyState
+            icon={Server}
+            title="No MCP servers yet"
+            description="Add a server to give your agents access to external tools."
+            action={
+              <Button variant="outline" onClick={openAdd}>
+                <Plus className="h-4 w-4" />
+                Add your first server
+              </Button>
+            }
+          />
         )}
 
         {/* Connection cards */}
         {!loading && connections.length > 0 && (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="stagger-children grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {connections.map((conn) => (
               <div
                 key={conn.id}
-                className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-sm"
+                className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-1 transition-all duration-base ease-out-quart hover:-translate-y-px hover:shadow-2"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -235,9 +237,11 @@ function ConnectionsPage() {
                       onCheckedChange={() => toggleActive(conn)}
                       aria-label={conn.isActive ? 'Disable server' : 'Enable server'}
                     />
-                    <span className="text-xs text-muted-foreground">
-                      {conn.isActive ? 'Active' : 'Inactive'}
-                    </span>
+                    {conn.isActive ? (
+                      <Badge variant="good" className="text-xs">Active</Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs">Inactive</Badge>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
                     <Button

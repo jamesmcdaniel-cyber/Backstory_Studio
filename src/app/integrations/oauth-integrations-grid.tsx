@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Nango, { type ConnectUI } from '@nangohq/frontend'
-import { CheckCircle2, Loader2, RefreshCw } from 'lucide-react'
+import { CheckCircle2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { useCachedJson } from '@/lib/client/use-cached-json'
@@ -125,25 +126,28 @@ export function OAuthIntegrationsGrid() {
       </div>
 
       {!visibleIntegrations.length && busy !== 'loading' && (
-        <p className="text-sm text-gray-500">
-          No integrations are enabled yet. Enable integrations in your Nango dashboard and they appear here.
-        </p>
+        <EmptyState
+          title="No integrations are enabled yet"
+          description="Enable integrations in your Nango dashboard and they appear here."
+        />
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="stagger-children grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {visibleIntegrations.map((integration) => {
           const connection = connections[integration.id]
           return (
-            <Card key={integration.id}>
+            <Card key={integration.id} variant="interactive">
               <CardHeader>
                 <CardTitle className="flex items-center justify-between gap-3 text-base">
                   <span className="flex items-center gap-2">
                     <IntegrationLogo src={integration.logo} slug={integration.provider} name={integration.name} />
                     {integration.name}
                   </span>
-                  <Badge variant="outline">
-                    {connection?.connected ? <><CheckCircle2 className="mr-1 h-3 w-3 text-green-600" />Connected</> : 'Not connected'}
-                  </Badge>
+                  {connection?.connected ? (
+                    <Badge variant="good"><CheckCircle2 className="mr-1 h-3 w-3" />Connected</Badge>
+                  ) : (
+                    <Badge variant="secondary">Not connected</Badge>
+                  )}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -152,9 +156,9 @@ export function OAuthIntegrationsGrid() {
                 </p>
                 {connection?.error && <p className="text-sm text-red-600">{connection.error}</p>}
                 {connection?.connected
-                  ? <Button className="w-full" variant="outline" onClick={() => disconnect(integration)} disabled={busy === integration.id}>Disconnect</Button>
-                  : <Button className="w-full" onClick={() => connect(integration)} disabled={busy === integration.id}>
-                      {busy === integration.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Connect
+                  ? <Button className="w-full" variant="outline" onClick={() => disconnect(integration)} loading={busy === integration.id}>Disconnect</Button>
+                  : <Button className="w-full" onClick={() => connect(integration)} loading={busy === integration.id}>
+                      Connect
                     </Button>}
               </CardContent>
             </Card>

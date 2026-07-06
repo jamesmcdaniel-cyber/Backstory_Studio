@@ -11,6 +11,9 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
@@ -194,9 +197,18 @@ function ExplorePage() {
   if (loading || error) {
     return (
       <>
-        <div className="max-w-6xl mx-auto p-6">
-          <h1 className="text-2xl font-bold mb-4">Explore</h1>
-          {loading && <p className="text-muted-foreground">Loading…</p>}
+        <div className="max-w-6xl mx-auto p-6 space-y-6">
+          <PageHeader eyebrow="Library" title="Explore" />
+          {loading && (
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <Skeleton className="h-56 rounded-xl" />
+              <Skeleton className="h-56 rounded-xl" />
+              <Skeleton className="h-56 rounded-xl" />
+              <Skeleton className="h-56 rounded-xl" />
+              <Skeleton className="h-56 rounded-xl" />
+              <Skeleton className="h-56 rounded-xl" />
+            </div>
+          )}
           {error && <p className="text-red-500">{error}</p>}
         </div>
       </>
@@ -206,7 +218,7 @@ function ExplorePage() {
   return (
     <>
       <div className="max-w-6xl mx-auto p-6 space-y-6">
-        <h1 className="text-2xl font-bold">Explore</h1>
+        <PageHeader eyebrow="Library" title="Explore" />
 
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
@@ -222,9 +234,13 @@ function ExplorePage() {
             </div>
 
             {templates.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No templates available yet.</p>
+              <EmptyState
+                icon={Sparkles}
+                title="No templates available yet"
+                description="Templates published to your workspace appear here."
+              />
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="stagger-children grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {templates.map((t) => {
                   const accent = accentFor(t.category)
                   const Icon = categoryIcon(t.category)
@@ -284,9 +300,13 @@ function ExplorePage() {
             </div>
 
             {skills.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No skills available yet.</p>
+              <EmptyState
+                icon={Sparkles}
+                title="No skills available yet"
+                description="Skills published to your workspace appear here."
+              />
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="stagger-children grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {skills.map((skill) => {
                   const accent = accentFor(skill.category)
                   const Icon = categoryIcon(skill.category)
@@ -345,7 +365,7 @@ function ExplorePage() {
                         </Button>
 
                         {openSkillMenu === skill.id && agents.length > 0 && (
-                          <div className="absolute bottom-full left-0 right-0 mb-1 z-50 rounded-md border border-border bg-popover shadow-md">
+                          <div className="absolute bottom-full left-0 right-0 mb-1 z-50 origin-bottom animate-scale-in rounded-md border border-border bg-popover shadow-popover">
                             <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground font-medium">Select an agent</p>
                             <ul className="max-h-48 overflow-y-auto pb-1">
                               {agents.map((agent) => (

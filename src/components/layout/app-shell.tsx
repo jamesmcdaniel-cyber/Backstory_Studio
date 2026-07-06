@@ -40,7 +40,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         {fullscreen ? (
           <ErrorBoundary>{children}</ErrorBoundary>
         ) : (
-          <div className="container mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-8">
+          <div className="container mx-auto max-w-7xl animate-fade-in px-3 py-4 sm:px-6 sm:py-8">
             <ErrorBoundary>{children}</ErrorBoundary>
           </div>
         )}

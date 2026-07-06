@@ -2,16 +2,28 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, CheckCircle2, CircleDashed, HelpCircle, Loader2, Search } from 'lucide-react'
+import { AlertCircle, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Radio, Search, Server } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import type { Agent } from '@/lib/types'
 
 type AgentResult = Pick<Agent, 'id' | 'title' | 'icon' | 'folder'>
 type RunResult = { id: string; title: string; headline: string | null; status: string; startedAt: string }
+type NavResult = { label: string; href: string; icon: LucideIcon }
 type Result =
+  | { kind: 'nav'; nav: NavResult }
   | { kind: 'agent'; agent: AgentResult }
   | { kind: 'run'; run: RunResult }
+
+// Mirrors the sidebar's navigation so ⌘K doubles as quick navigation.
+const NAV_ITEMS: NavResult[] = [
+  { label: 'Home', href: '/dashboard', icon: Brain },
+  { label: 'Signals', href: '/signals', icon: Radio },
+  { label: 'Integrations', href: '/integrations', icon: Plug },
+  { label: 'Explore', href: '/templates', icon: FileText },
+  { label: 'MCP Servers', href: '/connections', icon: Server },
+]
 
 function runStatusIcon(status: string) {
   switch (status.toLowerCase()) {
@@ -31,10 +43,17 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const [active, setActive] = useState(0)
   const requestId = useRef(0)
 
+  const navMatches = useMemo<NavResult[]>(() => {
+    const trimmed = query.trim().toLowerCase()
+    if (!trimmed) return NAV_ITEMS
+    return NAV_ITEMS.filter((item) => item.label.toLowerCase().includes(trimmed))
+  }, [query])
+
   const results = useMemo<Result[]>(() => [
+    ...navMatches.map((nav) => ({ kind: 'nav' as const, nav })),
     ...agents.map((agent) => ({ kind: 'agent' as const, agent })),
     ...runs.map((run) => ({ kind: 'run' as const, run })),
-  ], [agents, runs])
+  ], [navMatches, agents, runs])
 
   useEffect(() => {
     if (!open) {
@@ -72,7 +91,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   const select = useCallback((result: Result) => {
     onOpenChange(false)
-    if (result.kind === 'agent') router.push(`/dashboard?agent=${result.agent.id}`)
+    if (result.kind === 'nav') router.push(result.nav.href)
+    else if (result.kind === 'agent') router.push(`/dashboard?agent=${result.agent.id}`)
     else router.push(`/dashboard?run=${result.run.id}`)
   }, [onOpenChange, router])
 
@@ -106,14 +126,30 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           <kbd className="rounded border bg-gray-50 px-1.5 py-0.5 text-[10px] text-gray-400">ESC</kbd>
         </div>
         <div className="max-h-80 overflow-y-auto p-2">
+          {navMatches.length > 0 && (
+            <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Navigate</div>
+          )}
+          {navMatches.map((nav, index) => (
+            <button
+              key={nav.href}
+              className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors duration-fast hover:bg-gray-100', active === index && 'bg-gray-100')}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => select({ kind: 'nav', nav })}
+            >
+              <nav.icon className="h-4 w-4 shrink-0 text-gray-400" aria-hidden="true" />
+              <span className="flex-1 truncate">{nav.label}</span>
+            </button>
+          ))}
           {agents.length > 0 && (
             <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Agents</div>
           )}
-          {agents.map((agent, index) => (
+          {agents.map((agent, index) => {
+            const resultIndex = navMatches.length + index
+            return (
             <button
               key={agent.id}
-              className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-gray-100', active === index && 'bg-gray-100')}
-              onMouseEnter={() => setActive(index)}
+              className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors duration-fast hover:bg-gray-100', active === resultIndex && 'bg-gray-100')}
+              onMouseEnter={() => setActive(resultIndex)}
               onClick={() => select({ kind: 'agent', agent })}
             >
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-graphite-100 text-[11px] font-semibold uppercase leading-none text-graphite-700">
@@ -122,16 +158,17 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               <span className="flex-1 truncate">{agent.title}</span>
               {agent.folder && <span className="text-xs text-gray-400">{agent.folder}</span>}
             </button>
-          ))}
+            )
+          })}
           {runs.length > 0 && (
             <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">Runs</div>
           )}
           {runs.map((run, index) => {
-            const resultIndex = agents.length + index
+            const resultIndex = navMatches.length + agents.length + index
             return (
               <button
                 key={run.id}
-                className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-gray-100', active === resultIndex && 'bg-gray-100')}
+                className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors duration-fast hover:bg-gray-100', active === resultIndex && 'bg-gray-100')}
                 onMouseEnter={() => setActive(resultIndex)}
                 onClick={() => select({ kind: 'run', run })}
               >
@@ -145,7 +182,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             <p className="px-2 py-6 text-center text-sm text-gray-500">No results for “{query.trim()}”.</p>
           )}
           {query.trim().length < 2 && (
-            <p className="px-2 py-6 text-center text-sm text-gray-400">Type at least 2 characters to search.</p>
+            <p className="px-2 pb-2 pt-4 text-center text-xs text-gray-400">Type at least 2 characters to search agents and runs.</p>
           )}
         </div>
       </DialogContent>

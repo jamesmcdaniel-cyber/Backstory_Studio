@@ -87,7 +87,7 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-horizon p-4">
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-md animate-fade-in-up">
         <div className="mb-8 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/backstory-logo-white.svg" alt="Backstory" className="mx-auto mb-6 h-7" />
@@ -102,7 +102,7 @@ export default function LoginPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {error && (
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <div className="animate-fade-in rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 {error}
               </div>
             )}
@@ -115,6 +115,7 @@ export default function LoginPage() {
                   type="email"
                   placeholder="you@example.com"
                   value={email}
+                  aria-invalid={Boolean(error)}
                   onChange={(e) => setEmail(e.target.value)}
                   required
                 />
@@ -130,7 +131,7 @@ export default function LoginPage() {
                   required
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={loading}>
+              <Button type="submit" className="w-full" loading={loading}>
                 {loading ? 'Signing in…' : 'Sign in'}
               </Button>
             </form>
