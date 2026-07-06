@@ -195,6 +195,30 @@ function ThinkingCard({ text }: { text: string }) {
   )
 }
 
+// Correlated-context facts are assembled server-side and often embed a raw
+// JSON blob (e.g. `Output: {"summary":"…"}` or `Sales AI status: {"error":"…"}`)
+// that renders as escaped JSON noise. Replace each flat {...} blob with its most
+// meaningful string field so the fact reads as prose. Applied at display time so
+// it cleans up facts indexed before the server-side formatting fix too.
+function humanizeFact(text: string): string {
+  return text.replace(/\{[^{}]*\}/g, (blob) => {
+    try {
+      const obj = JSON.parse(blob) as Record<string, unknown>
+      if (obj && typeof obj === 'object') {
+        for (const key of ['summary', 'response', 'error', 'message', 'text']) {
+          const value = obj[key]
+          if (typeof value === 'string' && value.trim()) return value.trim()
+        }
+        const strings = Object.values(obj).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        if (strings.length) return strings.join(' — ')
+      }
+    } catch {
+      // Not valid JSON — leave the original text untouched.
+    }
+    return blob
+  })
+}
+
 // Renders the graph-RAG context the agent pulled in before acting — the visible
 // "brain" step: which Sales AI signals, prior runs, and related entities it
 // correlated. Collapsed to the summary by default; expandable to the facts.
@@ -217,9 +241,9 @@ function ContextCard({ summary, hits, related }: { summary: string; hits: Contex
       {open && total > 0 && (
         <ul className="mt-2 space-y-1 border-t pt-2">
           {[...hits, ...related].map((fact, i) => (
-            <li key={i} className="text-xs text-gray-600">
+            <li key={i} className="whitespace-pre-wrap text-xs text-gray-600">
               <span className="mono-label mr-1.5 text-gray-400">{fact.type}</span>
-              {fact.text}
+              {humanizeFact(fact.text)}
             </li>
           ))}
         </ul>
