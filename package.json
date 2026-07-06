@@ -20,8 +20,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "test": "tsx --test src/**/__tests__/**/*.test.ts",
-    "eval": "tsx --test src/lib/eval/__tests__/**/*.test.ts"
+    "test": "tsx --test $(find src -type f -name '*.test.ts' -path '*__tests__*')",
+    "eval": "tsx --test $(find src/lib/eval -type f -name '*.test.ts' -path '*__tests__*')"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
