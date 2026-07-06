@@ -8,6 +8,7 @@ import { AgentActivityPane, resultText } from './agent-activity-pane'
 import { AgentConfigForm, type AgentDraft } from './agent-config-form'
 import { AssistantPanel } from './assistant-panel'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
 import { useAuth } from '@/hooks/use-auth'
@@ -407,7 +408,13 @@ function AgentHQ() {
             </div>
           )}
 
-          {loading && <div className="p-8 text-center text-gray-500"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></div>}
+          {loading && (
+            <div className="space-y-3 p-4">
+              <Skeleton className="h-20 rounded-xl" />
+              <Skeleton className="h-20 rounded-xl" />
+              <Skeleton className="h-20 rounded-xl" />
+            </div>
+          )}
 
           {!loading && showSetup && (
             <div className="space-y-4 p-4">
@@ -435,13 +442,13 @@ function AgentHQ() {
                       {granolaFetchingList ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
                       Import
                     </Button>
-                    <Button size="sm" disabled={building || !describe.trim()} onClick={buildFromDescription}>
-                      {building ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Build'}
+                    <Button size="sm" loading={building} disabled={!describe.trim()} onClick={buildFromDescription}>
+                      Build
                     </Button>
                   </div>
                   {/* Granola meeting picker */}
                   {granolaPickerOpen && (
-                    <div className="relative mt-1 max-h-64 overflow-y-auto rounded-xl border bg-white shadow-lg">
+                    <div className="relative mt-1 max-h-64 origin-top animate-scale-in overflow-y-auto rounded-xl border bg-white shadow-popover">
                       <div className="sticky top-0 flex items-center justify-between border-b bg-white px-3 py-2">
                         <span className="text-xs font-medium text-gray-600">Select a meeting to import</span>
                         <button
@@ -485,7 +492,7 @@ function AgentHQ() {
                 </p>
               )}
 
-              <div className="rounded-lg border bg-white p-4">
+              <div className="animate-fade-in-up rounded-lg border bg-white p-4 shadow-1">
                 <p className="eyebrow mb-3">{editingAgent ? 'Agent setup' : 'Set up manually'}</p>
                 <AgentConfigForm
                   key={editingAgent?.id || NEW_AGENT}

@@ -9,12 +9,14 @@ import {
   HelpCircle,
   Loader2,
   Network,
+  Play,
   Send,
   Sparkles,
   Wrench,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Markdown } from '@/components/ui/markdown'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
@@ -139,9 +141,11 @@ function ToolCallCard({ step }: { step: RunStep }) {
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Calling…
             </span>
           ) : waiting ? (
-            <Badge variant="outline" className="border-amber-200 text-amber-600">waiting</Badge>
+            <Badge variant="warn">waiting</Badge>
+          ) : failed ? (
+            <Badge variant="risk">{step.status}</Badge>
           ) : (
-            <Badge variant="outline" className={failed ? 'border-red-200 text-red-600' : undefined}>{step.status}</Badge>
+            <Badge variant="outline">{step.status}</Badge>
           )}
           {hasDetail && <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform duration-200', open && 'rotate-180')} />}
         </span>
@@ -314,7 +318,7 @@ function RunRow({
             {activity.metadata?.pendingQuestion?.question || activity.metadata?.headline || activity.error || resultText(activity) || 'In progress'}
           </div>
         </div>
-        <time className="shrink-0 text-xs text-gray-400">{new Date(activity.startedAt).toLocaleString()}</time>
+        <time className="shrink-0 font-mono text-xs tabular-nums text-gray-400">{new Date(activity.startedAt).toLocaleString()}</time>
       </button>
 
       {expanded && (
@@ -351,11 +355,13 @@ function RunRow({
             </h4>
             <div className="space-y-2">
               {timeline.map((item) => (
-                item.kind === 'thinking'
-                  ? <ThinkingCard key={item.key} text={item.text} />
-                  : item.kind === 'context'
-                    ? <ContextCard key={item.key} summary={item.summary} hits={item.hits} related={item.related} />
-                    : <ToolCallCard key={item.key} step={item.step} />
+                <div key={item.key} className="animate-fade-in">
+                  {item.kind === 'thinking'
+                    ? <ThinkingCard text={item.text} />
+                    : item.kind === 'context'
+                      ? <ContextCard summary={item.summary} hits={item.hits} related={item.related} />
+                      : <ToolCallCard step={item.step} />}
+                </div>
               ))}
               {isActive && (
                 <p className="flex items-center gap-2 px-1 text-sm text-blue-600">
@@ -406,8 +412,12 @@ export function AgentActivityPane({
 
   if (!activities.length) {
     return (
-      <div className="p-8 text-center text-sm text-gray-500">
-        No runs yet. Run {agent.title} to see its activity here.
+      <div className="p-4">
+        <EmptyState
+          icon={Play}
+          title="No runs yet"
+          description={`Run ${agent.title} to see its activity here.`}
+        />
       </div>
     )
   }
@@ -424,7 +434,7 @@ export function AgentActivityPane({
                 groupStatus === 'running' ? <CircleDashed className="h-4 w-4 animate-spin text-blue-600" /> :
                 groupStatus === 'waiting_for_input' ? <HelpCircle className="h-4 w-4 text-amber-500" /> :
                 <AlertCircle className="h-4 w-4 text-red-600" />}
-              {groupLabels[groupStatus]} <span className="text-gray-400">{items.length}</span>
+              {groupLabels[groupStatus]} <span className="font-mono text-xs tabular-nums text-gray-400">{items.length}</span>
             </div>
             {items.map((activity) => (
               <RunRow
