@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 
 type Template = {
   id: string
@@ -48,16 +49,22 @@ export default function TemplateDetails() {
   return (
     <>
       <div className="mx-auto max-w-3xl space-y-5 p-6">
-        {!template ? <p className="text-sm text-gray-500">Loading template...</p> : (
+        {!template ? (
+          <div className="space-y-4">
+            <Skeleton className="h-9 w-2/3 rounded-lg" />
+            <Skeleton className="h-5 w-full rounded" />
+            <Skeleton className="h-64 rounded-lg" />
+          </div>
+        ) : (
           <>
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex animate-fade-in-up items-start justify-between gap-4">
               <div>
                 <h1 className="text-2xl font-bold">{template.name}</h1>
                 <p className="mt-2 text-gray-600">{template.description}</p>
               </div>
-              <Button onClick={createAgent} disabled={creating}>{creating ? 'Creating...' : 'Use template'}</Button>
+              <Button onClick={createAgent} loading={creating}>{creating ? 'Creating…' : 'Use template'}</Button>
             </div>
-            <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm">{template.instructions}</pre>
+            <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm shadow-1">{template.instructions}</pre>
             <div className="flex flex-wrap gap-2">
               {template.integrations.map((integration) => <Badge key={integration} variant="outline">{integration}</Badge>)}
             </div>
