@@ -281,3 +281,36 @@ describe('isDue', () => {
     assert.equal(isDue(schedule, lastExecutedAt, now), false)
   })
 })
+
+describe('isDue — once (one-time)', () => {
+  const past = (): AgentSchedule => ({ type: 'once', time: '09:00', cron: '', timezone: 'UTC', runAt: '2020-01-01', isActive: true })
+
+  it('fires when the target instant has passed and it never ran', () => {
+    assert.equal(isDue(past(), null, new Date()), true)
+  })
+
+  it('does not fire again once it has run', () => {
+    assert.equal(isDue(past(), daysAgo(1), new Date()), false)
+  })
+
+  it('does not fire before its target instant', () => {
+    const schedule: AgentSchedule = { type: 'once', time: '09:00', cron: '', timezone: 'UTC', runAt: '2999-01-01', isActive: true }
+    assert.equal(isDue(schedule, null, new Date()), false)
+  })
+
+  it('does not fire when inactive', () => {
+    assert.equal(isDue({ ...past(), isActive: false }, null, new Date()), false)
+  })
+
+  it('does not fire when runAt is missing', () => {
+    assert.equal(isDue({ type: 'once', time: '09:00', cron: '', timezone: 'UTC', isActive: true }, null, new Date()), false)
+  })
+
+  it('respects the target time on the target day', () => {
+    // Target 09:00 UTC today; at 08:00 UTC it is not due, at 10:00 UTC it is.
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+    const schedule: AgentSchedule = { type: 'once', time: '09:00', cron: '', timezone: 'UTC', runAt: parts, isActive: true }
+    assert.equal(isDue(schedule, null, nowAtTime(8, 0, 'UTC')), false)
+    assert.equal(isDue(schedule, null, nowAtTime(10, 0, 'UTC')), true)
+  })
+})

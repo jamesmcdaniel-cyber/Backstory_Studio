@@ -82,12 +82,12 @@ export async function GET(request: Request) {
     })
 
     // Single-owner scheduling: when the BullMQ worker is live in queue mode it
-    // owns scheduled dispatch (via its JobScheduler), so this cron must NOT also
-    // dispatch — otherwise every scheduled agent fires twice (double side
-    // effects + token cost). The stuck-run reaper above still runs regardless.
-    if (workersEnabled && EXECUTION_MODE === 'queue') {
-      return Response.json({ success: true, skipped: 'worker-owns-scheduling', reaped: true, due: 0, ran: [] })
-    }
+    // owns RECURRING dispatch (via its JobScheduler), so this cron must not also
+    // dispatch recurring agents — otherwise they fire twice (double side effects
+    // + token cost). One-time ("once") agents are never registered with the
+    // BullMQ scheduler (repeatFor returns null for them), so this cron is the
+    // only path that can fire them — dispatch those even in worker mode.
+    const workerOwnsRecurring = workersEnabled && EXECUTION_MODE === 'queue'
 
     // Load all active agents (capped at 200 to avoid huge fetches)
     const agents = await prisma.agentTask.findMany({
@@ -102,7 +102,11 @@ export async function GET(request: Request) {
       .filter((agent) => {
         const schedule = agent.schedule as unknown as AgentSchedule | null
         if (!schedule || typeof schedule !== 'object') return false
-        return isDue(schedule, agent.lastExecutedAt, now)
+        if (!isDue(schedule, agent.lastExecutedAt, now)) return false
+        // In worker mode, only 'once' agents are dispatched here; recurring ones
+        // are owned by the BullMQ JobScheduler.
+        if (workerOwnsRecurring && schedule.type !== 'once') return false
+        return true
       })
       .slice(0, MAX_AGENTS_PER_TICK)
 

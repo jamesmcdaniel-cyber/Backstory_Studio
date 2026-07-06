@@ -24,10 +24,12 @@ function indexAgentRow(agent: { id: string; organizationId: string; objective: s
 }
 
 const scheduleSchema = z.object({
-  type: z.enum(['manual', 'hourly', 'daily', 'weekly', 'cron']).default('manual'),
+  type: z.enum(['manual', 'hourly', 'daily', 'weekly', 'cron', 'once']).default('manual'),
   time: z.string().optional(),
   cron: z.string().optional(),
   timezone: z.string().default('UTC'),
+  // YYYY-MM-DD calendar date for a one-time ('once') run, paired with `time`.
+  runAt: z.string().optional(),
   isActive: z.boolean().default(false),
 })
 

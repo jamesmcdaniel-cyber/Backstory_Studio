@@ -4,13 +4,15 @@
  */
 
 export type AgentSchedule = {
-  type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron'
-  /** HH:MM – used by daily and weekly */
+  type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron' | 'once'
+  /** HH:MM – used by daily, weekly, and once */
   time: string
   /** Standard 5-field cron expression – used by type === 'cron' */
   cron: string
   /** IANA timezone string, e.g. "America/New_York" */
   timezone: string
+  /** YYYY-MM-DD calendar date – used only by type === 'once' (with `time`). */
+  runAt?: string
   isActive: boolean
 }
 
@@ -48,22 +50,26 @@ function zoneParts(instant: Date, tz: string) {
 }
 
 /**
+ * Returns the UTC timestamp for HH:MM on the given Y/M/D (1-based month) in the
+ * supplied timezone. Constructs the naive UTC instant with the target wall-clock
+ * fields, then measures how far off Intl reports it in the zone and corrects —
+ * so DST offsets and half-hour zones resolve to the right instant.
+ */
+function instantForDate(year: number, month: number, day: number, hhmm: string, tz: string): Date {
+  const [hh, mm] = hhmm.split(':').map(Number)
+  const naive = Date.UTC(year, month - 1, day, hh, mm, 0, 0)
+  const check = zoneParts(new Date(naive), tz)
+  const diffMs = ((hh - check.hour) * 60 + (mm - check.minute)) * 60_000
+  return new Date(naive + diffMs)
+}
+
+/**
  * Returns the UTC timestamp for HH:MM today in the given timezone.
  * "Today" is determined by what `now` looks like in that zone.
  */
 function todayInstant(hhmm: string, tz: string, now: Date): Date {
-  const [hh, mm] = hhmm.split(':').map(Number)
   const p = zoneParts(now, tz)
-
-  // Build the local-to-UTC mapping by constructing the calendar instant.
-  // We use a dummy Date in UTC with the zone's Y/M/D and the desired H:M,
-  // then measure how far off Intl reports it, and correct.
-  const naive = Date.UTC(p.year, p.month - 1, p.day, hh, mm, 0, 0)
-  const naiveDate = new Date(naive)
-  const check = zoneParts(naiveDate, tz)
-  const diffMs =
-    ((hh - check.hour) * 60 + (mm - check.minute)) * 60_000
-  return new Date(naive + diffMs)
+  return instantForDate(p.year, p.month, p.day, hhmm, tz)
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +130,18 @@ export function isDue(
   if (schedule.type === 'manual') return false
 
   switch (schedule.type) {
+    case 'once': {
+      // A one-time run: due once its target instant has passed and it has never
+      // run. lastExecutedAt being set after the first run makes it never fire
+      // again. runAt is a YYYY-MM-DD date paired with `time` in `timezone`.
+      if (!schedule.runAt) return false
+      const [y, mo, d] = schedule.runAt.split('-').map(Number)
+      if (!y || !mo || !d) return false
+      const target = instantForDate(y, mo, d, schedule.time || '09:00', schedule.timezone || 'UTC')
+      if (now < target) return false
+      return lastExecutedAt === null
+    }
+
     case 'hourly': {
       if (lastExecutedAt === null) return true
       return now.getTime() - lastExecutedAt.getTime() >= 60 * 60_000

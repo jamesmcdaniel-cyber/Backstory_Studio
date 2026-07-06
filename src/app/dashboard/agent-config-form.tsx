@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { MiniCalendar } from '@/components/ui/mini-calendar'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 
@@ -58,10 +59,12 @@ export type AgentDraft = {
   folder: string
   visibility: 'shared' | 'private'
   schedule: {
-    type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron'
+    type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron' | 'once'
     time?: string
     cron?: string
     timezone: string
+    /** YYYY-MM-DD calendar date for a one-time ('once') run, paired with time. */
+    runAt?: string
     isActive: boolean
   }
 }
@@ -124,23 +127,45 @@ function ModelOption({ provider, label }: { provider: 'anthropic' | 'openai'; la
   )
 }
 
-// ── Schedule cadence (UI concept mapped onto the backend schedule) ───────────
-// Backend supports type manual|hourly|daily|weekly|cron (see scheduling/due.ts).
-// The UI offers friendlier cadences; "every other day" rides on cron `*/2` day.
-type Cadence = 'daily' | 'every_other_day' | 'weekly' | 'custom'
-const EVERY_OTHER_DAY_RE = /^\d{1,2}\s+\d{1,2}\s+\*\/2\s+\*\s+\*$/
+// ── Schedule cadence (visual UI concept mapped onto the backend schedule) ────
+// Backend supports type manual|hourly|daily|weekly|cron|once (see due.ts). The
+// UI offers friendly visual cadences and never asks the user to type cron; an
+// "Advanced" escape hatch remains for legacy/complex crons that don't map to a
+// day-of-week pattern.
+type Cadence = 'daily' | 'daysofweek' | 'once' | 'advanced'
+
+// A day-of-week cron: `mm hh * * d[,d...]` (dom + month wild). This is what the
+// "Days of week" picker produces and round-trips.
+const DOW_CRON_RE = /^\d{1,2}\s+\d{1,2}\s+\*\s+\*\s+[0-6](?:,[0-6])*$/
+
+const DAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const
 
 function cadenceOf(schedule: AgentDraft['schedule']): Cadence {
-  if (schedule.type === 'weekly') return 'weekly'
+  if (schedule.type === 'once') return 'once'
   if (schedule.type === 'daily') return 'daily'
-  if (schedule.type === 'cron' && schedule.cron && EVERY_OTHER_DAY_RE.test(schedule.cron)) return 'every_other_day'
-  return 'custom'
+  if (schedule.type === 'cron' && schedule.cron && DOW_CRON_RE.test(schedule.cron)) return 'daysofweek'
+  // weekly, hourly, every-other-day, and arbitrary crons fall back to advanced.
+  return 'advanced'
 }
 
-// HH:MM → an "every other day at that time" cron of the form `mm hh */2 * *`.
-function everyOtherDayCron(time: string): string {
+/** HH:MM + selected weekdays → a `mm hh * * d,d` cron. */
+function dowCron(time: string, days: number[]): string {
   const [hh, mm] = (time || '09:00').split(':').map((n) => parseInt(n, 10))
-  return `${Number.isNaN(mm) ? 0 : mm} ${Number.isNaN(hh) ? 9 : hh} */2 * *`
+  const list = days.length ? [...days].sort((a, b) => a - b).join(',') : '1'
+  return `${Number.isNaN(mm) ? 0 : mm} ${Number.isNaN(hh) ? 9 : hh} * * ${list}`
+}
+
+/** Parse the selected weekdays out of a day-of-week cron's 5th field. */
+function daysFromCron(cron: string | undefined): number[] {
+  const dow = (cron || '').trim().split(/\s+/)[4]
+  if (!dow) return [1, 2, 3, 4, 5]
+  return dow.split(',').map((n) => parseInt(n, 10)).filter((n) => n >= 0 && n <= 6)
+}
+
+/** Today as YYYY-MM-DD in local time — the earliest selectable one-time date. */
+function todayKey(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** Pull HH:MM out of a cron's minute+hour fields for the time input. */
@@ -152,8 +177,8 @@ function cronToTime(cron: string): string {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
 }
 
-/** Legacy 'hourly' ≡ cron '0 * * * *'; represent it as custom cron so the
- *  cadence UI (which has no Hourly preset) round-trips it losslessly. */
+/** Legacy 'hourly' ≡ cron '0 * * * *'; represent it as cron so the cadence UI
+ *  (which has no Hourly preset) round-trips it losslessly via "Advanced". */
 function normalizeSchedule(schedule: AgentDraft['schedule']): AgentDraft['schedule'] {
   if (schedule.type === 'hourly') return { ...schedule, type: 'cron', cron: schedule.cron || '0 * * * *' }
   return schedule
@@ -370,11 +395,14 @@ export function AgentConfigForm({
     else router.push(`/dashboard?run=${runId}`)
   }
 
-  // ── Schedule (cadence UI ↔ backend schedule) ──────────────────────────────
+  // ── Schedule (visual cadence UI ↔ backend schedule) ───────────────────────
   const cadence = cadenceOf(draft.schedule)
-  const scheduleTime = draft.schedule.type === 'cron'
+  // The time shown in the time picker: cron-backed cadences carry it in the cron
+  // fields, the rest in `time`.
+  const scheduleTime = (draft.schedule.type === 'cron')
     ? cronToTime(draft.schedule.cron || '')
     : (draft.schedule.time || '09:00')
+  const selectedDays = cadence === 'daysofweek' ? daysFromCron(draft.schedule.cron) : []
 
   const setScheduleEnabled = (on: boolean) => {
     if (!on) {
@@ -395,8 +423,8 @@ export function AgentConfigForm({
     const timezone = draft.schedule.timezone || browserTimezone()
     const schedule: AgentDraft['schedule'] =
       next === 'daily' ? { type: 'daily', time, timezone, isActive: true }
-      : next === 'weekly' ? { type: 'weekly', time, timezone, isActive: true }
-      : next === 'every_other_day' ? { type: 'cron', cron: everyOtherDayCron(time), time, timezone, isActive: true }
+      : next === 'daysofweek' ? { type: 'cron', cron: dowCron(time, selectedDays.length ? selectedDays : [1, 2, 3, 4, 5]), time, timezone, isActive: true }
+      : next === 'once' ? { type: 'once', runAt: draft.schedule.runAt || todayKey(), time, timezone, isActive: true }
       : { type: 'cron', cron: draft.schedule.type === 'cron' ? (draft.schedule.cron || '0 9 * * 1-5') : '0 9 * * 1-5', timezone, isActive: true }
     setDraft({ ...draft, schedule })
   }
@@ -404,11 +432,36 @@ export function AgentConfigForm({
   const setScheduleTime = (time: string) => {
     setDraft({
       ...draft,
-      schedule: cadence === 'every_other_day'
-        ? { ...draft.schedule, time, cron: everyOtherDayCron(time) }
+      schedule: cadence === 'daysofweek'
+        ? { ...draft.schedule, time, cron: dowCron(time, selectedDays) }
         : { ...draft.schedule, time },
     })
   }
+
+  const toggleDay = (day: number) => {
+    const next = selectedDays.includes(day)
+      ? selectedDays.filter((d) => d !== day)
+      : [...selectedDays, day]
+    // Never allow zero days — keep at least the toggled one.
+    const days = next.length ? next : [day]
+    setDraft({ ...draft, schedule: { ...draft.schedule, type: 'cron', cron: dowCron(scheduleTime, days) } })
+  }
+
+  const setRunAt = (date: string) => {
+    setDraft({ ...draft, schedule: { ...draft.schedule, type: 'once', runAt: date } })
+  }
+
+  // Plain-language confirmation of what the current schedule does.
+  const scheduleSummary = (() => {
+    const tz = draft.schedule.timezone || 'UTC'
+    if (cadence === 'daily') return `Runs every day at ${scheduleTime} (${tz}).`
+    if (cadence === 'daysofweek') {
+      const names = [...selectedDays].sort((a, b) => a - b).map((d) => DAY_LABELS[d]).join(', ')
+      return `Runs ${names || '—'} at ${scheduleTime} (${tz}).`
+    }
+    if (cadence === 'once') return `Runs once on ${draft.schedule.runAt || todayKey()} at ${scheduleTime} (${tz}).`
+    return ''
+  })()
 
   return (
     <div className="space-y-4">
@@ -554,48 +607,81 @@ export function AgentConfigForm({
 
         {draft.schedule.isActive && (
           <div className="space-y-3 border-t pt-3">
-            <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Cadence</Label>
+              <Select value={cadence} onValueChange={(value) => setCadence(value as Cadence)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="daysofweek">Days of week</SelectItem>
+                  <SelectItem value="once">Once (specific date)</SelectItem>
+                  <SelectItem value="advanced">Advanced (cron)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Days of week — weekday toggles */}
+            {cadence === 'daysofweek' && (
               <div>
-                <Label>Cadence</Label>
-                <Select value={cadence} onValueChange={(value) => setCadence(value as Cadence)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="daily">Daily</SelectItem>
-                    <SelectItem value="every_other_day">Every other day</SelectItem>
-                    <SelectItem value="weekly">Weekly</SelectItem>
-                    <SelectItem value="custom">Custom (cron)</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label>Repeat on</Label>
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {DAY_LABELS.map((label, day) => {
+                    const on = selectedDays.includes(day)
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => toggleDay(day)}
+                        className={cn(
+                          'h-8 w-10 rounded-md border text-xs font-medium transition-colors duration-fast',
+                          on
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-              {cadence !== 'custom' && (
+            )}
+
+            {/* Once — calendar date picker */}
+            {cadence === 'once' && (
+              <div>
+                <Label>Date</Label>
+                <div className="mt-1.5">
+                  <MiniCalendar value={draft.schedule.runAt} onChange={setRunAt} min={todayKey()} />
+                </div>
+              </div>
+            )}
+
+            {cadence !== 'advanced' ? (
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label>Time</Label>
                   <Input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
                 </div>
-              )}
-            </div>
-
-            {cadence !== 'custom' ? (
-              <div>
-                <Label>Timezone</Label>
-                <Select
-                  value={draft.schedule.timezone}
-                  onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {/* Keep a browser-detected zone outside the common list selectable. */}
-                    {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
-                      <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
-                    )}
-                    {COMMON_TIMEZONES.map((tz) => (
-                      <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {cadence === 'weekly' && (
-                  <p className="mt-1 text-xs text-muted-foreground">Runs weekly at this time.</p>
-                )}
+                <div>
+                  <Label>Timezone</Label>
+                  <Select
+                    value={draft.schedule.timezone}
+                    onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {/* Keep a browser-detected zone outside the common list selectable. */}
+                      {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
+                        <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
+                      )}
+                      {COMMON_TIMEZONES.map((tz) => (
+                        <SelectItem key={tz} value={tz}>{tz}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             ) : (
               <div>
@@ -605,9 +691,13 @@ export function AgentConfigForm({
                   value={draft.schedule.cron || ''}
                   onChange={(event) => setDraft({ ...draft, schedule: { ...draft.schedule, type: 'cron', cron: event.target.value } })}
                 />
-                <p className="mt-1 text-xs text-muted-foreground">5-field cron, evaluated in {draft.schedule.timezone || 'UTC'}.</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  5-field cron, evaluated in {draft.schedule.timezone || 'UTC'}. For power users — the options above cover most schedules.
+                </p>
               </div>
             )}
+
+            {scheduleSummary && <p className="text-xs text-muted-foreground">{scheduleSummary}</p>}
           </div>
         )}
       </div>
