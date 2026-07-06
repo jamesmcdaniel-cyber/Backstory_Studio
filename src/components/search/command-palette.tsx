@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Radio, Search, Server } from 'lucide-react'
+import { AlertCircle, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Search, Server } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
@@ -19,7 +19,6 @@ type Result =
 // Mirrors the sidebar's navigation so ⌘K doubles as quick navigation.
 const NAV_ITEMS: NavResult[] = [
   { label: 'Home', href: '/dashboard', icon: Brain },
-  { label: 'Signals', href: '/signals', icon: Radio },
   { label: 'Integrations', href: '/integrations', icon: Plug },
   { label: 'Explore', href: '/templates', icon: FileText },
   { label: 'MCP Servers', href: '/connections', icon: Server },

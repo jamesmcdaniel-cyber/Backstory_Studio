@@ -18,7 +18,7 @@ import { ErrorBoundary } from '@/components/ui/error-boundary'
 
 // Route prefixes that get the app chrome. Everything else (/, /auth/*, /connect,
 // /privacy, /terms, /auth-code-error) renders bare.
-const APP_PREFIXES = ['/dashboard', '/signals', '/integrations', '/connections', '/templates']
+const APP_PREFIXES = ['/dashboard', '/integrations', '/connections', '/templates']
 
 // Only the agent HQ wants an edge-to-edge (fullscreen) content area; the rest
 // use the centered container.
