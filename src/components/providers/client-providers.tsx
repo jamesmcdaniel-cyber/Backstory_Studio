@@ -9,7 +9,19 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
     <MotionConfig reducedMotion="user">
       <SupabaseProvider>
         {children}
-        <Toaster richColors />
+        <Toaster
+          richColors
+          position="bottom-right"
+          toastOptions={{
+            classNames: {
+              toast:
+                'rounded-lg border border-border bg-background text-foreground shadow-3 font-sans',
+              description: 'text-muted-foreground',
+              actionButton: 'bg-primary text-primary-foreground',
+              cancelButton: 'bg-muted text-muted-foreground',
+            },
+          }}
+        />
       </SupabaseProvider>
     </MotionConfig>
   )
