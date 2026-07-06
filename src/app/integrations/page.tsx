@@ -3,6 +3,7 @@
 import { Suspense } from 'react'
 import { Bot, Cable } from 'lucide-react'
 import { MCPIntegrationCards } from '@/components/integrations/mcp-integration-cards'
+import { PageHeader } from '@/components/ui/page-header'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { GranolaCard } from './granola-card'
 import { OAuthIntegrationsGrid } from './oauth-integrations-grid'
@@ -12,10 +13,11 @@ export default function IntegrationsPage() {
   return (
     <>
       <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold">Integrations</h1>
-          <p className="text-sm text-gray-500">Klavis exposes agent tools. Nango manages connected accounts.</p>
-        </div>
+        <PageHeader
+          eyebrow="Connections"
+          title="Integrations"
+          description="Klavis exposes agent tools. Nango manages connected accounts."
+        />
         <Tabs defaultValue="tools">
           <TabsList>
             <TabsTrigger value="tools"><Bot className="mr-2 h-4 w-4" />Agent tools</TabsTrigger>
