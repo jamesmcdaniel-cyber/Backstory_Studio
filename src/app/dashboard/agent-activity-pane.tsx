@@ -219,6 +219,10 @@ function humanizeFact(text: string): string {
   })
 }
 
+// Fact types sourced from Backstory Sales AI (vs. internal run/agent nodes), so
+// they render with the Backstory brand mark to show where the data came from.
+const SALES_AI_FACT_TYPES = new Set(['opportunity', 'account', 'signal'])
+
 // Renders the graph-RAG context the agent pulled in before acting — the visible
 // "brain" step: which Sales AI signals, prior runs, and related entities it
 // correlated. Collapsed to the summary by default; expandable to the facts.
@@ -241,9 +245,14 @@ function ContextCard({ summary, hits, related }: { summary: string; hits: Contex
       {open && total > 0 && (
         <ul className="mt-2 space-y-1 border-t pt-2">
           {[...hits, ...related].map((fact, i) => (
-            <li key={i} className="whitespace-pre-wrap text-xs text-gray-600">
-              <span className="mono-label mr-1.5 text-gray-400">{fact.type}</span>
-              {humanizeFact(fact.text)}
+            <li key={i} className="flex items-start gap-1.5 whitespace-pre-wrap text-xs text-gray-600">
+              {SALES_AI_FACT_TYPES.has((fact.type || '').toLowerCase()) && (
+                <IntegrationLogo slug="backstory" name="Backstory" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>
+                <span className="mono-label mr-1.5 text-gray-400">{fact.type}</span>
+                {humanizeFact(fact.text)}
+              </span>
             </li>
           ))}
         </ul>
