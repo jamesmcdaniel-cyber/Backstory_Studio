@@ -4,7 +4,6 @@ import { ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import { Sidebar } from './sidebar'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
-import { CommandPalette } from '@/components/ui/command-palette'
 
 /**
  * The single app chrome, mounted once in the root layout so the sidebar
@@ -36,13 +35,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   const fullscreen = FULLSCREEN_ROUTES.has(pathname)
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <CommandPalette />
       <Sidebar />
       <main id="main-content" className="flex-1 overflow-y-auto">
         {fullscreen ? (
           <ErrorBoundary>{children}</ErrorBoundary>
         ) : (
-          <div className="container mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-8">
+          <div className="container mx-auto max-w-7xl animate-fade-in px-3 py-4 sm:px-6 sm:py-8">
             <ErrorBoundary>{children}</ErrorBoundary>
           </div>
         )}

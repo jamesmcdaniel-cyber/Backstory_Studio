@@ -288,7 +288,7 @@ export function Sidebar() {
       key={agent.id}
       draggable
       onDragStart={(event) => event.dataTransfer.setData('text/agent-id', agent.id)}
-      className="group flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-100 active:cursor-grabbing"
+      className="group flex cursor-grab items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-fast hover:bg-gray-100 active:cursor-grabbing"
     >
       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-graphite-100 text-[11px] font-semibold uppercase leading-none text-graphite-700">
         {agent.icon || agent.title.trim().charAt(0) || 'A'}
@@ -334,7 +334,7 @@ export function Sidebar() {
         {/* Org switcher */}
         <div className="relative border-b p-3">
           <button
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-100"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-fast hover:bg-gray-100"
             onClick={() => setOrgMenuOpen((open) => !open)}
             aria-label={`Workspace: ${activeOrg?.name || 'Workspace'}`}
           >
@@ -350,7 +350,7 @@ export function Sidebar() {
           {orgMenuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setOrgMenuOpen(false)} />
-              <div className="absolute left-3 right-3 z-20 mt-1 rounded-lg border bg-white p-1 shadow-lg">
+              <div className="absolute left-3 right-3 z-20 mt-1 origin-top animate-scale-in rounded-lg border bg-white p-1 shadow-popover">
                 {organizations.map((org) => (
                   <button
                     key={org.id}
@@ -407,7 +407,7 @@ export function Sidebar() {
 
           <div className="mt-2 flex items-center gap-2">
             <button
-              className="flex flex-1 items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-sm text-gray-400 hover:bg-gray-100"
+              className="flex flex-1 items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-sm text-gray-400 transition-colors duration-fast hover:border-graphite-300 hover:text-gray-600"
               onClick={() => setPaletteOpen(true)}
             >
               <Search className="h-3.5 w-3.5" />
@@ -428,8 +428,8 @@ export function Sidebar() {
                   key={item.name}
                   href={item.href}
                   className={cn(
-                    'flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm font-medium',
-                    isActive ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-100',
+                    'flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors duration-fast',
+                    isActive ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900',
                   )}
                 >
                   <item.icon className={cn('h-4 w-4', isActive ? 'text-indigo-600' : 'text-gray-400')} />
@@ -504,7 +504,7 @@ export function Sidebar() {
                 <span>{creditPct}% of credits</span>
               </div>
               <div className="h-1.5 overflow-hidden rounded-full bg-gray-200">
-                <div className="h-full rounded-full bg-indigo-500" style={{ width: `${creditPct}%` }} />
+                <div className="h-full rounded-full bg-indigo-500 transition-[width] duration-slow ease-out-quart" style={{ width: `${creditPct}%` }} />
               </div>
             </div>
           )}
