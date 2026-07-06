@@ -6,7 +6,6 @@ import { Bot, Cable } from 'lucide-react'
 import { MCPIntegrationCards } from '@/components/integrations/mcp-integration-cards'
 import { PageHeader } from '@/components/ui/page-header'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { GranolaCard } from './granola-card'
 import { OAuthIntegrationsGrid } from './oauth-integrations-grid'
 
 function IntegrationsTabs() {
@@ -26,11 +25,9 @@ function IntegrationsTabs() {
       </TabsList>
       <TabsContent value="tools" className="mt-6"><MCPIntegrationCards /></TabsContent>
       <TabsContent value="accounts" className="mt-6 space-y-6">
-        {/* Backstory Sales AI (MCP) connects on the MCP Servers page — its
-            OAuth/DCR flow through the generic dialog is the canonical path. */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <GranolaCard />
-        </div>
+        {/* Backstory Sales AI (MCP) connects on the MCP Servers page; Granola
+            connects from the integrations grid below — both handled there, so
+            no standalone cards here. */}
         <Suspense fallback={<p className="text-sm text-gray-500">Loading integrations...</p>}>
           <OAuthIntegrationsGrid />
         </Suspense>
