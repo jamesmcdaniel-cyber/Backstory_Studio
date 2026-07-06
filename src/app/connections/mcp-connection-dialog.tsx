@@ -1,8 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
-import { CheckCircle2, Loader2, ShieldAlert, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -12,23 +11,6 @@ import { Textarea } from '@/components/ui/textarea'
 // ── Types ────────────────────────────────────────────────────────────────────
 
 type AuthType = 'none' | 'api_key' | 'oauth2'
-
-// Backstory Sales AI's MCP server has its own pre-registered OAuth client
-// (PEOPLE_AI_OAUTH_CLIENT_ID/SECRET) with a redirect URI already whitelisted
-// on People.ai's identity provider — that's the only path guaranteed to
-// complete OAuth for this host. This dialog's generic flow dynamically
-// registers a brand-new client per attempt, which enterprise OAuth providers
-// commonly reject for hosts they haven't pre-approved a redirect URI for.
-// Matches on hostname only — the server URL's path (e.g. /mcp) can vary.
-const BACKSTORY_MCP_HOSTNAME = 'mcp.people.ai'
-
-function isBackstoryMcpUrl(serverUrl: string): boolean {
-  try {
-    return new URL(serverUrl).hostname.toLowerCase() === BACKSTORY_MCP_HOSTNAME
-  } catch {
-    return false
-  }
-}
 
 export type McpConnectionDraft = {
   name: string
@@ -106,8 +88,6 @@ export function McpConnectionDialog({
   const [oauthDetected, setOauthDetected] = useState(false)
   const [discovering, setDiscovering] = useState(false)
 
-  const isBackstoryMcp = isBackstoryMcpUrl(draft.serverUrl)
-
   // Populate draft when editing
   useEffect(() => {
     if (!open) return
@@ -144,11 +124,10 @@ export function McpConnectionDialog({
   // Probe the server for OAuth on blur, so leaving the default "None" auth
   // selected doesn't silently send an unauthenticated request that's bound to
   // fail. Only acts while the user hasn't already picked an auth type
-  // themselves — it won't override an explicit api_key/oauth2 choice, and it
-  // never fires for the known Backstory MCP host (that gets its own notice).
+  // themselves — it won't override an explicit api_key/oauth2 choice.
   const probeForOAuth = async () => {
     const url = draft.serverUrl.trim()
-    if (!url || draft.authType !== 'none' || isBackstoryMcpUrl(url)) return
+    if (!url || draft.authType !== 'none') return
     try {
       void new URL(url)
     } catch {
@@ -173,8 +152,8 @@ export function McpConnectionDialog({
     }
   }
 
-  const canCreate = Boolean(draft.name.trim() && draft.description.trim() && draft.serverUrl.trim()) && !isBackstoryMcp
-  const canTest = Boolean(draft.serverUrl.trim()) && !isBackstoryMcp
+  const canCreate = Boolean(draft.name.trim() && draft.description.trim() && draft.serverUrl.trim())
+  const canTest = Boolean(draft.serverUrl.trim())
   // SSO (authorization-code) flow only needs a name + server URL — the rest
   // (client registration, tokens) is handled server-side after Okta login.
   const canConnectSso = Boolean(draft.name.trim() && draft.serverUrl.trim())
@@ -288,175 +267,149 @@ export function McpConnectionDialog({
             </p>
           </div>
 
-          {/* Backstory Sales AI's MCP server has its own pre-registered,
-              already-whitelisted OAuth client on the Integrations page — this
-              dialog's generic OAuth flow would very likely fail for it, so
-              redirect there instead of letting a doomed attempt run. */}
-          {isBackstoryMcp ? (
-            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <div>
-                <p className="font-medium">This is the Backstory Sales AI MCP server.</p>
-                <p className="mt-1 text-amber-800">
-                  It has its own connection flow with credentials already set up — connect it
-                  from the Integrations page instead of here.
-                </p>
-                <Link
-                  href="/integrations?tab=accounts"
-                  className="mt-2 inline-block text-sm font-medium text-amber-900 underline underline-offset-2"
-                  onClick={() => onOpenChange(false)}
-                >
-                  Go to Integrations →
-                </Link>
-              </div>
+          {/* Authentication */}
+          <div>
+            <Label className="mb-2 block">Authentication</Label>
+            <div className="flex gap-4">
+              {(['none', 'api_key', 'oauth2'] as const).map((type) => {
+                const labels: Record<AuthType, string> = {
+                  none: 'None',
+                  api_key: 'API key',
+                  oauth2: 'OAuth 2.0',
+                }
+                return (
+                  <label
+                    key={type}
+                    className="flex cursor-pointer items-center gap-2 text-sm"
+                  >
+                    <input
+                      type="radio"
+                      name="authType"
+                      value={type}
+                      checked={draft.authType === type}
+                      onChange={() => {
+                        setOauthDetected(false)
+                        set({ authType: type })
+                      }}
+                      className="accent-indigo-600"
+                    />
+                    {labels[type]}
+                  </label>
+                )
+              })}
             </div>
-          ) : (
-            <>
-              {/* Authentication */}
+            {oauthDetected && draft.authType === 'oauth2' && (
+              <p className="mt-1.5 text-xs text-horizon-700">
+                Detected automatically — this server requires OAuth 2.0.
+              </p>
+            )}
+          </div>
+
+          {/* Conditional: API key fields */}
+          {draft.authType === 'api_key' && (
+            <div className="space-y-3 rounded-lg border bg-gray-50 p-3">
               <div>
-                <Label className="mb-2 block">Authentication</Label>
-                <div className="flex gap-4">
-                  {(['none', 'api_key', 'oauth2'] as const).map((type) => {
-                    const labels: Record<AuthType, string> = {
-                      none: 'None',
-                      api_key: 'API key',
-                      oauth2: 'OAuth 2.0',
-                    }
-                    return (
-                      <label
-                        key={type}
-                        className="flex cursor-pointer items-center gap-2 text-sm"
-                      >
-                        <input
-                          type="radio"
-                          name="authType"
-                          value={type}
-                          checked={draft.authType === type}
-                          onChange={() => {
-                            setOauthDetected(false)
-                            set({ authType: type })
-                          }}
-                          className="accent-indigo-600"
-                        />
-                        {labels[type]}
-                      </label>
-                    )
-                  })}
-                </div>
-                {oauthDetected && draft.authType === 'oauth2' && (
-                  <p className="mt-1.5 text-xs text-horizon-700">
-                    Detected automatically — this server requires OAuth 2.0.
+                <Label>API key</Label>
+                <Input
+                  type="password"
+                  value={draft.apiKey}
+                  onChange={(e) => set({ apiKey: e.target.value })}
+                  placeholder={
+                    editingConnection?.auth.hasApiKey
+                      ? 'Leave blank to keep current key'
+                      : 'Paste your API key'
+                  }
+                  autoComplete="new-password"
+                />
+                {editingConnection?.auth.hasApiKey && !draft.apiKey && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Leave blank to keep the current key.
                   </p>
                 )}
               </div>
+              <div>
+                <Label>Header name (optional)</Label>
+                <Input
+                  value={draft.headerName}
+                  onChange={(e) => set({ headerName: e.target.value })}
+                  placeholder="Authorization (Bearer) — or e.g. X-API-Key"
+                />
+              </div>
+            </div>
+          )}
 
-              {/* Conditional: API key fields */}
-              {draft.authType === 'api_key' && (
-                <div className="space-y-3 rounded-lg border bg-gray-50 p-3">
+          {/* Conditional: OAuth 2.0 fields */}
+          {draft.authType === 'oauth2' && (
+            <div className="space-y-3 rounded-lg border bg-gray-50 p-3">
+              {/* Primary path: user-consent / Okta SSO via authorization-code flow */}
+              <Button
+                type="button"
+                className="w-full"
+                disabled={!canConnectSso}
+                onClick={connectWithSso}
+              >
+                Connect with SSO
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Connect with SSO redirects you to sign in (Okta), then returns
+                here. Fill in the server name and URL above first.
+              </p>
+
+              {/* Advanced: pre-issued client credentials for servers that support it */}
+              <details className="rounded-md border bg-white p-2">
+                <summary className="cursor-pointer text-sm font-medium">
+                  Advanced: client credentials
+                </summary>
+                <div className="mt-3 space-y-3">
                   <div>
-                    <Label>API key</Label>
+                    <Label>Client ID</Label>
+                    <Input
+                      value={draft.clientId}
+                      onChange={(e) => set({ clientId: e.target.value })}
+                      placeholder="your-client-id"
+                    />
+                  </div>
+                  <div>
+                    <Label>Client secret</Label>
                     <Input
                       type="password"
-                      value={draft.apiKey}
-                      onChange={(e) => set({ apiKey: e.target.value })}
+                      value={draft.clientSecret}
+                      onChange={(e) => set({ clientSecret: e.target.value })}
                       placeholder={
-                        editingConnection?.auth.hasApiKey
-                          ? 'Leave blank to keep current key'
-                          : 'Paste your API key'
+                        editingConnection?.auth.hasClientSecret
+                          ? 'Leave blank to keep current secret'
+                          : 'your-client-secret'
                       }
                       autoComplete="new-password"
                     />
-                    {editingConnection?.auth.hasApiKey && !draft.apiKey && (
+                    {editingConnection?.auth.hasClientSecret && !draft.clientSecret && (
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Leave blank to keep the current key.
+                        Leave blank to keep the current secret.
                       </p>
                     )}
                   </div>
                   <div>
-                    <Label>Header name (optional)</Label>
+                    <Label>Token URL (optional)</Label>
                     <Input
-                      value={draft.headerName}
-                      onChange={(e) => set({ headerName: e.target.value })}
-                      placeholder="Authorization (Bearer) — or e.g. X-API-Key"
+                      value={draft.tokenUrl}
+                      onChange={(e) => set({ tokenUrl: e.target.value })}
+                      placeholder="https://auth.example.com/oauth/token"
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Auto-discovered from the server if left blank.
+                    </p>
+                  </div>
+                  <div>
+                    <Label>Scopes (optional)</Label>
+                    <Input
+                      value={draft.scopes}
+                      onChange={(e) => set({ scopes: e.target.value })}
+                      placeholder="read write"
                     />
                   </div>
                 </div>
-              )}
-
-              {/* Conditional: OAuth 2.0 fields */}
-              {draft.authType === 'oauth2' && (
-                <div className="space-y-3 rounded-lg border bg-gray-50 p-3">
-                  {/* Primary path: user-consent / Okta SSO via authorization-code flow */}
-                  <Button
-                    type="button"
-                    className="w-full"
-                    disabled={!canConnectSso}
-                    onClick={connectWithSso}
-                  >
-                    Connect with SSO
-                  </Button>
-                  <p className="text-xs text-muted-foreground">
-                    Connect with SSO redirects you to sign in (Okta), then returns
-                    here. Fill in the server name and URL above first.
-                  </p>
-
-                  {/* Advanced: pre-issued client credentials for servers that support it */}
-                  <details className="rounded-md border bg-white p-2">
-                    <summary className="cursor-pointer text-sm font-medium">
-                      Advanced: client credentials
-                    </summary>
-                    <div className="mt-3 space-y-3">
-                      <div>
-                        <Label>Client ID</Label>
-                        <Input
-                          value={draft.clientId}
-                          onChange={(e) => set({ clientId: e.target.value })}
-                          placeholder="your-client-id"
-                        />
-                      </div>
-                      <div>
-                        <Label>Client secret</Label>
-                        <Input
-                          type="password"
-                          value={draft.clientSecret}
-                          onChange={(e) => set({ clientSecret: e.target.value })}
-                          placeholder={
-                            editingConnection?.auth.hasClientSecret
-                              ? 'Leave blank to keep current secret'
-                              : 'your-client-secret'
-                          }
-                          autoComplete="new-password"
-                        />
-                        {editingConnection?.auth.hasClientSecret && !draft.clientSecret && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Leave blank to keep the current secret.
-                          </p>
-                        )}
-                      </div>
-                      <div>
-                        <Label>Token URL (optional)</Label>
-                        <Input
-                          value={draft.tokenUrl}
-                          onChange={(e) => set({ tokenUrl: e.target.value })}
-                          placeholder="https://auth.example.com/oauth/token"
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Auto-discovered from the server if left blank.
-                        </p>
-                      </div>
-                      <div>
-                        <Label>Scopes (optional)</Label>
-                        <Input
-                          value={draft.scopes}
-                          onChange={(e) => set({ scopes: e.target.value })}
-                          placeholder="read write"
-                        />
-                      </div>
-                    </div>
-                  </details>
-                </div>
-              )}
-            </>
+              </details>
+            </div>
           )}
 
           {/* Test connection result */}

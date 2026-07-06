@@ -324,9 +324,12 @@ function AgentHQ() {
 
   return (
     <>
-      <div className="flex flex-col lg:grid lg:h-screen lg:grid-cols-[minmax(420px,1fr)_minmax(400px,1fr)] lg:overflow-hidden">
+      {/* lg: rows locked to the viewport (minmax(0,1fr)) — an implicit auto row
+          would grow with content and clip each pane's bottom (form buttons,
+          chat composer) behind the grid's overflow-hidden. */}
+      <div className="flex flex-col lg:grid lg:h-screen lg:grid-cols-[minmax(420px,1fr)_minmax(400px,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
         {/* ── Left pane: activity for the selected agent, or the setup flow ── */}
-        <section className="min-w-0 border-b bg-white lg:overflow-y-auto lg:border-b-0 lg:border-r">
+        <section className="min-w-0 border-b bg-white lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="sticky top-0 z-10 border-b bg-white p-4">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0 flex-1">
@@ -518,7 +521,7 @@ function AgentHQ() {
         </section>
 
         {/* ── Right pane: persistent assistant chat for the selected agent ── */}
-        <section className="flex h-[70vh] min-w-0 flex-col bg-white lg:h-auto">
+        <section className="flex h-[70vh] min-w-0 flex-col bg-white lg:h-auto lg:min-h-0">
           <AssistantPanel
             key={selectedAgent?.id ?? 'none'}
             agent={selectedAgent}

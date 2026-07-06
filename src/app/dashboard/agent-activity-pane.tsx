@@ -98,8 +98,21 @@ function stepProvider(node: string): { slug: string; name: string } | null {
   let provider = node.split('.')[0]
   if (provider.startsWith('nango:')) provider = provider.slice('nango:'.length) // nango:slack → slack
   if (!provider) return null
-  const name = PROVIDER_NAMES[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1)
-  return { slug: PROVIDER_LOGO_SLUGS[provider] ?? provider, name }
+  // Custom MCP connections carry their slugified connection name as the
+  // provider (e.g. "Backstory MCP" → backstory_mcp), so an exact-key lookup
+  // misses them — fall back to a known provider key contained in the slug so
+  // those steps still get the right brand mark instead of an initial tile.
+  const knownKey =
+    provider in PROVIDER_NAMES
+      ? provider
+      : Object.keys(PROVIDER_NAMES).find((key) => provider.includes(key))
+  if (knownKey) {
+    return { slug: PROVIDER_LOGO_SLUGS[knownKey] ?? knownKey, name: PROVIDER_NAMES[knownKey] }
+  }
+  const prettyName = provider
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+  return { slug: PROVIDER_LOGO_SLUGS[provider] ?? provider, name: prettyName }
 }
 
 // One tool call: header always visible; inputs/outputs expand on click so a

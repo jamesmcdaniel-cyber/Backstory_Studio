@@ -235,6 +235,9 @@ export function AgentConfigForm({
   const router = useRouter()
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
+  // Snapshot of the draft as last populated/saved, so Run can tell whether
+  // there are unsaved edits that must be persisted before executing.
+  const baselineRef = useRef<string>(JSON.stringify(emptyDraft))
   const [skillNames, setSkillNames] = useState<Record<string, string>>({})
   const [availableIntegrations, setAvailableIntegrations] = useState<AvailableIntegrations | null>(null)
   const [runs, setRuns] = useState<any[]>([])
@@ -287,7 +290,7 @@ export function AgentConfigForm({
   // making edits appear to "not save". Keying on the id preserves the draft.
   useEffect(() => {
     const source = editingAgent || template
-    setDraft(source ? {
+    const next = source ? {
       ...emptyDraft,
       ...source,
       instructions: source.instructions || source.objective || '',
@@ -302,7 +305,9 @@ export function AgentConfigForm({
       // When creating a fresh agent, default the schedule timezone to the
       // browser's resolved zone so daily/weekly times match the user's clock.
       schedule: { ...emptyDraft.schedule, timezone: browserTimezone() },
-    })
+    }
+    setDraft(next)
+    baselineRef.current = JSON.stringify(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingAgent?.id, template?.id, active])
 
@@ -317,13 +322,33 @@ export function AgentConfigForm({
     setDraft({ ...draft, skills: draft.skills.filter((id) => id !== skillId) })
   }
 
+  const dirty = JSON.stringify(draft) !== baselineRef.current
+
   const submit = async () => {
     setSaving(true)
     try {
       await onSave(draft)
+      baselineRef.current = JSON.stringify(draft)
     } finally {
       setSaving(false)
     }
+  }
+
+  // Run always executes what's persisted — so unsaved edits MUST be saved
+  // first, or the run silently uses the old instructions and edits appear
+  // to "not catch". A failed save aborts the run (onSave throws on error).
+  const runNow = async () => {
+    if (!onRunAgent || !editingAgent) return
+    if (dirty) {
+      setSaving(true)
+      try {
+        await onSave(draft)
+        baselineRef.current = JSON.stringify(draft)
+      } finally {
+        setSaving(false)
+      }
+    }
+    await onRunAgent(editingAgent)
   }
 
   const openRun = (runId: string) => {
@@ -633,14 +658,14 @@ export function AgentConfigForm({
         {editingAgent && onRunAgent && (
           <Button
             variant="outline"
-            disabled={runningId === editingAgent.id}
-            onClick={() => onRunAgent(editingAgent)}
+            disabled={saving || runningId === editingAgent.id}
+            onClick={runNow}
             className="shrink-0"
           >
-            {runningId === editingAgent.id
+            {saving || runningId === editingAgent.id
               ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
               : <Play className="mr-1.5 h-4 w-4" />}
-            Run
+            {dirty ? 'Save & run' : 'Run'}
           </Button>
         )}
         <Button className="flex-1" disabled={saving || !draft.title || !draft.instructions} onClick={submit}>

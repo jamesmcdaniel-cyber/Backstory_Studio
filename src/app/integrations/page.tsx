@@ -8,7 +8,6 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { GranolaCard } from './granola-card'
 import { OAuthIntegrationsGrid } from './oauth-integrations-grid'
-import { PeopleAiCard } from './people-ai-card'
 
 function IntegrationsTabs() {
   const router = useRouter()
@@ -27,8 +26,9 @@ function IntegrationsTabs() {
       </TabsList>
       <TabsContent value="tools" className="mt-6"><MCPIntegrationCards /></TabsContent>
       <TabsContent value="accounts" className="mt-6 space-y-6">
+        {/* Backstory Sales AI (MCP) connects on the MCP Servers page — its
+            OAuth/DCR flow through the generic dialog is the canonical path. */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <PeopleAiCard />
           <GranolaCard />
         </div>
         <Suspense fallback={<p className="text-sm text-gray-500">Loading integrations...</p>}>
