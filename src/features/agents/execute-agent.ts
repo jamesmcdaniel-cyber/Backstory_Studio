@@ -245,8 +245,8 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   const discovered: DiscoveredTool[] = []
 
   // ---- Klavis-managed MCP servers ----------------------------------------
-  const hasBackstoryProvider = providers.some((p) => /backstory/i.test(p))
-  // Non-Backstory providers that Klavis handles
+  // Non-Backstory providers that Klavis handles (Backstory/Sales AI is loaded
+  // unconditionally below, so it never needs to appear in the providers list).
   const klavisProviders = providers.filter((p) => !/backstory/i.test(p))
 
   if (process.env.KLAVIS_API_KEY && klavisProviders.length > 0) {
@@ -295,67 +295,73 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   }
 
   // ---- People.ai Sales AI MCP (a.k.a. Backstory MCP) -----------------------
+  // Sales AI read tools are this product's core data spine, so they load for
+  // EVERY agent whenever a People.ai client resolves — the same "connect once,
+  // available everywhere" model as the org MCP connections below. (Previously
+  // gated on the agent's providers list containing "backstory", but the agent
+  // config UI never surfaced that toggle, so agents could never actually
+  // receive these tools.) When no client resolves — an unentitled org with no
+  // connection and no service key — nothing loads, which is harmless.
+  //
   // Identity order matters for data isolation:
   //  1. The agent OWNER's delegated connection (mcp_* token) — the agent reads
   //     People.ai exactly as that rep.
   //  2. The org service key (PAI-Client-Id/Secret) for ownerless runs.
   //  3. Legacy env-configured service account (BACKSTORY_MCP_*), logged loudly
   //     because it is not tenant-isolated.
-  if (hasBackstoryProvider) {
-    try {
-      let paiClient = ownerUserId ? await getPeopleAiClientForUser(ownerUserId, organizationId) : null
-      let identity: 'user' | 'service' | 'legacy-env' = 'user'
-      if (!paiClient) {
-        paiClient = getPeopleAiServiceClient()
-        identity = 'service'
-      }
-
-      if (paiClient) {
-        const adapter: McpToolClient = {
-          executeTool: (_serverUrl, name, args) => paiClient!.callTool(name, args),
-        }
-        if (identity !== 'user') {
-          apiLogger.warn('loadTools: People.ai tools using service identity (no owner connection)', {
-            organizationId, ownerUserId: ownerUserId ?? null,
-          })
-        }
-        const available = await cachedToolDiscovery(organizationId, paiClient.serverUrl, () => paiClient!.listTools())
-        for (const tool of available.slice(0, 20)) {
-          discovered.push({
-            name: toolName('backstory', tool.name),
-            description: tool.description || `${tool.name} via Backstory`,
-            inputSchema:
-              tool.inputSchema && typeof tool.inputSchema === 'object'
-                ? (tool.inputSchema as Record<string, unknown>)
-                : { type: 'object', properties: {} },
-            binding: { provider: 'backstory', serverUrl: paiClient.serverUrl, toolName: tool.name, client: adapter },
-            isWrite: false,
-          })
-        }
-      } else if (backstoryMcpConfigured()) {
-        apiLogger.warn('loadTools: People.ai tools using legacy env service account (no tenant isolation)', {
-          organizationId,
-        })
-        const backstoryUrl = process.env.BACKSTORY_MCP_URL!
-        const backstoryClient = new BackstoryMcpClient()
-        const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
-        for (const tool of available.slice(0, 20)) {
-          discovered.push({
-            name: toolName('backstory', tool.name),
-            description: tool.description || `${tool.name} via backstory`,
-            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-            binding: { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient },
-            isWrite: false,
-          })
-        }
-      }
-    } catch (error) {
-      apiLogger.warn('loadTools: People.ai tool discovery failed, skipping provider', {
-        provider: 'backstory',
-        organizationId,
-        error: error instanceof Error ? error.message : String(error),
-      })
+  try {
+    let paiClient = ownerUserId ? await getPeopleAiClientForUser(ownerUserId, organizationId) : null
+    let identity: 'user' | 'service' | 'legacy-env' = 'user'
+    if (!paiClient) {
+      paiClient = getPeopleAiServiceClient()
+      identity = 'service'
     }
+
+    if (paiClient) {
+      const adapter: McpToolClient = {
+        executeTool: (_serverUrl, name, args) => paiClient!.callTool(name, args),
+      }
+      if (identity !== 'user') {
+        apiLogger.warn('loadTools: People.ai tools using service identity (no owner connection)', {
+          organizationId, ownerUserId: ownerUserId ?? null,
+        })
+      }
+      const available = await cachedToolDiscovery(organizationId, paiClient.serverUrl, () => paiClient!.listTools())
+      for (const tool of available.slice(0, 20)) {
+        discovered.push({
+          name: toolName('backstory', tool.name),
+          description: tool.description || `${tool.name} via Backstory`,
+          inputSchema:
+            tool.inputSchema && typeof tool.inputSchema === 'object'
+              ? (tool.inputSchema as Record<string, unknown>)
+              : { type: 'object', properties: {} },
+          binding: { provider: 'backstory', serverUrl: paiClient.serverUrl, toolName: tool.name, client: adapter },
+          isWrite: false,
+        })
+      }
+    } else if (backstoryMcpConfigured()) {
+      apiLogger.warn('loadTools: People.ai tools using legacy env service account (no tenant isolation)', {
+        organizationId,
+      })
+      const backstoryUrl = process.env.BACKSTORY_MCP_URL!
+      const backstoryClient = new BackstoryMcpClient()
+      const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
+      for (const tool of available.slice(0, 20)) {
+        discovered.push({
+          name: toolName('backstory', tool.name),
+          description: tool.description || `${tool.name} via backstory`,
+          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+          binding: { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient },
+          isWrite: false,
+        })
+      }
+    }
+  } catch (error) {
+    apiLogger.warn('loadTools: People.ai tool discovery failed, skipping provider', {
+      provider: 'backstory',
+      organizationId,
+      error: error instanceof Error ? error.message : String(error),
+    })
   }
 
   // ---- Per-org MCP connections (all active connections, any authType) ------
