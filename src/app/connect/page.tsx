@@ -14,8 +14,8 @@ function ConnectInner() {
   const status = params.get('peopleai')
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50 p-6">
-      <div className="w-full max-w-md rounded-xl border bg-white p-8 shadow-sm">
+    <main className="flex min-h-screen items-center justify-center bg-gradient-horizon-soft p-6">
+      <div className="w-full max-w-md animate-fade-in-up rounded-xl border bg-white p-8 shadow-3">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/backstory-lockup-black.svg" alt="Backstory" className="h-6 w-auto" />
 
@@ -56,7 +56,7 @@ function ConnectInner() {
 
         <a
           href="/api/peopleai/connect?return_to=/dashboard"
-          className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-gray-800"
+          className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-1 transition-all duration-fast ease-out-quart hover:bg-gray-800 hover:shadow-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98]"
         >
           Connect Backstory <ArrowRight className="h-4 w-4" />
         </a>

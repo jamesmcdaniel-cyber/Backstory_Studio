@@ -73,7 +73,7 @@ export default function SignUpPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-horizon p-4">
-      <div className="w-full max-w-md">
+      <div className="w-full max-w-md animate-fade-in-up">
         <div className="mb-8 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/backstory-logo-white.svg" alt="Backstory" className="mx-auto mb-6 h-7" />
@@ -88,13 +88,13 @@ export default function SignUpPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {error && (
-              <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              <div className="animate-fade-in rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 {error}
               </div>
             )}
 
             {success && (
-              <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+              <div className="animate-fade-in rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
                 {success}
               </div>
             )}
@@ -172,7 +172,7 @@ export default function SignUpPage() {
                   minLength={6}
                 />
               </div>
-              <Button type="submit" className="w-full" disabled={loading}>
+              <Button type="submit" className="w-full" loading={loading}>
                 {loading ? 'Creating account…' : 'Create account'}
               </Button>
             </form>
