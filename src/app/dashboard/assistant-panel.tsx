@@ -179,28 +179,18 @@ export function AssistantPanel({
   useEffect(() => {
     agentIdRef.current = agentId
     setHistoryOpen(false)
-    if (!agentId) {
-      setMessages([])
-      setSessions([])
-      setSessionId(null)
-      return
-    }
-    let cancelled = false
-    setLoading(true)
+    // Start every agent on a FRESH chat rather than auto-restoring its most
+    // recent conversation. Prior chats aren't lost — they're saved per agent +
+    // per rep and reachable from the history (clock) dropdown — they're just
+    // not reopened into the view. So a new login always opens a clean chat.
     setMessages([])
     setSessionId(null)
-    // Load the most recent conversation for this agent + the history list.
-    fetch(`/api/agents/${agentId}/chat`, { cache: 'no-store' })
-      .then((response) => response.json())
-      .then((data) => {
-        if (cancelled) return
-        setMessages(Array.isArray(data.messages) ? data.messages : [])
-        setSessionId(typeof data.sessionId === 'string' ? data.sessionId : null)
-      })
-      .catch(() => { if (!cancelled) setMessages([]) })
-      .finally(() => { if (!cancelled) setLoading(false) })
+    if (!agentId) {
+      setSessions([])
+      return
+    }
+    // Only the history list loads on select; the conversation stays empty.
     void loadSessions(agentId)
-    return () => { cancelled = true }
   }, [agentId, loadSessions])
 
   // Close the history dropdown on an outside click.

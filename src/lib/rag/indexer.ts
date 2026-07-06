@@ -188,7 +188,7 @@ export async function indexExecution(execution: ExecutionRecord): Promise<void> 
   if (!ragEnabled()) return
   try {
     const org = execution.organizationId
-    const outputText = safeJson(execution.output).slice(0, 1500)
+    const outputText = outputSummary(execution.output).slice(0, 1500)
     const tools = execution.toolSummaries?.length ? ` Tools: ${execution.toolSummaries.join('; ')}.` : ''
     const nodes: PendingNode[] = [
       {
@@ -325,6 +325,23 @@ function safeJson(value: unknown): string {
   } catch {
     return ''
   }
+}
+
+/**
+ * Human-readable text for a run's output. Agent outputs are typically
+ * `{ summary, response, ... }` blobs — retrieval facts built from raw
+ * JSON.stringify read as escaped noise in the correlated-context UI, so prefer
+ * the summary/response string and only fall back to JSON for unknown shapes.
+ * (Mirrors resultText() in the dashboard's activity pane.)
+ */
+function outputSummary(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const blob = value as { summary?: unknown; response?: unknown }
+    if (typeof blob.summary === 'string' && blob.summary.trim()) return blob.summary
+    if (typeof blob.response === 'string' && blob.response.trim()) return blob.response
+  }
+  return safeJson(value)
 }
 
 function warn(scope: string, error: unknown): void {

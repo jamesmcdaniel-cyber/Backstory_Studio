@@ -98,8 +98,21 @@ function stepProvider(node: string): { slug: string; name: string } | null {
   let provider = node.split('.')[0]
   if (provider.startsWith('nango:')) provider = provider.slice('nango:'.length) // nango:slack → slack
   if (!provider) return null
-  const name = PROVIDER_NAMES[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1)
-  return { slug: PROVIDER_LOGO_SLUGS[provider] ?? provider, name }
+  // Custom MCP connections carry their slugified connection name as the
+  // provider (e.g. "Backstory MCP" → backstory_mcp), so an exact-key lookup
+  // misses them — fall back to a known provider key contained in the slug so
+  // those steps still get the right brand mark instead of an initial tile.
+  const knownKey =
+    provider in PROVIDER_NAMES
+      ? provider
+      : Object.keys(PROVIDER_NAMES).find((key) => provider.includes(key))
+  if (knownKey) {
+    return { slug: PROVIDER_LOGO_SLUGS[knownKey] ?? knownKey, name: PROVIDER_NAMES[knownKey] }
+  }
+  const prettyName = provider
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+  return { slug: PROVIDER_LOGO_SLUGS[provider] ?? provider, name: prettyName }
 }
 
 // One tool call: header always visible; inputs/outputs expand on click so a
@@ -182,6 +195,34 @@ function ThinkingCard({ text }: { text: string }) {
   )
 }
 
+// Correlated-context facts are assembled server-side and often embed a raw
+// JSON blob (e.g. `Output: {"summary":"…"}` or `Sales AI status: {"error":"…"}`)
+// that renders as escaped JSON noise. Replace each flat {...} blob with its most
+// meaningful string field so the fact reads as prose. Applied at display time so
+// it cleans up facts indexed before the server-side formatting fix too.
+function humanizeFact(text: string): string {
+  return text.replace(/\{[^{}]*\}/g, (blob) => {
+    try {
+      const obj = JSON.parse(blob) as Record<string, unknown>
+      if (obj && typeof obj === 'object') {
+        for (const key of ['summary', 'response', 'error', 'message', 'text']) {
+          const value = obj[key]
+          if (typeof value === 'string' && value.trim()) return value.trim()
+        }
+        const strings = Object.values(obj).filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        if (strings.length) return strings.join(' — ')
+      }
+    } catch {
+      // Not valid JSON — leave the original text untouched.
+    }
+    return blob
+  })
+}
+
+// Fact types sourced from Backstory Sales AI (vs. internal run/agent nodes), so
+// they render with the Backstory brand mark to show where the data came from.
+const SALES_AI_FACT_TYPES = new Set(['opportunity', 'account', 'signal'])
+
 // Renders the graph-RAG context the agent pulled in before acting — the visible
 // "brain" step: which Sales AI signals, prior runs, and related entities it
 // correlated. Collapsed to the summary by default; expandable to the facts.
@@ -204,9 +245,14 @@ function ContextCard({ summary, hits, related }: { summary: string; hits: Contex
       {open && total > 0 && (
         <ul className="mt-2 space-y-1 border-t pt-2">
           {[...hits, ...related].map((fact, i) => (
-            <li key={i} className="text-xs text-gray-600">
-              <span className="mono-label mr-1.5 text-gray-400">{fact.type}</span>
-              {fact.text}
+            <li key={i} className="flex items-start gap-1.5 whitespace-pre-wrap text-xs text-gray-600">
+              {SALES_AI_FACT_TYPES.has((fact.type || '').toLowerCase()) && (
+                <IntegrationLogo slug="backstory" name="Backstory" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              )}
+              <span>
+                <span className="mono-label mr-1.5 text-gray-400">{fact.type}</span>
+                {humanizeFact(fact.text)}
+              </span>
             </li>
           ))}
         </ul>

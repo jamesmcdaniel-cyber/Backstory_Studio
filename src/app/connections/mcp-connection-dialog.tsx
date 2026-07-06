@@ -83,6 +83,10 @@ export function McpConnectionDialog({
   const [draft, setDraft] = useState<McpConnectionDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState<TestResult>({ status: 'idle' })
+  // Set once OAuth discovery (on server-URL blur) finds an authorization
+  // endpoint, so we can explain why authType was auto-switched to oauth2.
+  const [oauthDetected, setOauthDetected] = useState(false)
+  const [discovering, setDiscovering] = useState(false)
 
   // Populate draft when editing
   useEffect(() => {
@@ -106,6 +110,7 @@ export function McpConnectionDialog({
       setDraft(emptyDraft)
     }
     setTestResult({ status: 'idle' })
+    setOauthDetected(false)
   }, [editingConnection, open])
 
   const set = (patch: Partial<McpConnectionDraft>) =>
@@ -115,6 +120,37 @@ export function McpConnectionDialog({
   useEffect(() => {
     setTestResult({ status: 'idle' })
   }, [draft.serverUrl, draft.authType, draft.apiKey, draft.clientId, draft.clientSecret, draft.tokenUrl])
+
+  // Probe the server for OAuth on blur, so leaving the default "None" auth
+  // selected doesn't silently send an unauthenticated request that's bound to
+  // fail. Only acts while the user hasn't already picked an auth type
+  // themselves — it won't override an explicit api_key/oauth2 choice.
+  const probeForOAuth = async () => {
+    const url = draft.serverUrl.trim()
+    if (!url || draft.authType !== 'none') return
+    try {
+      void new URL(url)
+    } catch {
+      return
+    }
+    setDiscovering(true)
+    try {
+      const response = await fetch('/api/mcp-connections/discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverUrl: url }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (data.requiresOAuth) {
+        setOauthDetected(true)
+        set({ authType: 'oauth2' })
+      }
+    } catch {
+      // Inconclusive — leave the user's current selection alone.
+    } finally {
+      setDiscovering(false)
+    }
+  }
 
   const canCreate = Boolean(draft.name.trim() && draft.description.trim() && draft.serverUrl.trim())
   const canTest = Boolean(draft.serverUrl.trim())
@@ -222,9 +258,11 @@ export function McpConnectionDialog({
             <Input
               value={draft.serverUrl}
               onChange={(e) => set({ serverUrl: e.target.value })}
+              onBlur={probeForOAuth}
               placeholder="Streamable endpoint"
             />
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+              {discovering ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
               Enter the complete server path to continue
             </p>
           </div>
@@ -249,7 +287,10 @@ export function McpConnectionDialog({
                       name="authType"
                       value={type}
                       checked={draft.authType === type}
-                      onChange={() => set({ authType: type })}
+                      onChange={() => {
+                        setOauthDetected(false)
+                        set({ authType: type })
+                      }}
                       className="accent-indigo-600"
                     />
                     {labels[type]}
@@ -257,6 +298,11 @@ export function McpConnectionDialog({
                 )
               })}
             </div>
+            {oauthDetected && draft.authType === 'oauth2' && (
+              <p className="mt-1.5 text-xs text-horizon-700">
+                Detected automatically — this server requires OAuth 2.0.
+              </p>
+            )}
           </div>
 
           {/* Conditional: API key fields */}
