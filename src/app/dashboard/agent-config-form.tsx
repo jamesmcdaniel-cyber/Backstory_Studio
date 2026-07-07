@@ -62,6 +62,8 @@ export type AgentDraft = {
   visibility: 'shared' | 'private'
   /** Lets this agent delegate to other agents via the run_agent tool. */
   allowSubagents?: boolean
+  /** Restrict which agents it may run. Empty = any of the user's agents. */
+  subagentIds?: string[]
   schedule: {
     type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron' | 'once'
     time?: string
@@ -108,6 +110,7 @@ const emptyDraft: AgentDraft = {
   folder: '',
   visibility: 'shared',
   allowSubagents: false,
+  subagentIds: [],
   schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },
 }
 
@@ -270,6 +273,18 @@ export function AgentConfigForm({
   const [strataQuery, setStrataQuery] = useState('')
   const [runs, setRuns] = useState<any[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
+  // Other agents in the workspace, offered as run_agent targets.
+  const [orgAgents, setOrgAgents] = useState<{ id: string; title: string }[]>([])
+
+  useEffect(() => {
+    if (!active) return
+    fetch('/api/agents', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) setOrgAgents((data.agents as { id: string; title: string }[]).map((a) => ({ id: a.id, title: a.title })))
+      })
+      .catch(() => {})
+  }, [active])
 
   // Load this agent's recent runs when editing.
   useEffect(() => {
@@ -342,6 +357,7 @@ export function AgentConfigForm({
       folder: source.folder || '',
       visibility: source.visibility || 'shared',
       allowSubagents: source.allowSubagents === true,
+      subagentIds: Array.isArray(source.subagentIds) ? source.subagentIds : [],
       schedule: normalizeSchedule({ ...emptyDraft.schedule, ...(source.schedule || {}) }),
     } : {
       ...emptyDraft,
@@ -655,6 +671,47 @@ export function AgentConfigForm({
             onCheckedChange={(on) => setDraft({ ...draft, allowSubagents: on })}
           />
         </div>
+
+        {draft.allowSubagents === true && (() => {
+          const candidates = orgAgents.filter((a) => a.id !== editingAgent?.id)
+          const selected = draft.subagentIds ?? []
+          const allSelected = selected.length === 0
+          const toggleAgent = (id: string) => {
+            const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]
+            setDraft({ ...draft, subagentIds: next })
+          }
+          return (
+            <div className="mt-3 border-t pt-3">
+              <p className="mb-2 text-xs font-medium text-gray-600">Which agents can it run?</p>
+              <label className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-indigo-600"
+                  checked={allSelected}
+                  onChange={() => setDraft({ ...draft, subagentIds: [] })}
+                />
+                <span className="font-medium">All agents</span>
+                <span className="text-xs text-gray-400">({candidates.length} available)</span>
+              </label>
+              {candidates.length > 0 && (
+                <div className="mt-1 max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-1">
+                  {candidates.map((agent) => (
+                    <label key={agent.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 accent-indigo-600"
+                        checked={allSelected || selected.includes(agent.id)}
+                        onChange={() => toggleAgent(agent.id)}
+                      />
+                      <span className="truncate">{agent.title}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {candidates.length === 0 && <p className="px-1 text-xs text-gray-400">No other agents yet — create more to delegate to them.</p>}
+            </div>
+          )
+        })()}
       </div>
 
       {/* ── Schedule ─────────────────────────────────────────────────── */}

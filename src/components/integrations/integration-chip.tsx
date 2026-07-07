@@ -12,6 +12,8 @@ export function integrationSlug(name: string): string | null {
   if (n.includes('backstory')) return 'backstory'
   if (n.includes('slack')) return 'slack'
   if (n.includes('salesforce')) return 'salesforce'
+  if (n.includes('snowflake')) return 'snowflake'
+  if (n.includes('intercom')) return 'intercom'
   if (n.includes('hubspot')) return 'hubspot'
   if (n.includes('gmail') || n.includes('email') || n.includes('mail')) return 'gmail'
   if (n.includes('notion')) return 'notion'
@@ -45,9 +47,14 @@ function prettyName(name: string): string {
 
 export function IntegrationChip({ name }: { name: string }) {
   const label = prettyName(name)
+  const isHttp = label.toLowerCase().includes('http')
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 py-1 pl-1 pr-2.5 text-xs font-medium text-foreground/80">
-      <IntegrationLogo name={label} slug={integrationSlug(label) ?? integrationSlug(name)} className="h-4 w-4" />
+      {isHttp ? (
+        <span className="flex h-4 w-4 items-center justify-center text-sm leading-none" aria-hidden>🌐</span>
+      ) : (
+        <IntegrationLogo name={label} slug={integrationSlug(label) ?? integrationSlug(name)} className="h-4 w-4" />
+      )}
       {label}
     </span>
   )

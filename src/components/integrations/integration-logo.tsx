@@ -30,6 +30,7 @@ const SIMPLE_ICON_SLUGS: Record<string, string> = {
   googlemail: 'gmail',
   salesforce: 'salesforce',
   'salesforce-sandbox': 'salesforce',
+  snowflake: 'snowflake',
   airtable: 'airtable',
   confluence: 'confluence',
   trello: 'trello',

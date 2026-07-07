@@ -11,6 +11,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { Pagination, paginate } from '@/components/ui/pagination'
@@ -92,6 +93,8 @@ function ExplorePage() {
   const [agents, setAgents] = useState<AgentItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // One search box filters whichever tab is active (name/description/category/tags).
+  const [search, setSearch] = useState('')
   // Card grids cap at 9 per page; each tab pages independently.
   const [templatesPage, setTemplatesPage] = useState(1)
   const [skillsPage, setSkillsPage] = useState(1)
@@ -144,6 +147,19 @@ function ExplorePage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [openSkillMenu])
 
+  // Search filter across name, description, category, and tags.
+  const q = search.trim().toLowerCase()
+  const matches = (item: { name: string; description: string; category: string; tags?: string[] }) =>
+    !q || `${item.name} ${item.description} ${item.category} ${(item.tags || []).join(' ')}`.toLowerCase().includes(q)
+  const filteredTemplates = templates.filter(matches)
+  const filteredSkills = skills.filter(matches)
+
+  const onSearch = (value: string) => {
+    setSearch(value)
+    setTemplatesPage(1)
+    setSkillsPage(1)
+  }
+
   const addSkillToAgent = async (skill: SkillItem, agent: AgentItem) => {
     setOpenSkillMenu(null)
     const updatedSkills = Array.from(new Set([...(agent.skills || []), skill.id]))
@@ -162,6 +178,31 @@ function ExplorePage() {
     } catch {
       toast.error(`Failed to add skill to ${agent.title}`)
     }
+  }
+
+  // Attach the skill to every agent at once.
+  const addSkillToAllAgents = async (skill: SkillItem) => {
+    setOpenSkillMenu(null)
+    const results = await Promise.all(
+      agents.map(async (agent) => {
+        const updatedSkills = Array.from(new Set([...(agent.skills || []), skill.id]))
+        const res = await fetch('/api/agents', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: agent.id, skills: updatedSkills }),
+        }).catch(() => null)
+        return { agent, ok: Boolean(res?.ok), updatedSkills }
+      }),
+    )
+    const succeeded = results.filter((r) => r.ok)
+    setAgents((prev) =>
+      prev.map((a) => {
+        const hit = succeeded.find((r) => r.agent.id === a.id)
+        return hit ? { ...a, skills: hit.updatedSkills } : a
+      }),
+    )
+    if (succeeded.length === results.length) toast.success(`Added "${skill.name}" to all ${succeeded.length} agents`)
+    else toast.error(`Added to ${succeeded.length} of ${results.length} agents — some failed`)
   }
 
   if (loading || error) {
@@ -190,6 +231,13 @@ function ExplorePage() {
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         <PageHeader eyebrow="Library" title="Explore" />
 
+        <Input
+          value={search}
+          onChange={(event) => onSearch(event.target.value)}
+          placeholder="Search templates and skills…"
+          className="max-w-md"
+        />
+
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
             <TabsTrigger value="templates">Templates</TabsTrigger>
@@ -203,7 +251,7 @@ function ExplorePage() {
               <p className="text-sm text-muted-foreground">Single-task and enhanced templates</p>
             </div>
 
-            {templates.length === 0 ? (
+            {filteredTemplates.length === 0 ? (
               <EmptyState
                 icon={Sparkles}
                 title="No templates available yet"
@@ -211,7 +259,7 @@ function ExplorePage() {
               />
             ) : (
               <div className="stagger-children grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {paginate(templates, templatesPage, PAGE_SIZE).pageItems.map((t) => {
+                {paginate(filteredTemplates, templatesPage, PAGE_SIZE).pageItems.map((t) => {
                   const accent = accentFor(t.category)
                   const Icon = categoryIcon(t.category)
                   return (
@@ -261,8 +309,8 @@ function ExplorePage() {
               </div>
             )}
             <Pagination
-              page={paginate(templates, templatesPage, PAGE_SIZE).page}
-              pageCount={paginate(templates, templatesPage, PAGE_SIZE).pageCount}
+              page={paginate(filteredTemplates, templatesPage, PAGE_SIZE).page}
+              pageCount={paginate(filteredTemplates, templatesPage, PAGE_SIZE).pageCount}
               onPageChange={setTemplatesPage}
             />
           </TabsContent>
@@ -274,7 +322,7 @@ function ExplorePage() {
               <p className="text-sm text-muted-foreground">Instruction packs that extend agents at run time</p>
             </div>
 
-            {skills.length === 0 ? (
+            {filteredSkills.length === 0 ? (
               <EmptyState
                 icon={Sparkles}
                 title="No skills available yet"
@@ -282,16 +330,17 @@ function ExplorePage() {
               />
             ) : (
               <div className="stagger-children grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {paginate(skills, skillsPage, PAGE_SIZE).pageItems.map((skill) => {
+                {paginate(filteredSkills, skillsPage, PAGE_SIZE).pageItems.map((skill) => {
                   const accent = accentFor(skill.category)
                   const Icon = categoryIcon(skill.category)
                   return (
+                  // overflow stays visible so the add-to-agent menu isn't clipped
                   <Card key={skill.id} className={cn(
-                    'group relative h-full flex flex-col overflow-hidden border-border/60 transition-all duration-200',
+                    'group relative h-full flex flex-col border-border/60 transition-all duration-200',
                     'hover:-translate-y-0.5 hover:shadow-lg hover:ring-1',
                     accent.ring,
                   )}>
-                    <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
+                    <div className={cn('absolute inset-x-0 top-0 h-1 rounded-t-xl bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
                     <CardHeader className="space-y-2.5 pt-5">
                       <div>
                         <Badge variant="outline" className={cn('text-[11px] font-medium', accent.badge)}>{skill.category}</Badge>
@@ -342,6 +391,14 @@ function ExplorePage() {
                         {openSkillMenu === skill.id && agents.length > 0 && (
                           <div className="absolute bottom-full left-0 right-0 mb-1 z-50 origin-bottom animate-scale-in rounded-md border border-border bg-popover shadow-popover">
                             <p className="px-3 pt-2 pb-1 text-xs text-muted-foreground font-medium">Select an agent</p>
+                            <button
+                              type="button"
+                              className="w-full px-3 py-2 text-left text-sm font-medium text-indigo-600 hover:bg-accent transition-colors"
+                              onClick={() => addSkillToAllAgents(skill)}
+                            >
+                              All agents ({agents.length})
+                            </button>
+                            <div className="mx-3 border-t" />
                             <ul className="max-h-48 overflow-y-auto pb-1">
                               {agents.map((agent) => (
                                 <li key={agent.id}>
@@ -365,8 +422,8 @@ function ExplorePage() {
               </div>
             )}
             <Pagination
-              page={paginate(skills, skillsPage, PAGE_SIZE).page}
-              pageCount={paginate(skills, skillsPage, PAGE_SIZE).pageCount}
+              page={paginate(filteredSkills, skillsPage, PAGE_SIZE).page}
+              pageCount={paginate(filteredSkills, skillsPage, PAGE_SIZE).pageCount}
               onPageChange={setSkillsPage}
             />
           </TabsContent>

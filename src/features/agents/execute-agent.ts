@@ -744,11 +744,16 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const depth = data.depth ?? 0
     const chain = [...(data.ancestorAgentIds ?? []), agent.id]
     if (agentMetadata.allowSubagents === true && depth < MAX_SUBAGENT_DEPTH) {
+      // A non-empty subagentIds allow-list restricts the roster; empty = any
+      // visible agent (the default).
+      const allowList = (Array.isArray(agentMetadata.subagentIds) ? agentMetadata.subagentIds : []).filter(
+        (id): id is string => typeof id === 'string',
+      )
       const callable = await prisma.agentTask.findMany({
         where: {
           organizationId,
           status: 'ACTIVE',
-          id: { notIn: chain },
+          id: allowList.length ? { in: allowList, notIn: chain } : { notIn: chain },
           ...agentVisibilityScope(userId),
         },
         select: { id: true, description: true, metadata: true },

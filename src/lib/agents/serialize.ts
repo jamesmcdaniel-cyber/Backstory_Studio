@@ -30,6 +30,7 @@ export function serializeAgent(agent: {
     skills: metadata.skills || [],
     icon: metadata.icon || '',
     allowSubagents: (metadata as { allowSubagents?: boolean }).allowSubagents === true,
+    subagentIds: ((metadata as { subagentIds?: string[] }).subagentIds ?? []).filter((id) => typeof id === 'string'),
     folder: agent.folder || null,
     visibility: agent.visibility || 'shared',
     status: agent.status.toLowerCase(),
