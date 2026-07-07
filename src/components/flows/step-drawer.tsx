@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { X, Trash2, Plus, Copy, Link2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField } from '@/lib/flows/graph'
 import { DataTree } from '@/components/flows/data-tree'
+import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http'>
@@ -19,7 +20,7 @@ const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'stop', label: 'Stop' },
 ]
 
-export type ToolCatalog = { id: string; name: string; tools: { name: string; description: string }[] }[]
+export type ToolCatalog = { id: string; name: string; tools: { name: string; description: string; inputSchema?: unknown }[] }[]
 
 /** Frequencies the schedule editor offers (matches AgentSchedule types). */
 const FREQUENCIES = [
@@ -38,6 +39,8 @@ type TriggerData = {
 
 const fieldClass =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
+// Textareas: comfortable default height, user-resizable vertically.
+const areaClass = `${fieldClass} min-h-[120px] resize-y`
 const smallField =
   'rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
 const labelClass = 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground'
@@ -75,37 +78,65 @@ export function StepDrawer({
   onClose: () => void
 }) {
   const isTrigger = node.type === 'trigger'
-  // Which text field a datatree click inserts into (tracked on focus).
+  // Which text field a datatree click inserts into (tracked on focus), plus the
+  // live DOM element so we can insert at the caret rather than appending.
   const [activeField, setActiveField] = useState<string>('')
+  const activeElRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  const focusField = (key: string) => (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    activeElRef.current = e.currentTarget
+    setActiveField(key)
+  }
 
   const setLabel = (label: string) => onChange({ ...node, data: { ...node.data, label } } as FlowNode)
 
-  // Append a {{token}} to whatever field is focused (defaults to agent input).
-  const insertToken = (token: string) => {
-    if (node.type === 'agent') {
-      onChange({ ...node, data: { ...node.data, input: `${node.data.input ?? ''}${token}` } })
-      return
+  // Get/set for the currently-active text field, so tokens insert into the
+  // right place regardless of which field was focused.
+  const activeAccessor = (): { get: () => string; set: (value: string) => void } | null => {
+    if (node.type === 'agent') return { get: () => node.data.input ?? '', set: (v) => onChange({ ...node, data: { ...node.data, input: v } }) }
+    if (node.type === 'loop') return { get: () => node.data.over ?? '', set: (v) => onChange({ ...node, data: { ...node.data, over: v } }) }
+    if (node.type === 'tool') return { get: () => node.data.args ?? '', set: (v) => onChange({ ...node, data: { ...node.data, args: v } }) }
+    if (node.type === 'http') {
+      const field = activeField === 'http.url' ? 'url' : activeField === 'http.headers' ? 'headers' : 'body'
+      return {
+        get: () => (node.data as unknown as Record<string, string | undefined>)[field] ?? '',
+        set: (v) => onChange({ ...node, data: { ...node.data, [field]: v } }),
+      }
     }
     if (node.type === 'condition') {
       const m = activeField.match(/^cond\.(\d+)\.(left|right)$/)
-      const clauses = clausesOf(node.data)
       const i = m ? Number(m[1]) : 0
       const side = (m ? m[2] : 'left') as 'left' | 'right'
-      onChange({ ...node, data: { ...node.data, clauses: clauses.map((c, j) => (j === i ? { ...c, [side]: `${c[side] ?? ''}${token}` } : c)), left: undefined, op: undefined, right: undefined } })
-      return
+      const clauses = clausesOf(node.data)
+      return {
+        get: () => clauses[i]?.[side] ?? '',
+        set: (v) => onChange({ ...node, data: { ...node.data, clauses: clauses.map((c, j) => (j === i ? { ...c, [side]: v } : c)), left: undefined, op: undefined, right: undefined } }),
+      }
     }
-    if (node.type === 'loop') {
-      onChange({ ...node, data: { ...node.data, over: `${node.data.over ?? ''}${token}` } })
-      return
-    }
-    if (node.type === 'tool') {
-      onChange({ ...node, data: { ...node.data, args: `${node.data.args ?? ''}${token}` } })
-      return
-    }
-    if (node.type === 'http') {
-      const field = activeField === 'http.url' ? 'url' : activeField === 'http.headers' ? 'headers' : 'body'
-      const existing = (node.data as unknown as Record<string, string | undefined>)[field] ?? ''
-      onChange({ ...node, data: { ...node.data, [field]: `${existing}${token}` } })
+    return null
+  }
+
+  // Insert a {{token}} at the caret of the focused field (replacing any
+  // selection); append only if nothing is focused.
+  const insertToken = (token: string) => {
+    const acc = activeAccessor()
+    if (!acc) return
+    const el = activeElRef.current
+    const value = acc.get()
+    if (el && typeof el.selectionStart === 'number') {
+      const start = el.selectionStart
+      const end = el.selectionEnd ?? start
+      acc.set(value.slice(0, start) + token + value.slice(end))
+      const pos = start + token.length
+      requestAnimationFrame(() => {
+        try {
+          el.focus()
+          el.setSelectionRange(pos, pos)
+        } catch {
+          /* element unmounted */
+        }
+      })
+    } else {
+      acc.set(value ? `${value} ${token}` : token)
     }
   }
 
@@ -171,11 +202,11 @@ export function StepDrawer({
             <div>
               <label className={labelClass}>Input</label>
               <textarea
-                rows={4}
-                className={fieldClass}
+                rows={6}
+                className={areaClass}
                 value={node.data.input ?? ''}
                 placeholder="{{trigger.input}}"
-                onFocus={() => setActiveField('agent.input')}
+                onFocus={focusField('agent.input')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, input: e.target.value } })}
               />
               <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
@@ -248,7 +279,7 @@ export function StepDrawer({
                     className={`${smallField} w-full`}
                     value={clause.left}
                     placeholder="{{step.n1.output.score}}"
-                    onFocus={() => setActiveField(`cond.${i}.left`)}
+                    onFocus={focusField(`cond.${i}.left`)}
                     onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))}
                   />
                   <div className="flex gap-1.5">
@@ -263,7 +294,7 @@ export function StepDrawer({
                       className={`${smallField} flex-1`}
                       value={clause.right}
                       placeholder="80"
-                      onFocus={() => setActiveField(`cond.${i}.right`)}
+                      onFocus={focusField(`cond.${i}.right`)}
                       onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, right: e.target.value } : c)))}
                     />
                     {clauses.length > 1 && (
@@ -293,7 +324,7 @@ export function StepDrawer({
           <div className="space-y-3">
             <div>
               <label className={labelClass}>Over (a list)</label>
-              <input className={fieldClass} value={node.data.over} placeholder="{{step.n1.output}}" onFocus={() => setActiveField('loop.over')} onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })} />
+              <input className={fieldClass} value={node.data.over} placeholder="{{step.n1.output}}" onFocus={focusField('loop.over')} onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })} />
               <div className="mt-2">
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
@@ -366,19 +397,16 @@ export function StepDrawer({
                 ))}
               </select>
             </div>
-            <div>
-              <label className={labelClass}>Arguments (JSON)</label>
-              <textarea
-                rows={4}
-                className={`${fieldClass} font-mono text-xs`}
-                value={node.data.args ?? '{}'}
-                placeholder={'{"query": "{{trigger.input}}"}'}
-                onFocus={() => setActiveField('tool.args')}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, args: e.target.value } })}
+            {node.data.toolName ? (
+              <ToolArgsEditor
+                inputSchema={toolCatalog.find((c) => c.id === node.data.connectionId)?.tools.find((t) => t.name === node.data.toolName)?.inputSchema}
+                args={node.data.args}
+                onChange={(nextArgs) => onChange({ ...node, data: { ...node.data, args: nextArgs } })}
+                dataFields={dataFields}
               />
-              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
-              <DataTree fields={dataFields} onInsert={insertToken} />
-            </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Pick a tool to configure its inputs.</p>
+            )}
             <div>
               <label className={labelClass}>On error</label>
               <select
@@ -412,7 +440,7 @@ export function StepDrawer({
                 className={`${smallField} flex-1`}
                 value={node.data.url}
                 placeholder="https://example.com/webhook"
-                onFocus={() => setActiveField('http.url')}
+                onFocus={focusField('http.url')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, url: e.target.value } })}
               />
             </div>
@@ -420,10 +448,10 @@ export function StepDrawer({
               <label className={labelClass}>Headers (JSON, optional)</label>
               <textarea
                 rows={2}
-                className={`${fieldClass} font-mono text-xs`}
+                className={`${areaClass} font-mono text-xs`}
                 value={node.data.headers ?? ''}
                 placeholder={'{"authorization": "Bearer …"}'}
-                onFocus={() => setActiveField('http.headers')}
+                onFocus={focusField('http.headers')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, headers: e.target.value || undefined } })}
               />
             </div>
@@ -431,10 +459,10 @@ export function StepDrawer({
               <label className={labelClass}>Body</label>
               <textarea
                 rows={4}
-                className={`${fieldClass} font-mono text-xs`}
+                className={`${areaClass} font-mono text-xs`}
                 value={node.data.body ?? ''}
                 placeholder={'{"text": "{{step.n1.output}}"}'}
-                onFocus={() => setActiveField('http.body')}
+                onFocus={focusField('http.body')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, body: e.target.value || undefined } })}
               />
               <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>

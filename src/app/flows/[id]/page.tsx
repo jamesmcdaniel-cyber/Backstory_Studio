@@ -14,6 +14,7 @@ import { FlowCanvas } from '@/components/flows/flow-canvas'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
+import { ResizablePanel } from '@/components/flows/resizable-panel'
 import type { StepStatus } from '@/components/flows/step-card'
 
 type Agent = { id: string; title: string }
@@ -404,7 +405,7 @@ export default function FlowBuilder() {
         </div>
 
         {selectedNode && (
-          <div className="w-80 shrink-0">
+          <ResizablePanel storageKey="flow.drawerWidth">
             <StepDrawer
               node={selectedNode}
               flowId={id}
@@ -433,11 +434,11 @@ export default function FlowBuilder() {
               }}
               onClose={() => setSelectedId(null)}
             />
-          </div>
+          </ResizablePanel>
         )}
 
         {showCopilot && (
-          <div className="w-80 shrink-0">
+          <ResizablePanel storageKey="flow.copilotWidth">
             <CopilotPanel
               onGraph={(next) => {
                 commitGraph(next as FlowGraph)
@@ -445,11 +446,11 @@ export default function FlowBuilder() {
                 setShowCopilot(false)
               }}
             />
-          </div>
+          </ResizablePanel>
         )}
 
         {showRuns && (
-          <div className="w-80 shrink-0">
+          <ResizablePanel storageKey="flow.runsWidth">
             <RunPanel
               runs={runs}
               selected={selectedRun}
@@ -462,7 +463,7 @@ export default function FlowBuilder() {
                 return node.type.charAt(0).toUpperCase() + node.type.slice(1)
               }}
             />
-          </div>
+          </ResizablePanel>
         )}
       </div>
     </div>

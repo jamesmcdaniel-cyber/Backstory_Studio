@@ -22,7 +22,12 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
         return {
           id: conn.id,
           name: conn.name,
-          tools: tools.slice(0, 100).map((tool) => ({ name: tool.name, description: tool.description ?? '' })),
+          tools: tools.slice(0, 100).map((tool) => ({
+            name: tool.name,
+            description: tool.description ?? '',
+            // The tool's JSON-schema drives the per-argument form in the builder.
+            inputSchema: tool.inputSchema ?? null,
+          })),
         }
       } catch {
         return { id: conn.id, name: conn.name, tools: [] as { name: string; description: string }[] }

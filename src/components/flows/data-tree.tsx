@@ -20,6 +20,9 @@ function FieldRow({ field, depth, onInsert }: { field: DataField; depth: number;
         )}
         <button
           type="button"
+          // Keep focus (and the caret) on the input the user was editing so the
+          // token inserts at the cursor instead of stealing focus.
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => onInsert(field.token)}
           title={`Insert ${field.token}`}
           className="flex flex-1 items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-xs hover:bg-indigo-50 dark:hover:bg-indigo-500/10"
