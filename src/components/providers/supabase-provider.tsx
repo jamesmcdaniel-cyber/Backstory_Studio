@@ -6,6 +6,14 @@ import { createClient } from '@/lib/supabase/client'
 
 const supabase = createClient()
 
+/** The canonical app origin for auth redirects: the configured production URL
+ *  when set (so links never point at localhost/preview), else the live origin. */
+function appOrigin(): string {
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, '')
+  if (configured) return configured
+  return typeof window !== 'undefined' ? window.location.origin : ''
+}
+
 type SupabaseContext = {
   user: User | null
   loading: boolean
@@ -44,7 +52,9 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
       password,
       options: {
         data: options?.data,
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        // Prefer the configured production URL so confirmation links never point
+        // at localhost or a preview origin; fall back to the current origin.
+        emailRedirectTo: `${appOrigin()}/auth/callback`,
       },
     }),
     signOut: async () => {
