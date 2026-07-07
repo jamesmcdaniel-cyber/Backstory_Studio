@@ -29,7 +29,13 @@ function client() {
 }
 
 function connectionStatus(server: KlavisServer): Exclude<ConnectionStatus, 'not_connected'> {
-  return server.isAuthenticated ? 'active' : 'pending_auth'
+  // Active when authenticated, OR when the server needs no per-user auth at all.
+  // Some providers (e.g. Snowflake credentials, Strata-routed Intercom) return
+  // no oauthUrl and authNeeded=false because they authenticate at the Klavis
+  // ACCOUNT level, not per user — so they're usable as soon as the account
+  // authorizes them. (If the account hasn't, the tools/list probe upstream in
+  // getConnectionStatuses fails and the status resolves to 'error' instead.)
+  return server.isAuthenticated || !server.authNeeded ? 'active' : 'pending_auth'
 }
 
 export type McpToolInfo = { name: string; description?: string }
