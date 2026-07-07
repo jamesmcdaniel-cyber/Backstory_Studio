@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
 import { apiLogger } from '@/lib/logger'
+import { openAICompatClient, openAICompatConfigured, openAICompatModel } from './openai-compat'
 import {
   type IRMessage,
   type ProviderKind,
@@ -47,7 +47,7 @@ export interface ModelRunner {
   next(transcript: unknown[], system: string, tools: ToolDefinition[]): Promise<ModelTurn>
 }
 
-const ADAPTIVE_THINKING_MODELS = /^claude-(opus-4-[678]|sonnet-4-6|fable-5|mythos-5)/
+const ADAPTIVE_THINKING_MODELS = /^claude-(opus-4-[678]|sonnet-(4-6|5)|fable-5|mythos-5)/
 
 // Bound a single model call below the BullMQ job lock (300s, see
 // queue/config.ts) so a hung/slow call can't outlive the lock and make a run
@@ -153,18 +153,17 @@ class AnthropicProvider implements Provider {
   }
 }
 
+// OpenAI-compatible provider — the OpenAI chat-completions wire format, now
+// served by Qwen (see openai-compat.ts). ChatGPT/OpenAI is no longer offered.
 class OpenAIProvider implements Provider {
   readonly kind = 'openai' as const
-  private readonly client: OpenAI
+  private readonly client = openAICompatClient()
 
-  constructor(readonly model: string) {
-    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured')
-    this.client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
-  }
+  constructor(readonly model: string) {}
 
   async next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
     const response = await this.client.chat.completions.create({
-      model: this.model,
+      model: openAICompatModel(this.model),
       messages: toOpenAIMessages(ir, system),
       ...(tools.length
         ? {
@@ -213,7 +212,7 @@ class AgentRunner implements ModelRunner {
   readonly model: string
 
   constructor(private readonly chain: Provider[]) {
-    if (chain.length === 0) throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
+    if (chain.length === 0) throw new Error('No model provider configured — set ANTHROPIC_API_KEY (or QWEN_API_KEY + QWEN_BASE_URL).')
     this.model = chain[0].model
   }
 
@@ -255,16 +254,18 @@ class AgentRunner implements ModelRunner {
 }
 
 // ---------------------------------------------------------------------------
-// Default models. OpenAI is the default provider — override either via env.
-// AGENT_MODEL drives agent runs; SUMMARY_MODEL drives cheap surfaces (headlines,
-// run Q&A). Set a claude-* value (plus ANTHROPIC_API_KEY) to use Anthropic.
+// Default models. Claude is the default provider. AGENT_MODEL drives agent
+// runs; SUMMARY_MODEL drives cheap surfaces (headlines, run Q&A). The
+// non-Claude slot is Qwen (OpenAI-compatible) — set QWEN_API_KEY/QWEN_BASE_URL/
+// QWEN_MODEL to enable it; ChatGPT/OpenAI is no longer offered.
 // ---------------------------------------------------------------------------
-export const DEFAULT_AGENT_MODEL = process.env.AGENT_MODEL?.trim() || 'gpt-4o'
-export const DEFAULT_SUMMARY_MODEL = process.env.SUMMARY_MODEL?.trim() || 'gpt-4o-mini'
+export const DEFAULT_AGENT_MODEL = process.env.AGENT_MODEL?.trim() || 'claude-sonnet-5'
+export const DEFAULT_SUMMARY_MODEL = process.env.SUMMARY_MODEL?.trim() || 'claude-haiku-4-5'
 const FALLBACK_CLAUDE_MODEL = 'claude-opus-4-8'
-const FALLBACK_OPENAI_MODEL = 'gpt-4o'
+// UI id for the Qwen slot; the exact model string is resolved from QWEN_MODEL.
+const FALLBACK_QWEN_MODEL = 'qwen-3.7'
 
-const hasOpenAI = () => !!process.env.OPENAI_API_KEY
+const hasQwen = () => openAICompatConfigured()
 const hasAnthropic = () => !!process.env.ANTHROPIC_API_KEY
 const isClaude = (model: string) => model.startsWith('claude')
 
@@ -275,17 +276,18 @@ type RouteStep = { provider: ProviderKind; model: string }
  * Explicit model routing. Returns the ORDERED provider chain for a run: the
  * requested model's provider first (its own model), then the OTHER provider as a
  * fallback (with a sensible default model for it). Only providers whose key is
- * configured appear — so an agent saved with a claude-* model still runs when
- * only OPENAI_API_KEY is set, and every run gains a cross-provider fallback when
- * both keys are present. This is the single source of truth for run routing.
+ * configured appear — so an agent saved with a Qwen model still runs on Claude
+ * when Qwen isn't configured, and every run gains a cross-provider fallback when
+ * both are present. This is the single source of truth for run routing.
+ * Provider kind 'openai' is the OpenAI-compatible (Qwen) wire format.
  */
 export function routeModel(requested?: string): RouteStep[] {
   const model = requested?.trim() || DEFAULT_AGENT_MODEL
   const wantsClaude = isClaude(model)
   const anthropicStep: RouteStep = { provider: 'anthropic', model: wantsClaude ? model : FALLBACK_CLAUDE_MODEL }
-  const openaiStep: RouteStep = { provider: 'openai', model: wantsClaude ? FALLBACK_OPENAI_MODEL : model }
-  const ordered = wantsClaude ? [anthropicStep, openaiStep] : [openaiStep, anthropicStep]
-  return ordered.filter((step) => (step.provider === 'openai' ? hasOpenAI() : hasAnthropic()))
+  const qwenStep: RouteStep = { provider: 'openai', model: wantsClaude ? FALLBACK_QWEN_MODEL : model }
+  const ordered = wantsClaude ? [anthropicStep, qwenStep] : [qwenStep, anthropicStep]
+  return ordered.filter((step) => (step.provider === 'openai' ? hasQwen() : hasAnthropic()))
 }
 
 function buildProvider(step: RouteStep): Provider {
@@ -300,7 +302,7 @@ function buildProvider(step: RouteStep): Provider {
 export function createModelRunner(requested?: string): ModelRunner {
   const chain = routeModel(requested).map(buildProvider)
   if (chain.length === 0) {
-    throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
+    throw new Error('No model provider configured — set ANTHROPIC_API_KEY (or QWEN_API_KEY + QWEN_BASE_URL).')
   }
   return new AgentRunner(chain)
 }
@@ -310,9 +312,9 @@ export function createModelRunner(requested?: string): ModelRunner {
 function summaryTarget(): { provider: 'openai' | 'anthropic'; model: string } | null {
   const wantsClaude = isClaude(DEFAULT_SUMMARY_MODEL)
   if (wantsClaude && hasAnthropic()) return { provider: 'anthropic', model: DEFAULT_SUMMARY_MODEL }
-  if (!wantsClaude && hasOpenAI()) return { provider: 'openai', model: DEFAULT_SUMMARY_MODEL }
-  if (hasOpenAI()) return { provider: 'openai', model: 'gpt-4o-mini' }
+  if (!wantsClaude && hasQwen()) return { provider: 'openai', model: DEFAULT_SUMMARY_MODEL }
   if (hasAnthropic()) return { provider: 'anthropic', model: 'claude-haiku-4-5' }
+  if (hasQwen()) return { provider: 'openai', model: FALLBACK_QWEN_MODEL }
   return null
 }
 
@@ -339,9 +341,9 @@ export async function generateHeadline(summary: string): Promise<string | null> 
         .join(' ')
         .trim()
     } else {
-      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
+      const client = openAICompatClient()
       const response = await client.chat.completions.create({
-        model: target.model,
+        model: openAICompatModel(target.model),
         max_tokens: 64,
         messages: [
           { role: 'system', content: system },
@@ -413,9 +415,9 @@ async function anthropicStructured(opts: StructuredOpts): Promise<string> {
 }
 
 async function openaiStructured(opts: StructuredOpts): Promise<string> {
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
+  const client = openAICompatClient()
   const response = await client.chat.completions.create({
-    model: isClaude(DEFAULT_AGENT_MODEL) ? 'gpt-4o' : DEFAULT_AGENT_MODEL,
+    model: openAICompatModel(isClaude(DEFAULT_AGENT_MODEL) ? FALLBACK_QWEN_MODEL : DEFAULT_AGENT_MODEL),
     max_tokens: opts.maxTokens ?? 4096,
     messages: [
       { role: 'system', content: opts.system },
@@ -432,11 +434,11 @@ async function openaiStructured(opts: StructuredOpts): Promise<string> {
 export async function generateStructured(opts: StructuredOpts): Promise<string> {
   const order = structuredProviderOrder({
     defaultModel: DEFAULT_AGENT_MODEL,
-    openai: hasOpenAI(),
+    openai: hasQwen(),
     anthropic: hasAnthropic(),
   })
   if (order.length === 0) {
-    throw new Error('No model provider configured — set OPENAI_API_KEY (or ANTHROPIC_API_KEY).')
+    throw new Error('No model provider configured — set ANTHROPIC_API_KEY (or QWEN_API_KEY + QWEN_BASE_URL).')
   }
 
   let lastError: unknown

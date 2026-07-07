@@ -17,8 +17,9 @@ const REQUIRED_IN_PRODUCTION = [
   'ENCRYPTION_KEY',
 ] as const
 
-/** At least one model provider key must be present for agent runs. */
-const MODEL_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'] as const
+/** At least one model provider key must be present for agent runs. Claude
+ *  (Anthropic) is the default; Qwen is the OpenAI-compatible alternative. */
+const MODEL_KEYS = ['ANTHROPIC_API_KEY', 'QWEN_API_KEY'] as const
 
 export function assertServerEnv(): void {
   if (process.env.NODE_ENV !== 'production') return

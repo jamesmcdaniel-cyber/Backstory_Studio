@@ -4,7 +4,7 @@ import { isProviderAvailabilityError, structuredProviderOrder } from '../model-r
 
 test('gpt default prefers openai, falls back to anthropic', () => {
   assert.deepEqual(
-    structuredProviderOrder({ defaultModel: 'gpt-4o', openai: true, anthropic: true }),
+    structuredProviderOrder({ defaultModel: 'qwen-3.7', openai: true, anthropic: true }),
     ['openai', 'anthropic'],
   )
 })
@@ -18,10 +18,10 @@ test('claude default prefers anthropic', () => {
 
 test('only configured providers appear', () => {
   assert.deepEqual(
-    structuredProviderOrder({ defaultModel: 'gpt-4o', openai: false, anthropic: true }),
+    structuredProviderOrder({ defaultModel: 'qwen-3.7', openai: false, anthropic: true }),
     ['anthropic'],
   )
-  assert.deepEqual(structuredProviderOrder({ defaultModel: 'gpt-4o', openai: false, anthropic: false }), [])
+  assert.deepEqual(structuredProviderOrder({ defaultModel: 'qwen-3.7', openai: false, anthropic: false }), [])
 })
 
 test('quota/auth/overload errors are availability failures; schema errors are not', () => {

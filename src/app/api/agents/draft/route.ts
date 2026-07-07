@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
 import { DEFAULT_AGENT_MODEL, generateStructured } from '@/lib/llm/model-runner'
+import { openAICompatConfigured } from '@/lib/llm/openai-compat'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 
@@ -49,7 +50,7 @@ type Draft = {
 // Den-style natural-language agent builder: describe the job, get a ready
 // agent config. Pass { create: true } to save it immediately.
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+  if (!process.env.ANTHROPIC_API_KEY && !openAICompatConfigured()) {
     throw new ApiError('No model provider is configured', 503, 'AI_UNAVAILABLE')
   }
   const { description, create } = z.object({

@@ -96,7 +96,7 @@ const emptyDraft: AgentDraft = {
   title: '',
   description: '',
   instructions: '',
-  model: 'gpt-4o',
+  model: 'claude-sonnet-5',
   priority: 'medium',
   integrations: [],
   skills: [],
@@ -108,20 +108,19 @@ const emptyDraft: AgentDraft = {
 
 // ── Model catalog ───────────────────────────────────────────────────────────
 // id must satisfy the runtime's provider routing (model-runner.ts): a `claude*`
-// id routes to Anthropic, anything else to OpenAI. Claude first (platform
-// default / most capable); logos rendered via IntegrationLogo (Simple Icons).
+// id routes to Anthropic, anything else to the OpenAI-compatible slot (Qwen).
+// Claude first (platform default / most capable); logos via IntegrationLogo.
 const MODELS = [
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', provider: 'anthropic' as const },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6', provider: 'anthropic' as const },
+  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', provider: 'anthropic' as const },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'anthropic' as const },
-  { id: 'gpt-4o', label: 'GPT-4o', provider: 'openai' as const },
-  { id: 'gpt-4o-mini', label: 'GPT-4o mini', provider: 'openai' as const },
+  { id: 'qwen-3.7', label: 'Qwen 3.7', provider: 'qwen' as const },
 ]
 
-function ModelOption({ provider, label }: { provider: 'anthropic' | 'openai'; label: string }) {
+function ModelOption({ provider, label }: { provider: 'anthropic' | 'qwen'; label: string }) {
   return (
     <span className="flex items-center gap-2">
-      <IntegrationLogo slug={provider} name={provider === 'anthropic' ? 'Claude' : 'OpenAI'} className="h-4 w-4" />
+      <IntegrationLogo slug={provider} name={provider === 'anthropic' ? 'Claude' : 'Qwen'} className="h-4 w-4" />
       {label}
     </span>
   )

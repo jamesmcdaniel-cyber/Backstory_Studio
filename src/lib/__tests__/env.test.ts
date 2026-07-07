@@ -20,7 +20,7 @@ const FULL_PROD_ENV = {
   NEXT_PUBLIC_SUPABASE_URL: 'https://x.supabase.co',
   NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon',
   ENCRYPTION_KEY: 'k',
-  OPENAI_API_KEY: 'sk-x',
+  ANTHROPIC_API_KEY: 'sk-ant-x',
 }
 
 beforeEach(() => {
@@ -45,23 +45,23 @@ test('production with missing vars: throws listing every missing name', async ()
   )
 })
 
-test('production with only ANTHROPIC_API_KEY as model key: passes', async () => {
+test('production with only QWEN_API_KEY as model key: passes', async () => {
   Object.assign(process.env, FULL_PROD_ENV)
-  delete process.env.OPENAI_API_KEY
-  process.env.ANTHROPIC_API_KEY = 'sk-ant-x'
+  delete process.env.ANTHROPIC_API_KEY
+  process.env.QWEN_API_KEY = 'sk-qwen-x'
   const { assertServerEnv } = await freshEnv()
   assert.doesNotThrow(() => assertServerEnv())
 })
 
 test('production with no model key: throws mentioning both options', async () => {
   Object.assign(process.env, FULL_PROD_ENV)
-  delete process.env.OPENAI_API_KEY
   delete process.env.ANTHROPIC_API_KEY
+  delete process.env.QWEN_API_KEY
   const { assertServerEnv } = await freshEnv()
   assert.throws(
     () => assertServerEnv(),
     (error: Error) =>
-      error.message.includes('OPENAI_API_KEY') && error.message.includes('ANTHROPIC_API_KEY'),
+      error.message.includes('ANTHROPIC_API_KEY') && error.message.includes('QWEN_API_KEY'),
   )
 })
 

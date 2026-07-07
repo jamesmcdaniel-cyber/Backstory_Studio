@@ -125,25 +125,31 @@ test('coerceToIR is idempotent on already-IR input', () => {
 // ── Explicit routing ─────────────────────────────────────────────────────────
 test('routeModel orders the requested provider first, then the fallback', () => {
   const prevA = process.env.ANTHROPIC_API_KEY
-  const prevO = process.env.OPENAI_API_KEY
+  const prevK = process.env.QWEN_API_KEY
+  const prevU = process.env.QWEN_BASE_URL
   try {
     process.env.ANTHROPIC_API_KEY = 'x'
-    process.env.OPENAI_API_KEY = 'y'
+    // Qwen (the OpenAI-compatible slot) needs both a key and a base URL.
+    process.env.QWEN_API_KEY = 'y'
+    process.env.QWEN_BASE_URL = 'https://qwen.example/v1'
     assert.deepEqual(routeModel('claude-opus-4-8'), [
       { provider: 'anthropic', model: 'claude-opus-4-8' },
-      { provider: 'openai', model: 'gpt-4o' },
+      { provider: 'openai', model: 'qwen-3.7' },
     ])
-    assert.deepEqual(routeModel('gpt-4o'), [
-      { provider: 'openai', model: 'gpt-4o' },
+    assert.deepEqual(routeModel('qwen-3.7'), [
+      { provider: 'openai', model: 'qwen-3.7' },
       { provider: 'anthropic', model: 'claude-opus-4-8' },
     ])
-    // Only the configured provider survives when one key is missing.
-    delete process.env.OPENAI_API_KEY
-    assert.deepEqual(routeModel('gpt-4o'), [{ provider: 'anthropic', model: 'claude-opus-4-8' }])
+    // Only the configured provider survives when Qwen is not configured.
+    delete process.env.QWEN_API_KEY
+    delete process.env.QWEN_BASE_URL
+    assert.deepEqual(routeModel('qwen-3.7'), [{ provider: 'anthropic', model: 'claude-opus-4-8' }])
   } finally {
     if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = prevA
-    if (prevO === undefined) delete process.env.OPENAI_API_KEY
-    else process.env.OPENAI_API_KEY = prevO
+    if (prevK === undefined) delete process.env.QWEN_API_KEY
+    else process.env.QWEN_API_KEY = prevK
+    if (prevU === undefined) delete process.env.QWEN_BASE_URL
+    else process.env.QWEN_BASE_URL = prevU
   }
 })

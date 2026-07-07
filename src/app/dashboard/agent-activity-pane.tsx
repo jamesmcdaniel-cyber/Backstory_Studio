@@ -13,6 +13,7 @@ import {
   Send,
   Sparkles,
   Wrench,
+  XCircle,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -58,6 +59,24 @@ export const groupLabels: Record<string, string> = {
 
 function activityStatus(activity: Activity) {
   return activity.status.toLowerCase()
+}
+
+/** Per-run outcome icon: green check for success, red X for a failed run, and
+ *  distinct marks for in-progress / needs-input, so every row reads at a glance. */
+function runStatusIcon(status: string) {
+  switch (status) {
+    case 'completed':
+      return <CheckCircle2 className="h-4 w-4 shrink-0 text-green-600" aria-label="Success" />
+    case 'failed':
+      return <XCircle className="h-4 w-4 shrink-0 text-red-600" aria-label="Failed" />
+    case 'running':
+    case 'pending':
+      return <CircleDashed className="h-4 w-4 shrink-0 animate-spin text-blue-600" aria-label="Running" />
+    case 'waiting_for_input':
+      return <HelpCircle className="h-4 w-4 shrink-0 text-amber-500" aria-label="Needs input" />
+    default:
+      return <AlertCircle className="h-4 w-4 shrink-0 text-gray-400" aria-label={status} />
+  }
 }
 
 export function resultText(activity?: Activity | null) {
@@ -353,11 +372,12 @@ function RunRow({
         aria-expanded={expanded}
         onClick={onToggle}
         className={cn(
-          'grid w-full grid-cols-[auto_1fr_auto] items-center gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-gray-50',
+          'grid w-full grid-cols-[auto_auto_1fr_auto] items-center gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-gray-50',
           expanded && 'bg-gray-50',
         )}
       >
         <ChevronDown className={cn('h-4 w-4 shrink-0 text-gray-400 transition-transform duration-200', expanded && 'rotate-180')} />
+        {runStatusIcon(status)}
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{activity.metadata?.title || activity.agentType}</div>
           <div className="line-clamp-1 text-xs text-gray-500">

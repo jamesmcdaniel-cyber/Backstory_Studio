@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
-import OpenAI from 'openai'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
+import { openAICompatClient, openAICompatConfigured, openAICompatModel } from '@/lib/llm/openai-compat'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { executionVisibilityScope } from '@/lib/server/visibility'
 
@@ -10,7 +10,7 @@ const SYSTEM_PROMPT =
   'Answer questions about an AI agent run. Be precise about its output, tool calls, and errors. Do not claim actions not present in the run data.'
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
+  if (!process.env.ANTHROPIC_API_KEY && !openAICompatConfigured()) {
     throw new ApiError('No model provider is configured', 503, 'AI_UNAVAILABLE')
   }
   const { executionId, question } = z.object({
@@ -28,11 +28,12 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const run = { ...execution, transcript: undefined }
   const prompt = JSON.stringify({ question, execution: run })
 
-  // Prefer OpenAI when configured; fall back to Anthropic.
-  if (process.env.OPENAI_API_KEY && !DEFAULT_SUMMARY_MODEL.startsWith('claude')) {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  // Prefer Qwen (OpenAI-compatible) when the summary model is non-Claude and
+  // configured; otherwise fall back to Anthropic.
+  if (openAICompatConfigured() && !DEFAULT_SUMMARY_MODEL.startsWith('claude')) {
+    const client = openAICompatClient()
     const response = await client.chat.completions.create({
-      model: DEFAULT_SUMMARY_MODEL,
+      model: openAICompatModel(DEFAULT_SUMMARY_MODEL),
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
@@ -57,10 +58,10 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     return { success: true, answer: answer || 'No answer returned.' }
   }
 
-  // Last resort: OpenAI even if SUMMARY_MODEL was a claude id (no Anthropic key).
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  // Last resort: Qwen even if SUMMARY_MODEL was a claude id (no Anthropic key).
+  const client = openAICompatClient()
   const response = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: openAICompatModel('qwen-3.7'),
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: prompt },
