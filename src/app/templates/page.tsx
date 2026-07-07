@@ -13,10 +13,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
+import { Pagination, paginate } from '@/components/ui/pagination'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
+
+/** Cards per page on the Templates and Skills grids. */
+const PAGE_SIZE = 9
 
 interface TemplateItem {
   id: string
@@ -126,6 +130,9 @@ function ExplorePage() {
   const [agents, setAgents] = useState<AgentItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Card grids cap at 9 per page; each tab pages independently.
+  const [templatesPage, setTemplatesPage] = useState(1)
+  const [skillsPage, setSkillsPage] = useState(1)
   // Track which skill's dropdown is open
   const [openSkillMenu, setOpenSkillMenu] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -242,7 +249,7 @@ function ExplorePage() {
               />
             ) : (
               <div className="stagger-children grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {templates.map((t) => {
+                {paginate(templates, templatesPage, PAGE_SIZE).pageItems.map((t) => {
                   const accent = accentFor(t.category)
                   const Icon = categoryIcon(t.category)
                   return (
@@ -291,6 +298,11 @@ function ExplorePage() {
                 })}
               </div>
             )}
+            <Pagination
+              page={paginate(templates, templatesPage, PAGE_SIZE).page}
+              pageCount={paginate(templates, templatesPage, PAGE_SIZE).pageCount}
+              onPageChange={setTemplatesPage}
+            />
           </TabsContent>
 
           {/* ── Skills tab ────────────────────────────────────────────────── */}
@@ -308,7 +320,7 @@ function ExplorePage() {
               />
             ) : (
               <div className="stagger-children grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {skills.map((skill) => {
+                {paginate(skills, skillsPage, PAGE_SIZE).pageItems.map((skill) => {
                   const accent = accentFor(skill.category)
                   const Icon = categoryIcon(skill.category)
                   return (
@@ -390,6 +402,11 @@ function ExplorePage() {
                 })}
               </div>
             )}
+            <Pagination
+              page={paginate(skills, skillsPage, PAGE_SIZE).page}
+              pageCount={paginate(skills, skillsPage, PAGE_SIZE).pageCount}
+              onPageChange={setSkillsPage}
+            />
           </TabsContent>
         </Tabs>
       </div>

@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { AlertCircle, ChevronDown, Loader2, Wrench } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, Loader2, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Pagination, paginate } from '@/components/ui/pagination'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { useCachedJson } from '@/lib/client/use-cached-json'
 
@@ -19,11 +21,92 @@ type Connection = {
   tools?: Tool[]
 }
 
+type StrataServer = { name: string; label: string; description?: string; toolCount?: number }
+type StrataCatalog = { strata: boolean; connectionName?: string; servers?: StrataServer[]; error?: string }
+
+const STRATA_PAGE_SIZE = 15
+
 function toolLabel(name: string) {
   return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+/** "google calendar" → "googlecalendar", "cal.com" → "calcom" — the logo slug. */
+function strataSlug(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+/**
+ * Strata catalogue: every tool behind the org's Klavis Strata connection.
+ * They're team-authorized at the Klavis account level and load for every
+ * agent via Strata's discovery meta-tools, so each one reports connected.
+ */
+function StrataCatalogue({ servers, connectionName }: { servers: StrataServer[]; connectionName?: string }) {
+  const [page, setPage] = useState(1)
+  const [query, setQuery] = useState('')
+
+  const filtered = query.trim()
+    ? servers.filter((s) => `${s.label} ${s.description ?? ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+    : servers
+  const { pageItems, pageCount, page: current } = paginate(filtered, page, STRATA_PAGE_SIZE)
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          {servers.length} tools available to every agent via{' '}
+          <span className="font-medium text-foreground">{connectionName || 'Klavis Strata'}</span>.
+        </p>
+        <Input
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setPage(1)
+          }}
+          placeholder="Search tools"
+          className="h-9 w-56"
+        />
+      </div>
+
+      {filtered.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">No tools match “{query.trim()}”.</p>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {pageItems.map((server) => (
+            <Card key={server.name}>
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center justify-between gap-2 text-base">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <IntegrationLogo slug={strataSlug(server.name)} name={server.label} />
+                    <span className="truncate">{server.label}</span>
+                  </span>
+                  <Badge variant="good" className="shrink-0"><CheckCircle2 className="mr-1 h-3 w-3" />Connected</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <p className="line-clamp-2 min-h-10 text-gray-500">
+                  {server.description || `Use ${server.label} from your agents.`}
+                </p>
+                {typeof server.toolCount === 'number' && server.toolCount > 0 && (
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Wrench className="h-3.5 w-3.5" /> {server.toolCount} {server.toolCount === 1 ? 'action' : 'actions'}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Pagination page={current} pageCount={pageCount} onPageChange={setPage} />
+    </div>
+  )
+}
+
 export function MCPIntegrationCards() {
+  // The Strata catalogue is the primary source (one team-authorized endpoint,
+  // every tool). The legacy per-provider cards render only when the org has no
+  // Strata connection, so a fresh workspace still has a working connect path.
+  const { data: strataData, loading: strataLoading } = useCachedJson<StrataCatalog>('/api/mcp/strata-catalog')
   // Cached (stale-while-revalidate): a revisit paints instantly from the client
   // cache, then revalidates — no flash. The server also caches the Klavis status
   // per org, so the revalidation itself is fast.
@@ -49,21 +132,23 @@ export function MCPIntegrationCards() {
         const popup = window.open(res.oauthUrl, '_blank', 'width=600,height=700')
         if (!popup) setActionError('Your browser blocked the sign-in popup — allow popups for this site and click Connect again.')
       } else if (res?.status !== 'active') {
-        // No popup URL and not yet authenticated: a provider that authenticates
-        // in the Klavis dashboard rather than a per-user popup (e.g. Snowflake
-        // uses account credentials; Strata-routed servers like Intercom). Once
-        // it's authorized in Klavis, a refresh here flips it to Connected.
         const name = provider.charAt(0).toUpperCase() + provider.slice(1)
         setActionError(`${name} authenticates in your Klavis dashboard, not via a popup. Once it shows Authorized there, it appears connected here.`)
       }
-      // status === 'active' (already authorized in Klavis) falls through — the
-      // refresh below simply shows it as Connected, with no misleading message.
       await refresh() // server cache is busted on connect; pull the fresh status
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : 'Connection failed')
     } finally {
       setConnecting(null)
     }
+  }
+
+  // Strata present: the catalogue replaces the per-provider cards entirely.
+  if (strataData?.strata && (strataData.servers?.length ?? 0) > 0) {
+    return <StrataCatalogue servers={strataData.servers!} connectionName={strataData.connectionName} />
+  }
+  if (strataLoading && !connections.length) {
+    return <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 className="h-4 w-4 animate-spin" /> Loading tools...</div>
   }
 
   const error = actionError || (loadError ? (loadError instanceof Error ? loadError.message : 'Failed to load Klavis connections') : '')

@@ -127,26 +127,11 @@ const RAW = {
       { name: 'update_deal', description: 'Update a deal’s stage or properties' },
     ],
   },
-  intercom: {
-    klavisName: 'Intercom',
-    description: 'Manage Intercom conversations and contacts',
-    tools: [
-      { name: 'list_conversations', description: 'List and search support conversations' },
-      { name: 'read_conversation', description: 'Read the full thread of a conversation' },
-      { name: 'reply_conversation', description: 'Reply to or add a note on a conversation' },
-      { name: 'list_contacts', description: 'List and search contacts (users and leads)' },
-    ],
-  },
-  snowflake: {
-    klavisName: 'Snowflake',
-    description: 'Query the Snowflake data warehouse',
-    tools: [
-      { name: 'run_query', description: 'Run a read-only SQL query and return rows' },
-      { name: 'list_databases', description: 'List databases and schemas' },
-      { name: 'list_tables', description: 'List tables in a schema' },
-      { name: 'describe_table', description: 'Show a table’s columns and types' },
-    ],
-  },
+  // NOTE: Intercom and Snowflake are deliberately NOT in this per-provider
+  // catalog. Klavis exposes no per-user auth flow for them (oauthUrl: null —
+  // Snowflake uses account credentials, Intercom routes through Strata), so a
+  // per-provider instance can never finish connecting here. They're served via
+  // the org's Klavis Strata connection instead (see /api/mcp/strata-catalog).
 } satisfies Record<string, RawCapability>
 
 // Derive the display+config shape: keep `tools` (name + description) and add
