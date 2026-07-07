@@ -8,7 +8,6 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Input } from '@/components/ui/input'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { useCachedJson } from '@/lib/client/use-cached-json'
 
@@ -38,7 +37,6 @@ export function OAuthIntegrationsGrid() {
   const integrations = useMemo(() => integrationsData?.integrations ?? [], [integrationsData])
   const connections = statusData?.connections ?? {}
   const loading = loadingIntegrations || loadingStatus
-  const [search, setSearch] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const connectUIRef = useRef<ConnectUI | null>(null)
 
@@ -54,12 +52,7 @@ export function OAuthIntegrationsGrid() {
     }
   }, [])
 
-  const visibleIntegrations = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return query
-      ? integrations.filter((integration) => `${integration.name} ${integration.provider}`.toLowerCase().includes(query))
-      : integrations
-  }, [integrations, search])
+  const visibleIntegrations = integrations
 
   const connect = async (integration: Integration) => {
     setBusy(integration.id)
@@ -118,8 +111,7 @@ export function OAuthIntegrationsGrid() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search integrations" />
+      <div className="flex justify-end">
         <Button variant="outline" size="icon" onClick={refreshAll} disabled={loading}>
           <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
         </Button>
