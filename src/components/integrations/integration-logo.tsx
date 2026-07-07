@@ -53,6 +53,8 @@ function simpleIconUrl(slug: string): string {
 const LOCAL_LOGOS: Record<string, string> = {
   slack: '/logos/slack.png',
   granola: '/logos/granola.jpg',
+  // Salesforce was removed from the Simple Icons CDN (trademark), so bundle it.
+  salesforce: '/logos/salesforce.svg',
   backstory: '/backstory-mark-blue.svg',
   googledrive: '/logos/googledrive.svg',
   googlesheets: '/logos/googlesheets.webp',
