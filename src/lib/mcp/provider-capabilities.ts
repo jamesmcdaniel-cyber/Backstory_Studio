@@ -127,6 +127,26 @@ const RAW = {
       { name: 'update_deal', description: 'Update a deal’s stage or properties' },
     ],
   },
+  salesforce: {
+    klavisName: 'Salesforce',
+    description: 'Query and update Salesforce CRM accounts and opportunities',
+    tools: [
+      { name: 'query', description: 'Run a SOQL query over CRM records' },
+      { name: 'get_record', description: 'Read a record by object type and id' },
+      { name: 'create_record', description: 'Create a record (account, contact, opportunity…)' },
+      { name: 'update_record', description: 'Update fields on an existing record' },
+    ],
+  },
+  confluence: {
+    klavisName: 'Confluence',
+    description: 'Read and write Confluence pages and spaces',
+    tools: [
+      { name: 'search', description: 'Search pages and spaces by keyword or CQL' },
+      { name: 'read_page', description: 'Read the content of a page' },
+      { name: 'create_page', description: 'Create a page in a space' },
+      { name: 'update_page', description: 'Update or append to a page’s content' },
+    ],
+  },
   // NOTE: Intercom and Snowflake are deliberately NOT in this per-provider
   // catalog. Klavis exposes no per-user auth flow for them (oauthUrl: null —
   // Snowflake uses account credentials, Intercom routes through Strata), so a
