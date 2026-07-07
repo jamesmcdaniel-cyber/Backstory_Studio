@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope, executionVisibilityScope } from '@/lib/server/visibility'
 import { serializeAgent } from '@/lib/agents/serialize'
+import { isUsageExemptEmail } from '@/lib/usage/budget'
 
 export const runtime = 'nodejs'
 
@@ -64,6 +65,8 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
       executions: usageAggregate._count,
       inputTokens: usageAggregate._sum.inputTokens || 0,
       outputTokens: usageAggregate._sum.outputTokens || 0,
+      // Exempt admins have no ceiling — the sidebar shows "Unlimited".
+      exempt: isUsageExemptEmail(auth.dbUser.email),
     },
     activeOrganizationId: auth.organizationId,
     organizations: organization ? [organization] : [],

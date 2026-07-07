@@ -68,7 +68,7 @@ function resizeImageToDataUrl(file: File, size = 128): Promise<string> {
     image.src = url
   })
 }
-type Usage = { executions: number; inputTokens: number; outputTokens: number }
+type Usage = { executions: number; inputTokens: number; outputTokens: number; exempt?: boolean }
 
 // Module-level snapshot of the sidebar's fetched data, persisted across the
 // component's remounts. Each top-level page renders its own <DashboardLayout>,
@@ -501,11 +501,13 @@ export function Sidebar() {
             <div className="mb-2 px-1">
               <div className="mb-1 flex justify-between text-xs text-gray-500">
                 <span>Usage this month</span>
-                <span>{creditPct}% of credits</span>
+                <span>{usage.exempt ? 'Unlimited' : `${creditPct}% of credits`}</span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-gray-200">
-                <div className="h-full rounded-full bg-indigo-500 transition-[width] duration-slow ease-out-quart" style={{ width: `${creditPct}%` }} />
-              </div>
+              {!usage.exempt && (
+                <div className="h-1.5 overflow-hidden rounded-full bg-gray-200">
+                  <div className="h-full rounded-full bg-indigo-500 transition-[width] duration-slow ease-out-quart" style={{ width: `${creditPct}%` }} />
+                </div>
+              )}
             </div>
           )}
           <div className="flex items-center gap-2 px-1">

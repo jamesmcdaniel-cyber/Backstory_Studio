@@ -715,7 +715,8 @@ export async function runAgentExecution(data: AgentExecutionJob) {
 
   try {
     // Enforce the workspace's monthly token ceiling before doing any model work.
-    const budget = await checkMonthlyTokenBudget(organizationId)
+    // The run's owner is passed so exempt admin accounts are never blocked.
+    const budget = await checkMonthlyTokenBudget(organizationId, userId)
     if (budget.over) {
       throw new Error(
         `Monthly token budget reached for this workspace (${budget.used.toLocaleString()}/${budget.limit.toLocaleString()} tokens). Raise AGENT_MONTHLY_TOKEN_LIMIT or wait for the next cycle.`,

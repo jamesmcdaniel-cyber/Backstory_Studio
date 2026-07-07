@@ -33,6 +33,21 @@ export const TIER_MONTHLY_TOKEN_LIMITS: Record<string, number> = {
   sales_ai: 20_000_000,
 }
 
+// Accounts exempt from the monthly token ceiling (internal admins). The default
+// covers the platform admin; add more via USAGE_EXEMPT_EMAILS (comma-separated).
+const DEFAULT_EXEMPT_EMAILS = ['james.mcdaniel@people.ai']
+
+/** True when this email should never be blocked by the usage ceiling. */
+export function isUsageExemptEmail(email: string | null | undefined): boolean {
+  if (!email) return false
+  const extra = (process.env.USAGE_EXEMPT_EMAILS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+  const exempt = new Set([...DEFAULT_EXEMPT_EMAILS, ...extra])
+  return exempt.has(email.trim().toLowerCase())
+}
+
 export function tokenLimitForTier(tier: string | null | undefined): number {
   const envLimit = Number(process.env.AGENT_MONTHLY_TOKEN_LIMIT) || 0
   const tierLimit = tier ? (TIER_MONTHLY_TOKEN_LIMITS[tier] ?? 0) : 0
@@ -51,7 +66,14 @@ export function tokenLimitForTier(tier: string | null | undefined): number {
  */
 export async function checkMonthlyTokenBudget(
   organizationId: string,
+  userId?: string | null,
 ): Promise<{ over: boolean; used: number; limit: number }> {
+  // Exempt accounts (internal admins) are never blocked.
+  if (userId) {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+    if (isUsageExemptEmail(user?.email)) return { over: false, used: 0, limit: 0 }
+  }
+
   const org = await prisma.organization.findUnique({
     where: { id: organizationId },
     select: { entitlementTier: true },
