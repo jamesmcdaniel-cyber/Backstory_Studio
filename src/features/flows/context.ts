@@ -8,6 +8,8 @@ export type FlowContext = {
   trigger: { input: unknown }
   step: Record<string, { output: unknown }>
   item?: unknown
+  // Present inside a loop body: `{{loop.index}}` (0-based) + total count.
+  loop?: { index: number; count: number }
 }
 
 /** Read a dot-path off the context (e.g. 'trigger.input', 'step.n1.output.score', 'item'). */
@@ -49,9 +51,11 @@ function coerce(value: string): number | string {
 }
 
 /** Evaluate a structured condition against the context. Never runs arbitrary code. */
-export function evalCondition(cond: { left: string; op: ConditionOp; right: string }, ctx: FlowContext): boolean {
-  const leftRaw = resolveTemplate(cond.left, ctx)
-  const rightRaw = cond.right
+/** Evaluate a single comparison. Both sides are templated (RHS may be dynamic). */
+export function evalClause(clause: { left: string; op: ConditionOp; right: string }, ctx: FlowContext): boolean {
+  const leftRaw = resolveTemplate(clause.left, ctx)
+  const rightRaw = resolveTemplate(clause.right, ctx)
+  const cond = clause
   switch (cond.op) {
     case 'contains':
       return leftRaw.includes(rightRaw)
@@ -81,4 +85,28 @@ export function evalCondition(cond: { left: string; op: ConditionOp; right: stri
     }
   }
   return false
+}
+
+/**
+ * Evaluate a condition node's data. Multi-criteria: `clauses` combined with
+ * `match` (all=AND / any=OR). Falls back to the legacy single left/op/right.
+ */
+export function evalCondition(
+  data: {
+    match?: 'all' | 'any'
+    clauses?: { left: string; op: ConditionOp; right: string }[]
+    left?: string
+    op?: ConditionOp
+    right?: string
+  },
+  ctx: FlowContext,
+): boolean {
+  const clauses =
+    data.clauses && data.clauses.length
+      ? data.clauses
+      : data.left !== undefined && data.op && data.right !== undefined
+        ? [{ left: data.left, op: data.op, right: data.right }]
+        : []
+  if (!clauses.length) return false
+  return (data.match ?? 'all') === 'any' ? clauses.some((c) => evalClause(c, ctx)) : clauses.every((c) => evalClause(c, ctx))
 }

@@ -3,7 +3,7 @@ import { resolveTemplate, asStructured, evalCondition, type FlowContext } from '
 
 export type StepOutcome = {
   nodeId: string
-  status: 'succeeded' | 'failed' | 'skipped' | 'waiting'
+  status: 'succeeded' | 'failed' | 'skipped' | 'waiting' | 'stopped'
   output?: unknown
   error?: string
 }
@@ -23,6 +23,17 @@ type Opts = {
   onStep?: (outcome: StepOutcome) => void
 }
 
+// Result of executing a single node — an output, or a control signal that
+// propagates up through containers and halts the main chain.
+type NodeResult =
+  | { kind: 'ok'; output: unknown }
+  | { kind: 'skip' }
+  | { kind: 'stop' }
+  | { kind: 'fail'; error: string }
+  | { kind: 'pause'; nodeId: string; question?: string }
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 /** Run `fn` over `items` with at most `limit` in flight, preserving order. */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length)
@@ -39,8 +50,10 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: nu
 }
 
 /**
- * Deterministically interpret a flow graph. Pure: all agent execution is
- * delegated to `opts.runAgent`, so this is fully unit-testable with a stub.
+ * Deterministically interpret a flow graph. Pure: agent execution is delegated
+ * to `opts.runAgent`. Supports nested control flow (loops/parallels containing
+ * containers), container-level fail/pause propagation, a stop node, retries,
+ * per-step timeout, and full per-node outcome reporting via `opts.onStep`.
  */
 export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts): Promise<InterpretResult> {
   const maxSteps = opts.maxSteps ?? 100
@@ -49,131 +62,161 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   const outgoing = (id: string, branch?: 'true' | 'false'): FlowEdge | undefined =>
     graph.edges.find((edge) => edge.source === id && (branch === undefined || edge.branch === branch || edge.branch === undefined))
 
-  const ctx: FlowContext = { trigger: { input }, step: {} }
   const steps: StepOutcome[] = []
+  const emit = (outcome: StepOutcome) => {
+    steps.push(outcome)
+    opts.onStep?.(outcome)
+  }
   let visits = 0
-  let lastOutput: unknown = input
+  const overBudget = () => ++visits > maxSteps
 
-  // Run one agent node in a given context, recording the outcome.
-  const runAgentNode = async (
+  // Run an agent with optional per-attempt timeout and retry-with-backoff.
+  const runAgentWithReliability = async (
     node: Extract<FlowNode, { type: 'agent' }>,
-    localCtx: FlowContext,
-    fallbackTemplate: string,
-  ): Promise<{ output?: unknown; error?: string; waiting?: { status: string; question?: string } }> => {
-    const resolved = resolveTemplate(node.data.input ?? fallbackTemplate, localCtx)
-    const res = await opts.runAgent({ id: node.id, agentId: node.data.agentId, input: resolved })
-    if (res.waiting) return { waiting: res.waiting }
-    if (res.error) return { error: res.error }
-    return { output: asStructured(res.output) }
+    resolvedInput: string,
+  ): Promise<RunAgentResult> => {
+    const retries = node.data.retries ?? 0
+    const timeoutMs = node.data.timeoutMs
+    let attempt = 0
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const call = opts.runAgent({ id: node.id, agentId: node.data.agentId, input: resolvedInput })
+      const res: RunAgentResult = timeoutMs
+        ? await Promise.race([call, sleep(timeoutMs).then((): RunAgentResult => ({ error: `Step timed out after ${timeoutMs}ms` }))])
+        : await call
+      // Retry only hard errors (never a waiting/paused result).
+      if (!res.error || res.waiting || attempt >= retries) return res
+      attempt += 1
+      await sleep(Math.min(8000, 250 * 2 ** attempt))
+    }
   }
 
-  // Execute a non-trigger, non-condition node against the top-level context.
-  const runNode = async (node: FlowNode): Promise<{ output?: unknown; halt?: InterpretResult }> => {
-    if (++visits > maxSteps) return { halt: { status: 'failed', steps, output: lastOutput } }
+  // Execute one node against `ctx`. Never routes edges (the main-chain walker
+  // and container bodies drive traversal); returns an output or control signal.
+  const execNode = async (node: FlowNode, ctx: FlowContext): Promise<NodeResult> => {
+    if (overBudget()) return { kind: 'fail', error: 'Flow exceeded the maximum number of steps.' }
+
+    if (node.type === 'trigger') return { kind: 'skip' }
+
+    if (node.type === 'stop') {
+      emit({ nodeId: node.id, status: 'stopped', output: node.data.reason ?? 'Flow stopped.' })
+      return { kind: 'stop' }
+    }
+
+    if (node.type === 'condition') {
+      // Conditions route on the main chain; inside a body they cannot branch.
+      return { kind: 'skip' }
+    }
 
     if (node.type === 'agent') {
-      const res = await runAgentNode(node, ctx, '{{trigger.input}}')
+      const resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx)
+      const res = await runAgentWithReliability(node, resolved)
       if (res.waiting) {
-        const outcome: StepOutcome = { nodeId: node.id, status: 'waiting' }
-        steps.push(outcome)
-        opts.onStep?.(outcome)
-        return { halt: { status: 'waiting', steps, output: lastOutput, waiting: { nodeId: node.id, question: res.waiting.question } } }
+        emit({ nodeId: node.id, status: 'waiting' })
+        return { kind: 'pause', nodeId: node.id, question: res.waiting.question }
       }
       if (res.error) {
-        const outcome: StepOutcome = { nodeId: node.id, status: 'failed', error: res.error }
-        steps.push(outcome)
-        opts.onStep?.(outcome)
-        if ((node.data.onError ?? 'stop') === 'stop') return { halt: { status: 'failed', steps, output: lastOutput } }
-        return { output: undefined }
+        emit({ nodeId: node.id, status: 'failed', error: res.error })
+        if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
+        return { kind: 'fail', error: res.error }
       }
-      ctx.step[node.id] = { output: res.output }
-      const outcome: StepOutcome = { nodeId: node.id, status: 'succeeded', output: res.output }
-      steps.push(outcome)
-      opts.onStep?.(outcome)
-      return { output: res.output }
+      const output = asStructured(res.output)
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
     }
 
     if (node.type === 'loop') {
       const list = asStructured(resolveTemplate(node.data.over, ctx))
       const items = Array.isArray(list) ? list.slice(0, maxLoop) : []
-      const bodyNodes = node.data.body.map((id) => byId.get(id)).filter((n): n is FlowNode => Boolean(n))
-      const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item) => {
-        const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item }
-        let out: unknown = item
-        for (const bodyNode of bodyNodes) {
-          if (bodyNode.type !== 'agent') continue
-          const res = await runAgentNode(bodyNode, branchCtx, '{{item}}')
-          if (res.waiting || res.error) {
-            out = undefined
-            break
-          }
-          out = res.output
-          branchCtx.step[bodyNode.id] = { output: out }
-        }
-        return out
+      const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item, index) => {
+        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length } }
+        return execBody(node.data.body, itemCtx)
       })
-      ctx.step[node.id] = { output: perItem }
-      const outcome: StepOutcome = { nodeId: node.id, status: 'succeeded', output: perItem }
-      steps.push(outcome)
-      opts.onStep?.(outcome)
-      return { output: perItem }
+      // Propagate the first control signal (stop / fail / pause) from any item.
+      const control = perItem.map((r) => r.control).find((c): c is NodeResult => Boolean(c))
+      if (control) {
+        emit({ nodeId: node.id, status: control.kind === 'fail' ? 'failed' : control.kind === 'pause' ? 'waiting' : 'stopped' })
+        return control
+      }
+      const output = perItem.map((r) => r.output)
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
     }
 
     if (node.type === 'parallel') {
-      const branchOutputs = await Promise.all(
+      const results = await Promise.all(
         node.data.branches.map(async (branch) => {
-          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step } }
-          let out: unknown
-          for (const id of branch) {
-            const bodyNode = byId.get(id)
-            if (!bodyNode || bodyNode.type !== 'agent') continue
-            const res = await runAgentNode(bodyNode, branchCtx, '{{trigger.input}}')
-            if (res.waiting || res.error) {
-              out = undefined
-              break
-            }
-            out = res.output
-            branchCtx.step[bodyNode.id] = { output: out }
-          }
-          return [branch[0] ?? node.id, out] as const
+          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop }
+          const res = await execBody(branch, branchCtx)
+          return { key: branch[0] ?? node.id, res }
         }),
       )
-      const merged = Object.fromEntries(branchOutputs)
-      ctx.step[node.id] = { output: merged }
-      const outcome: StepOutcome = { nodeId: node.id, status: 'succeeded', output: merged }
-      steps.push(outcome)
-      opts.onStep?.(outcome)
-      return { output: merged }
+      const control = results.map((r) => r.res.control).find((c): c is NodeResult => Boolean(c))
+      if (control) {
+        emit({ nodeId: node.id, status: control.kind === 'fail' ? 'failed' : control.kind === 'pause' ? 'waiting' : 'stopped' })
+        return control
+      }
+      const output = Object.fromEntries(results.map((r) => [r.key, r.res.output]))
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
     }
 
-    return { output: undefined } // trigger — no-op
+    return { kind: 'skip' }
   }
 
-  // Node ids that live inside a loop body or parallel branch must never be
-  // reached by the main-chain walk; they run only via their container.
-  const containedIds = new Set(
+  // Execute an ordered list of node ids (a loop body / parallel branch) as a
+  // sequence, threading outputs. Stops on the first control signal.
+  const execBody = async (nodeIds: string[], ctx: FlowContext): Promise<{ output: unknown; control?: NodeResult }> => {
+    let last: unknown = ctx.item
+    for (const id of nodeIds) {
+      const node = byId.get(id)
+      if (!node) continue
+      const res = await execNode(node, ctx)
+      if (res.kind === 'ok') {
+        if (res.output !== undefined) {
+          ctx.step[id] = { output: res.output }
+          last = res.output
+        }
+        continue
+      }
+      if (res.kind === 'skip') continue
+      return { output: last, control: res }
+    }
+    return { output: last }
+  }
+
+  // Node ids that live inside a container must not be reached by the main walk.
+  const contained = new Set(
     graph.nodes.flatMap((node) =>
       node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : [],
     ),
   )
 
+  const ctx: FlowContext = { trigger: { input }, step: {} }
+  let lastOutput: unknown = input
   let current: FlowNode | undefined = byId.get('trigger') ?? graph.nodes[0]
+
   while (current) {
     if (current.type === 'condition') {
-      if (++visits > maxSteps) return { status: 'failed', steps, output: lastOutput }
+      if (overBudget()) return { status: 'failed', steps, output: lastOutput }
       const branch = evalCondition(current.data, ctx) ? 'true' : 'false'
       const edge = outgoing(current.id, branch)
       current = edge ? byId.get(edge.target) : undefined
       continue
     }
-    if (current.type !== 'trigger') {
-      const { output, halt } = await runNode(current)
-      if (halt) return halt
-      if (output !== undefined) lastOutput = output
-    }
+
+    const res = await execNode(current, ctx)
+    if (res.kind === 'fail') return { status: 'failed', steps, output: lastOutput }
+    if (res.kind === 'pause') return { status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } }
+    if (res.kind === 'stop') return { status: 'succeeded', steps, output: lastOutput }
+    if (res.kind === 'ok' && res.output !== undefined) lastOutput = res.output
+
     const edge = outgoing(current.id)
     let next = edge ? byId.get(edge.target) : undefined
-    while (next && containedIds.has(next.id)) {
+    while (next && contained.has(next.id)) {
       const skip = outgoing(next.id)
       next = skip ? byId.get(skip.target) : undefined
     }

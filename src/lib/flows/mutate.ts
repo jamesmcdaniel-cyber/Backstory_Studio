@@ -23,6 +23,8 @@ function defaultData(type: FlowNode['type'], bodyId?: string): FlowNode['data'] 
       return { over: '{{trigger.input}}', concurrency: 3, body: bodyId ? [bodyId] : [] }
     case 'parallel':
       return { branches: [] }
+    case 'stop':
+      return { reason: '' }
     case 'trigger':
       return { trigger: { type: 'manual' } }
   }

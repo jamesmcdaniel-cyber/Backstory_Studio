@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readPath, resolveTemplate, asStructured, evalCondition, type FlowContext } from '../context'
+import { readPath, resolveTemplate, asStructured, evalCondition, evalClause, type FlowContext } from '../context'
 
 const ctx: FlowContext = {
   trigger: { input: 'Acme, Globex' },
@@ -27,10 +27,24 @@ test('asStructured parses JSON strings, passes through non-JSON', () => {
   assert.deepEqual(asStructured({ a: 1 }), { a: 1 })
 })
 
-test('evalCondition handles numeric and string ops', () => {
+test('evalCondition handles numeric and string ops (legacy single clause)', () => {
   assert.equal(evalCondition({ left: '{{step.n3.output.score}}', op: 'gt', right: '80' }, ctx), true)
   assert.equal(evalCondition({ left: '{{step.n3.output.score}}', op: 'lt', right: '80' }, ctx), false)
   assert.equal(evalCondition({ left: '{{trigger.input}}', op: 'contains', right: 'Globex' }, ctx), true)
   assert.equal(evalCondition({ left: '{{item}}', op: 'eq', right: 'Acme' }, ctx), true)
   assert.equal(evalCondition({ left: '{{item}}', op: 'matches', right: '^Ac' }, ctx), true)
+})
+
+test('evalClause templates the right-hand side (dynamic comparison)', () => {
+  const c: FlowContext = { trigger: { input: '80' }, step: { s: { output: { score: 91 } } } }
+  assert.equal(evalClause({ left: '{{step.s.output.score}}', op: 'gt', right: '{{trigger.input}}' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.score}}', op: 'lt', right: '{{trigger.input}}' }, c), false)
+})
+
+test('evalCondition combines clauses with all (AND) / any (OR)', () => {
+  const pass = { left: '{{step.n3.output.score}}', op: 'gt' as const, right: '80' }
+  const fail = { left: '{{item}}', op: 'eq' as const, right: 'Globex' }
+  assert.equal(evalCondition({ match: 'all', clauses: [pass, fail] }, ctx), false)
+  assert.equal(evalCondition({ match: 'any', clauses: [pass, fail] }, ctx), true)
+  assert.equal(evalCondition({ match: 'all', clauses: [pass] }, ctx), true)
 })

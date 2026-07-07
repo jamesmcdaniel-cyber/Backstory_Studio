@@ -60,6 +60,8 @@ export function FlowCanvas({
         return node.data.label || 'For each'
       case 'parallel':
         return node.data.label || 'Parallel branches'
+      case 'stop':
+        return node.data.label || 'Stop'
     }
   }
   const subtitleFor = (node: FlowNode): string | undefined => {
@@ -74,6 +76,8 @@ export function FlowCanvas({
         return `over ${node.data.over} · ${node.data.concurrency ?? 1} at a time`
       case 'parallel':
         return `${node.data.branches.length} branches`
+      case 'stop':
+        return node.data.reason || undefined
       default:
         return undefined
     }

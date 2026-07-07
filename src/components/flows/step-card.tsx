@@ -1,10 +1,10 @@
 'use client'
 
-import { Bot, GitBranch, Repeat, Rows3, Zap } from 'lucide-react'
+import { Bot, GitBranch, Repeat, Rows3, Zap, CircleStop } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FlowNode } from '@/lib/flows/graph'
 
-export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped'
+export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped'
 
 const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   trigger: Zap,
@@ -12,6 +12,7 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   condition: GitBranch,
   loop: Repeat,
   parallel: Rows3,
+  stop: CircleStop,
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {
@@ -21,6 +22,7 @@ const STATUS_DOT: Record<StepStatus, string> = {
   failed: 'bg-red-500',
   waiting: 'bg-blue-500 animate-pulse',
   skipped: 'bg-gray-300',
+  stopped: 'bg-slate-500',
 }
 
 export function StepCard({

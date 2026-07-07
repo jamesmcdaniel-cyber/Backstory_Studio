@@ -17,12 +17,33 @@ const agentNode = z.object({
     label: z.string().optional(),
     input: z.string().optional(),
     onError: z.enum(['stop', 'continue']).optional(),
+    // Per-step reliability: retry the agent up to `retries` times with backoff,
+    // and abort a single attempt after `timeoutMs`.
+    retries: z.number().int().min(0).max(5).optional(),
+    timeoutMs: z.number().int().min(1000).max(600000).optional(),
   }),
 })
+/** One left/op/right comparison; a condition ANDs/ORs a list of these. */
+export const conditionClauseSchema = z.object({ left: z.string(), op: z.enum(CONDITION_OPS), right: z.string() })
 const conditionNode = z.object({
   id: z.string(),
   type: z.literal('condition'),
-  data: z.object({ label: z.string().optional(), left: z.string(), op: z.enum(CONDITION_OPS), right: z.string() }),
+  data: z.object({
+    label: z.string().optional(),
+    // Multi-criteria: evaluate `clauses` with all (AND) / any (OR). The legacy
+    // single left/op/right is still accepted and treated as a one-clause AND.
+    match: z.enum(['all', 'any']).optional(),
+    clauses: z.array(conditionClauseSchema).optional(),
+    left: z.string().optional(),
+    op: z.enum(CONDITION_OPS).optional(),
+    right: z.string().optional(),
+  }),
+})
+// Ends the flow early with an optional message.
+const stopNode = z.object({
+  id: z.string(),
+  type: z.literal('stop'),
+  data: z.object({ label: z.string().optional(), reason: z.string().optional() }),
 })
 const loopNode = z.object({
   id: z.string(),
@@ -40,7 +61,7 @@ const parallelNode = z.object({
   data: z.object({ label: z.string().optional(), branches: z.array(z.array(z.string())) }),
 })
 
-export const flowNodeSchema = z.discriminatedUnion('type', [triggerNode, agentNode, conditionNode, loopNode, parallelNode])
+export const flowNodeSchema = z.discriminatedUnion('type', [triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode])
 export const flowEdgeSchema = z.object({
   id: z.string(),
   source: z.string(),
@@ -52,6 +73,7 @@ export const flowGraphSchema = z.object({ nodes: z.array(flowNodeSchema), edges:
 export type FlowNode = z.infer<typeof flowNodeSchema>
 export type FlowEdge = z.infer<typeof flowEdgeSchema>
 export type FlowGraph = z.infer<typeof flowGraphSchema>
+export type ConditionClause = z.infer<typeof conditionClauseSchema>
 
 /** A fresh graph: one manual trigger, no steps yet. */
 export function emptyGraph(): FlowGraph {

@@ -40,7 +40,31 @@ export async function runFlowExecution(
         },
       })
 
+  const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
   let order = 0
+  // Container (condition/loop/parallel/stop) outcomes are reported via onStep;
+  // persist them so runs are fully inspectable, not just their agent steps.
+  const pending: Promise<unknown>[] = []
+  const onStep = (outcome: { nodeId: string; status: string; output?: unknown; error?: string }) => {
+    if (nodeTypeById.get(outcome.nodeId) === 'agent') return // agent rows handled by the adapter below
+    pending.push(
+      prisma.flowRunStep
+        .create({
+          data: {
+            flowRunId: run.id,
+            nodeId: outcome.nodeId,
+            order: order++,
+            status: outcome.status,
+            output: jsonValue(outcome.output ?? null),
+            error: outcome.error ? outcome.error.slice(0, 300) : null,
+            startedAt: new Date(),
+            finishedAt: new Date(),
+          },
+        })
+        .catch(() => undefined),
+    )
+  }
+
   // Adapter: each agent node runs the real agent and records a FlowRunStep row.
   const runAgent: RunAgentFn = async (node) => {
     const step = await prisma.flowRunStep.create({
@@ -81,7 +105,8 @@ export async function runFlowExecution(
     }
   }
 
-  const result = await interpretFlow(graph, input, { runAgent })
+  const result = await interpretFlow(graph, input, { runAgent, onStep })
+  await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'
   await prisma.flowRun.update({
     where: { id: run.id },
