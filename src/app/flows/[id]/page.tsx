@@ -53,7 +53,9 @@ export default function FlowBuilder() {
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [mode, setMode] = useState<'build' | 'test'>('build')
-  const [showCopilot, setShowCopilot] = useState(false)
+  // Copilot is the workflow-building assistant — open by default so it's always
+  // there; the top-bar toggle can still hide it.
+  const [showCopilot, setShowCopilot] = useState(true)
   const [showRuns, setShowRuns] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
@@ -443,7 +445,7 @@ export default function FlowBuilder() {
               onGraph={(next) => {
                 commitGraph(next as FlowGraph)
                 setSelectedId(null)
-                setShowCopilot(false)
+                // Keep Copilot open so the user can keep iterating on the draft.
               }}
             />
           </ResizablePanel>
