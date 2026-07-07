@@ -4,6 +4,12 @@ import { z } from 'zod'
 export const CONDITION_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches'] as const
 export type ConditionOp = (typeof CONDITION_OPS)[number]
 
+/** Field types a step's output schema can declare (for the datatree picker). */
+export const FIELD_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'any'] as const
+export type FieldType = (typeof FIELD_TYPES)[number]
+export const outputFieldSchema = z.object({ name: z.string(), type: z.enum(FIELD_TYPES).default('any') })
+export type OutputField = z.infer<typeof outputFieldSchema>
+
 const triggerNode = z.object({
   id: z.string(),
   type: z.literal('trigger'),
@@ -21,6 +27,9 @@ const agentNode = z.object({
     // and abort a single attempt after `timeoutMs`.
     retries: z.number().int().min(0).max(5).optional(),
     timeoutMs: z.number().int().min(1000).max(600000).optional(),
+    // Declared output schema — fields this step is expected to produce. Powers
+    // the datatree field picker for downstream mapping.
+    outputFields: z.array(outputFieldSchema).optional(),
   }),
 })
 /** One left/op/right comparison; a condition ANDs/ORs a list of these. */

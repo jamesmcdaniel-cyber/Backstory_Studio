@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
 import { insertAgentAfter, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
+import { buildDataTree } from '@/lib/flows/datatree'
 import { FlowCanvas } from '@/components/flows/flow-canvas'
 import { StepDrawer } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
@@ -140,6 +141,30 @@ export default function FlowBuilder() {
     const idx = ids.indexOf(selectedId ?? '')
     return (idx > 0 ? ids.slice(1, idx) : ids.slice(1)).filter((x) => x !== selectedId)
   }, [graph, selectedId])
+
+  // The datatree of mappable upstream data — declared output fields plus fields
+  // inferred from the latest run's actual output.
+  const dataFields = useMemo(() => {
+    if (!selectedNode || selectedNode.type === 'trigger') return []
+    const tryParse = (value: unknown) => {
+      if (typeof value !== 'string') return value
+      const t = value.trim()
+      if (!t || (t[0] !== '{' && t[0] !== '[')) return value
+      try {
+        return JSON.parse(t)
+      } catch {
+        return value
+      }
+    }
+    const lastOutputs: Record<string, unknown> = {}
+    for (const step of selectedRun?.steps ?? []) lastOutputs[step.nodeId] = tryParse(step.output)
+    const upstream = upstreamIds.map((uid) => {
+      const n = graph.nodes.find((x) => x.id === uid)
+      const label = n?.type === 'agent' ? n.data.label || agentsById.get(n.data.agentId) || 'Agent step' : n ? n.type : uid
+      return { id: uid, label, outputFields: n?.type === 'agent' ? n.data.outputFields : undefined }
+    })
+    return buildDataTree({ upstream, insideLoop, lastOutputs })
+  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById])
 
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true)
@@ -342,8 +367,7 @@ export default function FlowBuilder() {
             <StepDrawer
               node={selectedNode}
               agents={agents}
-              upstreamNodeIds={upstreamIds}
-              insideLoop={insideLoop}
+              dataFields={dataFields}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
               onChangeType={(type) => commitGraph(changeNodeType(graph, selectedNode.id, type))}
               onAddStep={

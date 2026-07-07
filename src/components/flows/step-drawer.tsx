@@ -1,8 +1,11 @@
 'use client'
 
+import { useState } from 'react'
 import { X, Trash2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { CONDITION_OPS, type FlowNode, type ConditionOp, type ConditionClause } from '@/lib/flows/graph'
+import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField } from '@/lib/flows/graph'
+import { DataTree } from '@/components/flows/data-tree'
+import type { DataField } from '@/lib/flows/datatree'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
@@ -19,7 +22,6 @@ const smallField =
   'rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
 const labelClass = 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground'
 
-/** Normalize a condition node's data to the clause list the editor works with. */
 function clausesOf(data: Extract<FlowNode, { type: 'condition' }>['data']): ConditionClause[] {
   if (data.clauses && data.clauses.length) return data.clauses
   if (data.left !== undefined || data.right !== undefined)
@@ -30,8 +32,7 @@ function clausesOf(data: Extract<FlowNode, { type: 'condition' }>['data']): Cond
 export function StepDrawer({
   node,
   agents,
-  upstreamNodeIds,
-  insideLoop,
+  dataFields,
   onChange,
   onChangeType,
   onAddStep,
@@ -40,8 +41,7 @@ export function StepDrawer({
 }: {
   node: FlowNode
   agents: { id: string; title: string }[]
-  upstreamNodeIds: string[]
-  insideLoop: boolean
+  dataFields: DataField[]
   onChange: (node: FlowNode) => void
   onChangeType: (type: EditableType) => void
   onAddStep?: () => void
@@ -49,14 +49,29 @@ export function StepDrawer({
   onClose: () => void
 }) {
   const isTrigger = node.type === 'trigger'
-  const tokens = [
-    '{{trigger.input}}',
-    ...upstreamNodeIds.map((id) => `{{step.${id}.output}}`),
-    ...(insideLoop ? ['{{item}}', '{{loop.index}}'] : []),
-  ]
+  // Which text field a datatree click inserts into (tracked on focus).
+  const [activeField, setActiveField] = useState<string>('')
 
-  // Label editing (all non-trigger nodes carry an optional label).
   const setLabel = (label: string) => onChange({ ...node, data: { ...node.data, label } } as FlowNode)
+
+  // Append a {{token}} to whatever field is focused (defaults to agent input).
+  const insertToken = (token: string) => {
+    if (node.type === 'agent') {
+      onChange({ ...node, data: { ...node.data, input: `${node.data.input ?? ''}${token}` } })
+      return
+    }
+    if (node.type === 'condition') {
+      const m = activeField.match(/^cond\.(\d+)\.(left|right)$/)
+      const clauses = clausesOf(node.data)
+      const i = m ? Number(m[1]) : 0
+      const side = (m ? m[2] : 'left') as 'left' | 'right'
+      onChange({ ...node, data: { ...node.data, clauses: clauses.map((c, j) => (j === i ? { ...c, [side]: `${c[side] ?? ''}${token}` } : c)), left: undefined, op: undefined, right: undefined } })
+      return
+    }
+    if (node.type === 'loop') {
+      onChange({ ...node, data: { ...node.data, over: `${node.data.over ?? ''}${token}` } })
+    }
+  }
 
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto border-l border-border bg-card">
@@ -95,12 +110,7 @@ export function StepDrawer({
             </div>
             <div>
               <label className={labelClass}>Label (optional)</label>
-              <input
-                className={fieldClass}
-                value={(node.data as { label?: string }).label ?? ''}
-                placeholder="A short name for this step"
-                onChange={(e) => setLabel(e.target.value)}
-              />
+              <input className={fieldClass} value={(node.data as { label?: string }).label ?? ''} placeholder="A short name for this step" onChange={(e) => setLabel(e.target.value)} />
             </div>
           </>
         )}
@@ -126,20 +136,11 @@ export function StepDrawer({
                 className={fieldClass}
                 value={node.data.input ?? ''}
                 placeholder="{{trigger.input}}"
+                onFocus={() => setActiveField('agent.input')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, input: e.target.value } })}
               />
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {tokens.map((token) => (
-                  <button
-                    key={token}
-                    type="button"
-                    onClick={() => onChange({ ...node, data: { ...node.data, input: `${node.data.input ?? ''}${token}` } })}
-                    className="rounded-md border border-border bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground hover:border-indigo-300 hover:text-indigo-600"
-                  >
-                    {token}
-                  </button>
-                ))}
-              </div>
+              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
+              <DataTree fields={dataFields} onInsert={insertToken} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -179,6 +180,10 @@ export function StepDrawer({
                 }}
               />
             </div>
+            <OutputFieldsEditor
+              fields={node.data.outputFields ?? []}
+              onChange={(outputFields) => onChange({ ...node, data: { ...node.data, outputFields: outputFields.length ? outputFields : undefined } })}
+            />
           </>
         )}
 
@@ -204,14 +209,11 @@ export function StepDrawer({
                     className={`${smallField} w-full`}
                     value={clause.left}
                     placeholder="{{step.n1.output.score}}"
+                    onFocus={() => setActiveField(`cond.${i}.left`)}
                     onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))}
                   />
                   <div className="flex gap-1.5">
-                    <select
-                      className={smallField}
-                      value={clause.op}
-                      onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}
-                    >
+                    <select className={smallField} value={clause.op} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}>
                       {CONDITION_OPS.map((op) => (
                         <option key={op} value={op}>
                           {op}
@@ -222,6 +224,7 @@ export function StepDrawer({
                       className={`${smallField} flex-1`}
                       value={clause.right}
                       placeholder="80"
+                      onFocus={() => setActiveField(`cond.${i}.right`)}
                       onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, right: e.target.value } : c)))}
                     />
                     {clauses.length > 1 && (
@@ -240,6 +243,10 @@ export function StepDrawer({
             >
               <Plus className="h-3.5 w-3.5" /> Add condition
             </button>
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
+              <DataTree fields={dataFields} onInsert={insertToken} />
+            </div>
           </div>
         )}
 
@@ -247,7 +254,10 @@ export function StepDrawer({
           <div className="space-y-3">
             <div>
               <label className={labelClass}>Over (a list)</label>
-              <input className={fieldClass} value={node.data.over} placeholder="{{step.n1.output}}" onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })} />
+              <input className={fieldClass} value={node.data.over} placeholder="{{step.n1.output}}" onFocus={() => setActiveField('loop.over')} onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })} />
+              <div className="mt-2">
+                <DataTree fields={dataFields} onInsert={insertToken} />
+              </div>
               <p className="mt-1.5 text-xs text-muted-foreground">Runs the nested steps once per item. Click an indented card to edit it.</p>
             </div>
             <div>
@@ -298,6 +308,41 @@ export function StepDrawer({
           </Button>
         </div>
       )}
+    </div>
+  )
+}
+
+/** Declare a step's output fields so downstream steps can map from them. */
+function OutputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onChange: (fields: OutputField[]) => void }) {
+  return (
+    <div>
+      <label className={labelClass}>Output fields (optional)</label>
+      <p className="-mt-1 mb-2 text-[11px] text-muted-foreground">Declare what this step returns so later steps can map its fields. Fields also appear once the step has run.</p>
+      <div className="space-y-1.5">
+        {fields.map((field, i) => (
+          <div key={i} className="flex gap-1.5">
+            <input
+              className={`${smallField} flex-1`}
+              value={field.name}
+              placeholder="fieldName"
+              onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, name: e.target.value } : f)))}
+            />
+            <select className={smallField} value={field.type} onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, type: e.target.value as OutputField['type'] } : f)))}>
+              {FIELD_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => onChange(fields.filter((_, j) => j !== i))} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove field">
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={() => onChange([...fields, { name: '', type: 'any' }])} className="mt-1.5 flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+        <Plus className="h-3.5 w-3.5" /> Add field
+      </button>
     </div>
   )
 }
