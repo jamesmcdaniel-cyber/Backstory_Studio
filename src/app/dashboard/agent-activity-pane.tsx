@@ -83,7 +83,26 @@ export function resultText(activity?: Activity | null) {
   if (!activity) return ''
   if (activity.error) return activity.error
   const value = activity.output?.summary ?? activity.output?.response ?? activity.output
+  // A still-running (or output-less) run has no result yet — return '' so
+  // callers show a status label instead of the string "null".
+  if (value == null) return ''
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+// Lively "what it's doing" labels for a live run, cycled over time so the word
+// changes like a first-party chat assistant. Different rows get different words.
+const RUNNING_WORDS = [
+  'Working', 'Thinking', 'Reasoning', 'Analyzing', 'Pondering', 'Crunching',
+  'Synthesizing', 'Digging in', 'Computing', 'Percolating', 'Noodling', 'Cooking',
+]
+
+export function runningLabel(activity: Pick<Activity, 'id' | 'status'>): string {
+  if (activity.status?.toLowerCase() === 'waiting_for_input') return 'Waiting for you…'
+  // Advance ~every 2.4s (the pane re-renders on its poll); offset per row so
+  // multiple running items don't chant the same word in unison.
+  const bucket = Math.floor(Date.now() / 2400)
+  const seed = activity.id ? activity.id.charCodeAt(activity.id.length - 1) : 0
+  return `${RUNNING_WORDS[(bucket + seed) % RUNNING_WORDS.length]}…`
 }
 
 function stepDuration(step: RunStep): string | null {
@@ -327,9 +346,17 @@ function RunRow({
   const [details, setDetails] = useState<RunDetails | null>(null)
   const [reply, setReply] = useState('')
   const [replying, setReplying] = useState(false)
+  const [, setTick] = useState(0)
   const status = activityStatus(activity)
   const isActive = ['running', 'pending', 'waiting_for_input'].includes(status)
   const timeline = buildTimeline(details)
+
+  // Cycle the "working…" word while active so the row feels alive.
+  useEffect(() => {
+    if (!isActive) return
+    const timer = window.setInterval(() => setTick((t) => t + 1), 2400)
+    return () => window.clearInterval(timer)
+  }, [isActive])
 
   useEffect(() => {
     if (!expanded) {
@@ -381,7 +408,11 @@ function RunRow({
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{activity.metadata?.title || activity.agentType}</div>
           <div className="line-clamp-1 text-xs text-gray-500">
-            {activity.metadata?.pendingQuestion?.question || activity.metadata?.headline || activity.error || resultText(activity) || 'In progress'}
+            {activity.metadata?.pendingQuestion?.question ||
+              activity.metadata?.headline ||
+              activity.error ||
+              resultText(activity) ||
+              (isActive ? runningLabel(activity) : 'No output')}
           </div>
         </div>
         <time className="shrink-0 font-mono text-xs tabular-nums text-gray-400">{new Date(activity.startedAt).toLocaleString()}</time>
