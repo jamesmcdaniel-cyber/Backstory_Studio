@@ -70,5 +70,12 @@ export async function updateSession(request: NextRequest) {
     return copyCookies(response, NextResponse.redirect(url))
   }
 
+  // Authenticated pages must not be cached by the browser (disk / back-forward
+  // cache), so a signed-out "Back" can't restore a protected view. The client
+  // pageshow guard covers browsers that bfcache no-store pages anyway.
+  if (!publicPages.has(pathname)) {
+    response.headers.set('Cache-Control', 'no-store, max-age=0, must-revalidate')
+  }
+
   return response
 }

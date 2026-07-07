@@ -51,7 +51,9 @@ export function useAuth() {
     signUp: () => { window.location.href = '/auth/signup' },
     signOut: async () => {
       await signOut()
-      window.location.href = '/auth/login'
+      // replace() drops the (now signed-out) page from history so Back can't
+      // return to it; the bfcache guard covers any earlier protected pages.
+      window.location.replace('/auth/login')
     },
     isAdmin: context?.role === 'ADMIN',
     role: context?.role || null,
