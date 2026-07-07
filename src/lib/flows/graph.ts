@@ -1,0 +1,59 @@
+import { z } from 'zod'
+
+/** Comparison operators available to a condition node. */
+export const CONDITION_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches'] as const
+export type ConditionOp = (typeof CONDITION_OPS)[number]
+
+const triggerNode = z.object({
+  id: z.string(),
+  type: z.literal('trigger'),
+  data: z.object({ trigger: z.any().optional() }),
+})
+const agentNode = z.object({
+  id: z.string(),
+  type: z.literal('agent'),
+  data: z.object({
+    agentId: z.string(),
+    label: z.string().optional(),
+    input: z.string().optional(),
+    onError: z.enum(['stop', 'continue']).optional(),
+  }),
+})
+const conditionNode = z.object({
+  id: z.string(),
+  type: z.literal('condition'),
+  data: z.object({ label: z.string().optional(), left: z.string(), op: z.enum(CONDITION_OPS), right: z.string() }),
+})
+const loopNode = z.object({
+  id: z.string(),
+  type: z.literal('loop'),
+  data: z.object({
+    label: z.string().optional(),
+    over: z.string(),
+    concurrency: z.number().int().min(1).max(20).optional(),
+    body: z.array(z.string()),
+  }),
+})
+const parallelNode = z.object({
+  id: z.string(),
+  type: z.literal('parallel'),
+  data: z.object({ label: z.string().optional(), branches: z.array(z.array(z.string())) }),
+})
+
+export const flowNodeSchema = z.discriminatedUnion('type', [triggerNode, agentNode, conditionNode, loopNode, parallelNode])
+export const flowEdgeSchema = z.object({
+  id: z.string(),
+  source: z.string(),
+  target: z.string(),
+  branch: z.enum(['true', 'false']).optional(),
+})
+export const flowGraphSchema = z.object({ nodes: z.array(flowNodeSchema), edges: z.array(flowEdgeSchema) })
+
+export type FlowNode = z.infer<typeof flowNodeSchema>
+export type FlowEdge = z.infer<typeof flowEdgeSchema>
+export type FlowGraph = z.infer<typeof flowGraphSchema>
+
+/** A fresh graph: one manual trigger, no steps yet. */
+export function emptyGraph(): FlowGraph {
+  return { nodes: [{ id: 'trigger', type: 'trigger', data: { trigger: { type: 'manual' } } }], edges: [] }
+}
