@@ -265,6 +265,58 @@ test('a failing tool step honors onError', async () => {
   assert.equal((await interpretFlow(graph('continue'), '', { runAgent, runAction })).output, 'OK')
 })
 
+test('transform builds an object from templated fields', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a', input: 'x' } },
+      { id: 'set', type: 'transform', data: { fields: [{ name: 'account', value: '{{trigger.input}}' }, { name: 'score', value: '{{step.n1.output.score}}' }] } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'n1' }, { id: 'e1', source: 'n1', target: 'set' }],
+  }
+  const runAgent: RunAgentFn = async () => ({ output: '{"score":91}' })
+  const result = await interpretFlow(graph, 'Acme', { runAgent })
+  assert.deepEqual(result.output, { account: 'Acme', score: 91 })
+})
+
+test('filter drops loop items that fail and ends the chain when it fails', async () => {
+  const loopGraph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['keep', 'echo'] } },
+      { id: 'keep', type: 'filter', data: { clauses: [{ left: '{{item.score}}', op: 'gt', right: '80' }] } },
+      { id: 'echo', type: 'agent', data: { agentId: 'e', input: '{{item.name}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const items = [{ name: 'A', score: 91 }, { name: 'B', score: 40 }, { name: 'C', score: 88 }]
+  const result = await interpretFlow(loopGraph, items, { runAgent })
+  assert.deepEqual(result.output, ['A', 'C']) // B (score 40) filtered out
+})
+
+test('switch routes to the matching case, else default', async () => {
+  const graph = (tier: string): FlowGraph => ({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'sw', type: 'switch', data: { cases: [{ id: 'ent', left: '{{trigger.input}}', op: 'eq', right: 'enterprise' }, { id: 'mid', left: '{{trigger.input}}', op: 'eq', right: 'mid' }] } },
+      { id: 'e', type: 'agent', data: { agentId: 'ent', input: 'ENT' } },
+      { id: 'm', type: 'agent', data: { agentId: 'mid', input: 'MID' } },
+      { id: 'd', type: 'agent', data: { agentId: 'def', input: 'DEFAULT' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'sw' },
+      { id: 'e1', source: 'sw', target: 'e', branch: 'ent' },
+      { id: 'e2', source: 'sw', target: 'm', branch: 'mid' },
+      { id: 'e3', source: 'sw', target: 'd', branch: 'default' },
+    ],
+  })
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  assert.equal((await interpretFlow(graph('enterprise'), 'enterprise', { runAgent })).output, 'ENT')
+  assert.equal((await interpretFlow(graph('mid'), 'mid', { runAgent })).output, 'MID')
+  assert.equal((await interpretFlow(graph('smb'), 'smb', { runAgent })).output, 'DEFAULT')
+})
+
 test('onStep reports every node including containers', async () => {
   const graph: FlowGraph = {
     nodes: [

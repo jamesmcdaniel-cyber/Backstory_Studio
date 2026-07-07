@@ -1,7 +1,7 @@
 'use client'
 
 import { Fragment, useState } from 'react'
-import { Plus, Bot, Wrench, Globe, GitBranch, Repeat, Rows3, CircleStop } from 'lucide-react'
+import { Plus, Bot, Wrench, Globe, GitBranch, Repeat, Rows3, CircleStop, SlidersHorizontal, Filter, Split } from 'lucide-react'
 import type { FlowGraph, FlowNode } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
 import { StepCard, type StepStatus } from './step-card'
@@ -10,7 +10,10 @@ const STEP_TYPES: { type: StepType; label: string; icon: typeof Bot }[] = [
   { type: 'agent', label: 'Run agent', icon: Bot },
   { type: 'tool', label: 'Tool call', icon: Wrench },
   { type: 'http', label: 'HTTP request', icon: Globe },
+  { type: 'transform', label: 'Set fields', icon: SlidersHorizontal },
   { type: 'condition', label: 'If / else', icon: GitBranch },
+  { type: 'switch', label: 'Switch', icon: Split },
+  { type: 'filter', label: 'Filter', icon: Filter },
   { type: 'loop', label: 'For each', icon: Repeat },
   { type: 'parallel', label: 'Parallel', icon: Rows3 },
   { type: 'stop', label: 'Stop', icon: CircleStop },
@@ -75,14 +78,14 @@ export function FlowCanvas({
   selectedId: string | null
   onSelect: (nodeId: string) => void
   onInsertAfter: (afterId: string, type: StepType) => void
-  onAppendBranch: (conditionId: string, branch: 'true' | 'false', type: StepType) => void
+  onAppendBranch: (conditionId: string, branch: string, type: StepType) => void
 }) {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const nextOf = (id: string): FlowNode | undefined => {
     const edge = graph.edges.find((e) => e.source === id && !e.branch)
     return edge ? byId.get(edge.target) : undefined
   }
-  const branchHead = (conditionId: string, branch: 'true' | 'false'): FlowNode | undefined => {
+  const branchHead = (conditionId: string, branch: string): FlowNode | undefined => {
     const edge = graph.edges.find((e) => e.source === conditionId && e.branch === branch)
     return edge ? byId.get(edge.target) : undefined
   }
@@ -114,6 +117,12 @@ export function FlowCanvas({
         return node.data.label || node.data.toolName || 'Tool call'
       case 'http':
         return node.data.label || `${node.data.method} ${node.data.url || 'HTTP request'}`
+      case 'transform':
+        return node.data.label || 'Set fields'
+      case 'filter':
+        return node.data.label || 'Filter'
+      case 'switch':
+        return node.data.label || 'Switch'
     }
   }
   const subtitleFor = (node: FlowNode): string | undefined => {
@@ -134,6 +143,12 @@ export function FlowCanvas({
         return node.data.note || node.data.toolName || undefined
       case 'http':
         return node.data.note || undefined
+      case 'transform':
+        return node.data.note || `${node.data.fields.length} field${node.data.fields.length === 1 ? '' : 's'}`
+      case 'filter':
+        return node.data.note || 'continue only if…'
+      case 'switch':
+        return node.data.note || `${node.data.cases.length} case${node.data.cases.length === 1 ? '' : 's'}`
       default:
         return (node.data as { note?: string }).note || undefined
     }
@@ -195,6 +210,23 @@ export function FlowCanvas({
           </div>,
         )
         return parts // the flow continues inside a branch, not below the condition
+      }
+      if (node.type === 'switch') {
+        const branches = [...node.data.cases.map((c) => ({ key: c.id, label: c.label || `${c.left} ${c.op} ${c.right}` })), { key: 'default', label: 'default' }]
+        parts.push(
+          <div key={`${node.id}-cases`} className="ml-6 mt-1 space-y-2 border-l-2 border-dashed border-border pl-3">
+            {branches.map((b) => (
+              <div key={b.key}>
+                <p className="mb-1 truncate text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">↳ {b.label}</p>
+                <div className="space-y-1">
+                  {renderChain(branchHead(node.id, b.key), depth + 1, seen)}
+                  <InsertMenu compact onPick={(type) => onAppendBranch(node.id, b.key, type)} />
+                </div>
+              </div>
+            ))}
+          </div>,
+        )
+        return parts
       }
       const next = nextOf(node.id)
       if (next && !contained.has(next.id) && !seen.has(next.id)) {

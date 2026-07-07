@@ -11,7 +11,7 @@ function newNodeId(graph: FlowGraph, prefix = 'n'): string {
   return `${prefix}${index}`
 }
 
-function edgeId(source: string, target: string, branch?: 'true' | 'false'): string {
+function edgeId(source: string, target: string, branch?: string): string {
   return `${source}->${target}${branch ? `:${branch}` : ''}`
 }
 
@@ -32,6 +32,12 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
       return { connectionId: '', toolName: '', args: '{}' }
     case 'http':
       return { method: 'POST', url: '', body: '{{trigger.input}}' }
+    case 'transform':
+      return { fields: [{ name: '', value: '' }] }
+    case 'filter':
+      return { match: 'all', clauses: [{ left: '', op: 'contains', right: '' }] }
+    case 'switch':
+      return { cases: [{ id: 'case1', left: '', op: 'contains', right: '' }] }
     case 'trigger':
       return { trigger: { type: 'manual' } }
   }
@@ -71,7 +77,7 @@ export function insertAgentAfter(graph: FlowGraph, afterId: string, agentId: str
  * Append a step to a condition's true/false branch: at the tail of the existing
  * branch chain, or as the branch's first node when the branch is empty.
  */
-export function appendToBranch(graph: FlowGraph, conditionId: string, branch: 'true' | 'false', type: StepType, agentId?: string): { graph: FlowGraph; nodeId: string } {
+export function appendToBranch(graph: FlowGraph, conditionId: string, branch: string, type: StepType, agentId?: string): { graph: FlowGraph; nodeId: string } {
   const head = graph.edges.find((edge) => edge.source === conditionId && edge.branch === branch)
   if (!head) {
     const { node, extraNodes } = makeNode(graph, type, agentId)

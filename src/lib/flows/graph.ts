@@ -103,13 +103,52 @@ const parallelNode = z.object({
   data: z.object({ label: z.string().optional(),
     note: z.string().optional(), branches: z.array(z.array(z.string())) }),
 })
+// Deterministic "Set fields": build an object from templated assignments. Its
+// output is the assembled object; downstream steps map its fields.
+const transformNode = z.object({
+  id: z.string(),
+  type: z.literal('transform'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    // `value` templates are resolved; JSON-looking results are parsed.
+    fields: z.array(z.object({ name: z.string(), value: z.string() })).default([]),
+    outputFields: z.array(outputFieldSchema).optional(),
+  }),
+})
+// Gate: continues only when the condition passes, else stops the flow (or, in a
+// loop body, drops the current item from the collected results).
+const filterNode = z.object({
+  id: z.string(),
+  type: z.literal('filter'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    match: z.enum(['all', 'any']).optional(),
+    clauses: z.array(conditionClauseSchema).optional(),
+  }),
+})
+// Multi-way branch: the first case whose condition matches routes to its edge
+// (branch=case id); an unmatched signal follows the `default` edge.
+const switchNode = z.object({
+  id: z.string(),
+  type: z.literal('switch'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    cases: z.array(z.object({ id: z.string(), label: z.string().optional(), left: z.string(), op: z.enum(CONDITION_OPS), right: z.string() })).default([]),
+  }),
+})
 
-export const flowNodeSchema = z.discriminatedUnion('type', [triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode])
+export const flowNodeSchema = z.discriminatedUnion('type', [
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode,
+])
 export const flowEdgeSchema = z.object({
   id: z.string(),
   source: z.string(),
   target: z.string(),
-  branch: z.enum(['true', 'false']).optional(),
+  // 'true'/'false' for a condition; a switch case id or 'default' for a switch.
+  branch: z.string().optional(),
 })
 export const flowGraphSchema = z.object({ nodes: z.array(flowNodeSchema), edges: z.array(flowEdgeSchema) })
 

@@ -1,5 +1,5 @@
 import type { FlowGraph, FlowNode, FlowEdge } from '@/lib/flows/graph'
-import { resolveTemplate, asStructured, evalCondition, type FlowContext } from './context'
+import { resolveTemplate, asStructured, evalCondition, evalClause, type FlowContext } from './context'
 
 export type StepOutcome = {
   nodeId: string
@@ -40,6 +40,8 @@ type NodeResult =
   | { kind: 'stop' }
   | { kind: 'fail'; error: string }
   | { kind: 'pause'; nodeId: string; question?: string }
+  // A filter that didn't pass: drops the current loop item, or ends the main chain.
+  | { kind: 'drop' }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -68,7 +70,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   const maxSteps = opts.maxSteps ?? 100
   const maxLoop = opts.maxLoopIterations ?? 500
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
-  const outgoing = (id: string, branch?: 'true' | 'false'): FlowEdge | undefined =>
+  const outgoing = (id: string, branch?: string): FlowEdge | undefined =>
     graph.edges.find((edge) => edge.source === id && (branch === undefined || edge.branch === branch || edge.branch === undefined))
 
   const steps: StepOutcome[] = []
@@ -120,9 +122,41 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       return { kind: 'stop' }
     }
 
-    if (node.type === 'condition') {
-      // Conditions route on the main chain; inside a body they cannot branch.
+    if (node.type === 'condition' || node.type === 'switch') {
+      // Conditions/switches route on the main chain; inside a body they can't branch.
       return { kind: 'skip' }
+    }
+
+    if (node.type === 'transform') {
+      // Build an object from templated field assignments (deterministic "Set").
+      // A value that parses as JSON (number/bool/object/array) is typed; anything
+      // else stays a string.
+      const output: Record<string, unknown> = {}
+      for (const field of node.data.fields) {
+        if (!field.name) continue
+        const resolved = resolveTemplate(field.value, ctx)
+        let value: unknown = resolved
+        try {
+          value = JSON.parse(resolved)
+        } catch {
+          /* not JSON — keep the string */
+        }
+        output[field.name] = value
+      }
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
+    }
+
+    if (node.type === 'filter') {
+      // Gate: pass through when the condition holds; else drop (loop) / end (chain).
+      const passed = evalCondition(node.data, ctx)
+      if (passed) {
+        emit({ nodeId: node.id, status: 'succeeded', output: true })
+        return { kind: 'ok', output: undefined }
+      }
+      emit({ nodeId: node.id, status: 'skipped', output: false })
+      return { kind: 'drop' }
     }
 
     if (node.type === 'tool' || node.type === 'http') {
@@ -179,13 +213,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length } }
         return execBody(node.data.body, itemCtx)
       })
-      // Propagate the first control signal (stop / fail / pause) from any item.
-      const control = perItem.map((r) => r.control).find((c): c is NodeResult => Boolean(c))
+      // Propagate the first hard control (stop / fail / pause); a 'drop' (filter)
+      // just removes that item from the collected output.
+      const control = perItem.map((r) => r.control).find((c): c is NodeResult => c !== undefined && c.kind !== 'drop')
       if (control) {
         emit({ nodeId: node.id, status: control.kind === 'fail' ? 'failed' : control.kind === 'pause' ? 'waiting' : 'stopped' })
         return control
       }
-      const output = perItem.map((r) => r.output)
+      const output = perItem.filter((r) => r.control?.kind !== 'drop').map((r) => r.output)
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'succeeded', output })
       return { kind: 'ok', output }
@@ -199,12 +234,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
           return { key: branch[0] ?? node.id, res }
         }),
       )
-      const control = results.map((r) => r.res.control).find((c): c is NodeResult => Boolean(c))
+      const control = results.map((r) => r.res.control).find((c): c is NodeResult => c !== undefined && c.kind !== 'drop')
       if (control) {
         emit({ nodeId: node.id, status: control.kind === 'fail' ? 'failed' : control.kind === 'pause' ? 'waiting' : 'stopped' })
         return control
       }
-      const output = Object.fromEntries(results.map((r) => [r.key, r.res.output]))
+      const output = Object.fromEntries(results.filter((r) => r.res.control?.kind !== 'drop').map((r) => [r.key, r.res.output]))
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'succeeded', output })
       return { kind: 'ok', output }
@@ -254,10 +289,21 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       continue
     }
 
+    if (current.type === 'switch') {
+      if (overBudget()) return { status: 'failed', steps, output: lastOutput }
+      // First matching case wins; otherwise follow the 'default' edge.
+      const hit = current.data.cases.find((c) => evalClause({ left: c.left, op: c.op, right: c.right }, ctx))
+      emit({ nodeId: current.id, status: 'succeeded', output: hit?.id ?? 'default' })
+      const edge = outgoing(current.id, hit ? hit.id : 'default')
+      current = edge ? byId.get(edge.target) : undefined
+      continue
+    }
+
     const res = await execNode(current, ctx)
     if (res.kind === 'fail') return { status: 'failed', steps, output: lastOutput }
     if (res.kind === 'pause') return { status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } }
-    if (res.kind === 'stop') return { status: 'succeeded', steps, output: lastOutput }
+    // A stop node or a main-chain filter that didn't pass ends the flow cleanly.
+    if (res.kind === 'stop' || res.kind === 'drop') return { status: 'succeeded', steps, output: lastOutput }
     if (res.kind === 'ok' && res.output !== undefined) lastOutput = res.output
 
     const edge = outgoing(current.id)

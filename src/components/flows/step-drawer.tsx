@@ -9,12 +9,15 @@ import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
 
-type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http'>
+type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'agent', label: 'Run agent' },
   { value: 'tool', label: 'Tool call' },
   { value: 'http', label: 'HTTP request' },
+  { value: 'transform', label: 'Set fields' },
   { value: 'condition', label: 'If / else' },
+  { value: 'switch', label: 'Switch' },
+  { value: 'filter', label: 'Filter' },
   { value: 'loop', label: 'For each' },
   { value: 'parallel', label: 'Parallel' },
   { value: 'stop', label: 'Stop' },
@@ -45,7 +48,7 @@ const smallField =
   'rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
 const labelClass = 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground'
 
-function clausesOf(data: Extract<FlowNode, { type: 'condition' }>['data']): ConditionClause[] {
+function clausesOf(data: { clauses?: ConditionClause[]; left?: string; op?: ConditionOp; right?: string }): ConditionClause[] {
   if (data.clauses && data.clauses.length) return data.clauses
   if (data.left !== undefined || data.right !== undefined)
     return [{ left: data.left ?? '', op: data.op ?? 'contains', right: data.right ?? '' }]
@@ -102,14 +105,31 @@ export function StepDrawer({
         set: (v) => onChange({ ...node, data: { ...node.data, [field]: v } }),
       }
     }
-    if (node.type === 'condition') {
-      const m = activeField.match(/^cond\.(\d+)\.(left|right)$/)
+    if (node.type === 'condition' || node.type === 'filter') {
+      const m = activeField.match(/^(?:cond|filt)\.(\d+)\.(left|right)$/)
       const i = m ? Number(m[1]) : 0
       const side = (m ? m[2] : 'left') as 'left' | 'right'
       const clauses = clausesOf(node.data)
       return {
         get: () => clauses[i]?.[side] ?? '',
-        set: (v) => onChange({ ...node, data: { ...node.data, clauses: clauses.map((c, j) => (j === i ? { ...c, [side]: v } : c)), left: undefined, op: undefined, right: undefined } }),
+        set: (v) => onChange({ ...node, data: { ...node.data, clauses: clauses.map((c, j) => (j === i ? { ...c, [side]: v } : c)) } } as FlowNode),
+      }
+    }
+    if (node.type === 'transform') {
+      const m = activeField.match(/^xf\.(\d+)$/)
+      const i = m ? Number(m[1]) : 0
+      return {
+        get: () => node.data.fields[i]?.value ?? '',
+        set: (v) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, value: v } : f)) } }),
+      }
+    }
+    if (node.type === 'switch') {
+      const m = activeField.match(/^sw\.(\d+)\.(left|right)$/)
+      const i = m ? Number(m[1]) : 0
+      const side = (m ? m[2] : 'left') as 'left' | 'right'
+      return {
+        get: () => node.data.cases[i]?.[side] ?? '',
+        set: (v) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((c, j) => (j === i ? { ...c, [side]: v } : c)) } }),
       }
     }
     return null
@@ -480,6 +500,100 @@ export function StepDrawer({
               </select>
             </div>
             <p className="text-xs text-muted-foreground">Calls an external URL (public hosts only). The response body becomes this step&apos;s output.</p>
+          </div>
+        )}
+
+        {node.type === 'transform' && (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">Build an object from templated fields. Later steps map its output like any step.</p>
+            {node.data.fields.map((field, i) => (
+              <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
+                <div className="flex gap-1.5">
+                  <input
+                    className={`${smallField} flex-1`}
+                    value={field.name}
+                    placeholder="fieldName"
+                    onChange={(e) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, name: e.target.value } : f)) } })}
+                  />
+                  <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, fields: node.data.fields.filter((_, j) => j !== i) } })} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove field">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+                <input
+                  className={`${smallField} w-full`}
+                  value={field.value}
+                  placeholder="value or {{step.n1.output.field}}"
+                  onFocus={focusField(`xf.${i}`)}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, value: e.target.value } : f)) } })}
+                />
+              </div>
+            ))}
+            <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, fields: [...node.data.fields, { name: '', value: '' }] } })} className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+              <Plus className="h-3.5 w-3.5" /> Add field
+            </button>
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
+              <DataTree fields={dataFields} onInsert={insertToken} />
+            </div>
+          </div>
+        )}
+
+        {node.type === 'filter' && (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">Continue only when this passes. Inside a For-each, a failing item is dropped from the results.</p>
+            <select className={fieldClass} value={node.data.match ?? 'all'} onChange={(e) => onChange({ ...node, data: { ...node.data, match: e.target.value as 'all' | 'any', clauses: clausesOf(node.data) } })}>
+              <option value="all">Match all (AND)</option>
+              <option value="any">Match any (OR)</option>
+            </select>
+            {clausesOf(node.data).map((clause, i) => {
+              const clauses = clausesOf(node.data)
+              const update = (next: ConditionClause[]) => onChange({ ...node, data: { ...node.data, clauses: next } })
+              return (
+                <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
+                  <input className={`${smallField} w-full`} value={clause.left} placeholder="{{item.score}}" onFocus={focusField(`filt.${i}.left`)} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))} />
+                  <div className="flex gap-1.5">
+                    <select className={smallField} value={clause.op} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}>
+                      {CONDITION_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
+                    </select>
+                    <input className={`${smallField} flex-1`} value={clause.right} placeholder="80" onFocus={focusField(`filt.${i}.right`)} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, right: e.target.value } : c)))} />
+                    {clauses.length > 1 && (
+                      <button type="button" onClick={() => update(clauses.filter((_, j) => j !== i))} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove condition"><Trash2 className="h-4 w-4" /></button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, clauses: [...clausesOf(node.data), { left: '', op: 'contains', right: '' }] } })} className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+              <Plus className="h-3.5 w-3.5" /> Add condition
+            </button>
+            <div><p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p><DataTree fields={dataFields} onInsert={insertToken} /></div>
+          </div>
+        )}
+
+        {node.type === 'switch' && (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">The first matching case routes the flow; anything unmatched follows the <strong>default</strong> branch on the canvas.</p>
+            {node.data.cases.map((c, i) => (
+              <div key={c.id} className="space-y-1.5 rounded-lg border border-border/70 p-2">
+                <div className="flex gap-1.5">
+                  <input className={`${smallField} flex-1`} value={c.label ?? ''} placeholder={`Case ${i + 1} label`} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) } })} />
+                  {node.data.cases.length > 1 && (
+                    <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, cases: node.data.cases.filter((_, j) => j !== i) } })} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove case"><Trash2 className="h-4 w-4" /></button>
+                  )}
+                </div>
+                <input className={`${smallField} w-full`} value={c.left} placeholder="{{step.n1.output.tier}}" onFocus={focusField(`sw.${i}.left`)} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, left: e.target.value } : x)) } })} />
+                <div className="flex gap-1.5">
+                  <select className={smallField} value={c.op} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, op: e.target.value as ConditionOp } : x)) } })}>
+                    {CONDITION_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
+                  </select>
+                  <input className={`${smallField} flex-1`} value={c.right} placeholder="enterprise" onFocus={focusField(`sw.${i}.right`)} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, right: e.target.value } : x)) } })} />
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, cases: [...node.data.cases, { id: `case${node.data.cases.length + 1}-${Math.random().toString(36).slice(2, 6)}`, left: '', op: 'contains', right: '' }] } })} className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+              <Plus className="h-3.5 w-3.5" /> Add case
+            </button>
+            <div><p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p><DataTree fields={dataFields} onInsert={insertToken} /></div>
           </div>
         )}
 
