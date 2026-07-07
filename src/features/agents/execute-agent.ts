@@ -16,6 +16,7 @@ import { getGraphRagStore } from '@/lib/rag/get-store'
 import { indexExecution } from '@/lib/rag/indexer'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
+import { isStrataUrl, selectedStrataServers } from '@/lib/mcp/strata'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailTools } from '@/lib/integrations/email'
@@ -365,11 +366,16 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   }
 
   // ---- Per-org MCP connections (all active connections, any authType) ------
-  // These are available to every agent in the org regardless of the providers
-  // list; a failing/unreachable server must NOT abort the run or block others.
-  const connections = await prisma.mcpConnection.findMany({
+  // Custom MCP connections load for every agent regardless of the providers
+  // list — EXCEPT Klavis Strata, which is opt-in per agent: its ~90 tools would
+  // otherwise all be live at once. An agent gets Strata's meta-tools only when
+  // it has selected at least one `strata:<server>`; the selected set scopes it
+  // (see the system-prompt note added in the run). A failing/unreachable server
+  // must NOT abort the run or block others.
+  const strataSelected = selectedStrataServers(providers)
+  const connections = (await prisma.mcpConnection.findMany({
     where: { organizationId, isActive: true },
-  })
+  })).filter((conn) => !isStrataUrl(conn.serverUrl) || strataSelected.length > 0)
 
   // Discover all org MCP connections in parallel (cached per server URL); token
   // refresh + client build happen per-connection, discovery is cached. Failures
@@ -694,6 +700,13 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const toolQuery = [agent.objective, data.input].filter(Boolean).join('\n')
     const { tools, bindings } = await loadTools(organizationId, providers, userId, toolQuery)
     let system = buildAgentSystemPrompt(agent.objective, skillIds)
+
+    // Scope Klavis Strata to the servers this agent selected, so its discovery/
+    // execute meta-tools only reach the intended tools rather than all ~90.
+    const strataScope = selectedStrataServers(providers)
+    if (strataScope.length) {
+      system += `\nThrough the Klavis Strata meta-tools, use ONLY these servers: ${strataScope.join(', ')}. When calling the discovery and execute_action tools, restrict server_names to this list and do not use other Strata servers.`
+    }
 
     // Graph-RAG: give the agent correlated context (Sales AI signals,
     // integration/MCP data from prior runs, related accounts/opps) before it

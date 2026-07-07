@@ -1,6 +1,5 @@
-import { prisma } from '@/lib/prisma'
 import { cacheGet, cacheSet } from '@/lib/cache'
-import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
+import { getOrgStrataConnection, getStrataServerNames } from '@/lib/mcp/strata'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
 
 /**
@@ -23,12 +22,6 @@ type CatalogEntry = { name: string; description?: string; toolCount?: number }
 // Klavis's public server catalog (names/descriptions) is static; cache 24h.
 const CATALOG_TTL_MS = 24 * 60 * 60 * 1000
 const CATALOG_CACHE_KEY = 'klavis:server-catalog:v1'
-
-// The org's connected-server list changes only when tools are added/removed in
-// the Klavis dashboard; a short-ish TTL keeps the page snappy without pinning
-// stale data for long.
-const STRATA_LIST_TTL_MS = 10 * 60 * 1000
-const strataListKey = (connectionId: string) => `strata:servers:${connectionId}`
 
 async function klavisCatalog(): Promise<Map<string, CatalogEntry>> {
   const cached = await cacheGet<CatalogEntry[]>(CATALOG_CACHE_KEY)
@@ -61,27 +54,12 @@ async function klavisCatalog(): Promise<Map<string, CatalogEntry>> {
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   // The org's Strata connection, if one exists (created on the MCP Servers page).
-  const connection = await prisma.mcpConnection.findFirst({
-    where: { organizationId: auth.organizationId, isActive: true, serverUrl: { contains: 'strata.klavis.ai' } },
-    orderBy: { createdAt: 'desc' },
-  })
+  const connection = await getOrgStrataConnection(auth.organizationId)
   if (!connection) return { success: true, strata: false as const, servers: [] }
 
-  // Ask Strata itself which servers are behind this connection.
-  let serverNames = await cacheGet<string[]>(strataListKey(connection.id))
-  if (!serverNames) {
-    try {
-      const client = new McpClient(mcpConfigFromConnection(connection))
-      const result = (await client.executeTool(connection.serverUrl, 'discover_server_categories_or_actions', {})) as {
-        content?: Array<{ type: string; text?: string }>
-      }
-      const text = result?.content?.find((c) => c.type === 'text')?.text || '{}'
-      const parsed = JSON.parse(text) as { servers?: Record<string, unknown> }
-      serverNames = Object.keys(parsed.servers ?? {})
-      if (serverNames.length) await cacheSet(strataListKey(connection.id), serverNames, STRATA_LIST_TTL_MS)
-    } catch {
-      return { success: true, strata: true as const, connectionName: connection.name, servers: [], error: 'Could not reach the Strata endpoint.' }
-    }
+  const serverNames = await getStrataServerNames(connection)
+  if (!serverNames.length) {
+    return { success: true, strata: true as const, connectionName: connection.name, servers: [], error: 'Could not reach the Strata endpoint.' }
   }
 
   const catalog = await klavisCatalog()

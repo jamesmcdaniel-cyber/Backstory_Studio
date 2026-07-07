@@ -16,7 +16,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Pagination, paginate } from '@/components/ui/pagination'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { IntegrationChip } from '@/components/integrations/integration-chip'
 import { cn } from '@/lib/utils'
 
 /** Cards per page on the Templates and Skills grids. */
@@ -80,44 +80,6 @@ function categoryIcon(category: string) {
   if (c.includes('sales') || c.includes('digest') || c.includes('revenue')) return TrendingUp
   if (c.includes('alert') || c.includes('notif') || c.includes('signal')) return Bell
   return Sparkles
-}
-
-// Map an integration display name ("Slack", "Email", "Backstory MCP") to a
-// logo slug so IntegrationLogo can render the real brand mark. Anything
-// unmapped (custom tools) falls through to its initial tile.
-function integrationSlug(name: string): string | null {
-  const n = name.toLowerCase()
-  if (n.includes('backstory')) return 'backstory'
-  if (n.includes('slack')) return 'slack'
-  if (n.includes('salesforce')) return 'salesforce'
-  if (n.includes('hubspot')) return 'hubspot'
-  if (n.includes('gmail') || n.includes('email') || n.includes('mail')) return 'gmail'
-  if (n.includes('notion')) return 'notion'
-  if (n.includes('jira')) return 'jira'
-  if (n.includes('linear')) return 'linear'
-  if (n.includes('github')) return 'github'
-  if (n.includes('asana')) return 'asana'
-  if (n.includes('zendesk')) return 'zendesk'
-  if (n.includes('airtable')) return 'airtable'
-  if (n.includes('monday')) return 'monday'
-  if (n.includes('teams')) return 'microsoftteams'
-  if (n.includes('zoom')) return 'zoom'
-  if (n.includes('calendar')) return 'googlecalendar'
-  if (n.includes('sheet')) return 'googlesheets'
-  if (n.includes('drive')) return 'googledrive'
-  if (n.includes('confluence')) return 'confluence'
-  if (n.includes('clickup')) return 'clickup'
-  if (n.includes('trello')) return 'trello'
-  return null
-}
-
-function IntegrationChip({ name }: { name: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 py-1 pl-1 pr-2.5 text-xs font-medium text-foreground/80">
-      <IntegrationLogo name={name} slug={integrationSlug(name)} className="h-4 w-4" />
-      {name}
-    </span>
-  )
 }
 
 function ExplorePage() {

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
 import { granolaConfigured } from '@/lib/integrations/granola'
+import { getOrgStrataConnection, getStrataServerNames, isStrataUrl, STRATA_KEY_PREFIX } from '@/lib/mcp/strata'
 import {
   BUILTIN_CONNECTORS,
   fromNangoProviderKey,
@@ -29,10 +30,10 @@ type ToolChip = { key: string; label: string; slug: string; connected: boolean }
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const organizationId = auth.organizationId
-  const [connections, hasGranola, nango, klavis] = await Promise.all([
+  const [connectionsRaw, hasGranola, nango, klavis, strataConnection] = await Promise.all([
     prisma.mcpConnection.findMany({
       where: { organizationId, isActive: true },
-      select: { id: true, name: true },
+      select: { id: true, name: true, serverUrl: true },
       orderBy: { createdAt: 'desc' },
     }),
     granolaConfigured(organizationId),
@@ -44,7 +45,23 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
       where: { organizationId, isActive: true },
       select: { agentType: true },
     }),
+    getOrgStrataConnection(organizationId),
   ])
+
+  // The Strata connection is surfaced as individual per-server chips below, not
+  // as one opaque "connection" chip.
+  const connections = connectionsRaw.filter((c) => !isStrataUrl(c.serverUrl))
+
+  // Each Strata server is an attachable tool keyed `strata:<server>`. Selecting
+  // some scopes the agent to only those (see loadTools); selecting none means
+  // the agent gets no Strata tools — so agents no longer carry all 90 at once.
+  const strataServers = strataConnection ? await getStrataServerNames(strataConnection) : []
+  const strataTools: ToolChip[] = strataServers.map((name) => ({
+    key: `${STRATA_KEY_PREFIX}${name}`,
+    label: name.replace(/\b\w/g, (ch) => ch.toUpperCase()),
+    slug: name.toLowerCase().replace(/[^a-z0-9]+/g, ''),
+    connected: true,
+  }))
 
   // Merge planes, deduping by lowercased key and OR-ing connected state. Builtins
   // are added first so their canonical labels/keys (Slack/Email/Granola) win.
@@ -84,6 +101,7 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
   return {
     success: true,
     tools,
+    strataTools,
     connections: connections.map((c) => ({ id: c.id, name: c.name })),
   }
 })

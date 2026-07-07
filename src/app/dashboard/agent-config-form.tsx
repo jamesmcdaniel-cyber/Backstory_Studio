@@ -44,6 +44,7 @@ type ConnectionIntegration = {
 
 type AvailableIntegrations = {
   tools: ToolChip[]
+  strataTools: ToolChip[]
   connections: ConnectionIntegration[]
 }
 
@@ -262,6 +263,7 @@ export function AgentConfigForm({
   const baselineRef = useRef<string>(JSON.stringify(emptyDraft))
   const [skillNames, setSkillNames] = useState<Record<string, string>>({})
   const [availableIntegrations, setAvailableIntegrations] = useState<AvailableIntegrations | null>(null)
+  const [strataQuery, setStrataQuery] = useState('')
   const [runs, setRuns] = useState<any[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
 
@@ -304,7 +306,7 @@ export function AgentConfigForm({
         .then((res) => res.json())
         .then((data) => {
           if (cancelled || !data.success) return
-          setAvailableIntegrations({ tools: data.tools ?? [], connections: data.connections ?? [] })
+          setAvailableIntegrations({ tools: data.tools ?? [], strataTools: data.strataTools ?? [], connections: data.connections ?? [] })
         })
         .catch(() => {})
     }
@@ -566,6 +568,53 @@ export function AgentConfigForm({
                 })}
               </div>
             )}
+
+            {/* Klavis Strata catalogue — searchable; each server is opt-in so an
+                agent carries only the tools it needs, not all of them. */}
+            {availableIntegrations.strataTools.length > 0 && (
+              <div className="space-y-2 rounded-lg border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium text-foreground">
+                    Klavis tools
+                    {(() => {
+                      const n = draft.integrations.filter((k) => k.toLowerCase().startsWith('strata:')).length
+                      return n > 0 ? <span className="ml-1 text-muted-foreground">· {n} attached</span> : null
+                    })()}
+                  </p>
+                  <Input
+                    value={strataQuery}
+                    onChange={(event) => setStrataQuery(event.target.value)}
+                    placeholder="Search Klavis tools"
+                    className="h-8 w-48 text-xs"
+                  />
+                </div>
+                <div className="flex max-h-48 flex-wrap gap-2 overflow-y-auto">
+                  {availableIntegrations.strataTools
+                    .filter((t) => !strataQuery.trim() || t.label.toLowerCase().includes(strataQuery.trim().toLowerCase()))
+                    .slice(0, 60)
+                    .map((t) => {
+                      const selected = draft.integrations.includes(t.key)
+                      return (
+                        <button
+                          key={t.key}
+                          type="button"
+                          onClick={() => toggleIntegration(t.key)}
+                          className={cn(
+                            'flex items-center gap-1.5 rounded-full border py-1 pl-1.5 pr-3 text-xs transition-colors duration-150',
+                            selected
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-transparent text-muted-foreground hover:border-primary hover:text-foreground',
+                          )}
+                        >
+                          <IntegrationLogo slug={t.slug} name={t.label} className="h-4 w-4 bg-white/70" />
+                          {t.label}
+                        </button>
+                      )
+                    })}
+                </div>
+              </div>
+            )}
+
             <p className="text-xs text-muted-foreground">
               Click a tool to attach it to this agent — a green dot means it&apos;s connected and
               ready, but the agent only uses tools you attach here.

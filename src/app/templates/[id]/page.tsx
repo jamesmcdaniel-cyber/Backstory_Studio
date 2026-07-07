@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { IntegrationChip } from '@/components/integrations/integration-chip'
 
 type Template = {
   id: string
@@ -65,9 +65,14 @@ export default function TemplateDetails() {
               <Button onClick={createAgent} loading={creating}>{creating ? 'Creating…' : 'Use template'}</Button>
             </div>
             <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm shadow-1">{template.instructions}</pre>
-            <div className="flex flex-wrap gap-2">
-              {template.integrations.map((integration) => <Badge key={integration} variant="outline">{integration}</Badge>)}
-            </div>
+            {template.integrations.length > 0 && (
+              <div>
+                <p className="eyebrow mb-2">Requires</p>
+                <div className="flex flex-wrap gap-2">
+                  {template.integrations.map((integration) => <IntegrationChip key={integration} name={integration} />)}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
