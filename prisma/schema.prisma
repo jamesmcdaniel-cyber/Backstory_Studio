@@ -573,6 +573,67 @@ model IntegrationSecret {
   @@map("integration_secrets")
 }
 
+/// A visual agent pipeline: a graph of steps, each running a workspace agent
+/// via runAgentExecution. Distinct from WorkflowStep/WorkflowEvent (those are a
+/// single agent's internal tool-call trace). See docs/superpowers/specs.
+model Flow {
+  id             String   @id @default(cuid())
+  name           String
+  description    String   @default("")
+  status         String   @default("DRAFT") // DRAFT | ACTIVE | DISABLED
+  trigger        Json     @default("{}") // { type: 'manual'|'schedule'|'signal', ... }
+  graph          Json     @default("{}") // { nodes: [...], edges: [...] }
+  visibility     String   @default("shared")
+  organizationId String   @db.Uuid
+  userId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  runs FlowRun[]
+
+  @@index([organizationId, updatedAt])
+  @@map("flows")
+}
+
+model FlowRun {
+  id             String    @id @default(cuid())
+  flowId         String
+  status         String    @default("running") // running | succeeded | failed | waiting
+  trigger        Json      @default("{}")
+  input          Json      @default("{}")
+  output         Json?
+  error          String?
+  startedAt      DateTime  @default(now())
+  finishedAt     DateTime?
+  organizationId String    @db.Uuid
+  userId         String?
+
+  flow  Flow          @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  steps FlowRunStep[]
+
+  @@index([flowId, startedAt])
+  @@map("flow_runs")
+}
+
+model FlowRunStep {
+  id               String    @id @default(cuid())
+  flowRunId        String
+  nodeId           String
+  agentExecutionId String?
+  order            Int       @default(0)
+  status           String    @default("queued") // queued | running | succeeded | failed | skipped | waiting
+  input            Json      @default("{}")
+  output           Json?
+  error            String?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+
+  run FlowRun @relation(fields: [flowRunId], references: [id], onDelete: Cascade)
+
+  @@index([flowRunId, order])
+  @@map("flow_run_steps")
+}
+
 enum Plan {
   TRIAL
   STARTER
