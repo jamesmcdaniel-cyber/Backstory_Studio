@@ -43,6 +43,9 @@ export default function FlowBuilder() {
   const [name, setName] = useState('')
   const [graph, setGraph] = useState<FlowGraph>(emptyGraph())
   const [status, setStatus] = useState('draft')
+  const [version, setVersion] = useState(1)
+  const [published, setPublished] = useState(false)
+  const [publishing, setPublishing] = useState(false)
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -70,6 +73,8 @@ export default function FlowBuilder() {
           setName(flow.name)
           setGraph(flow.graph && flow.graph.nodes ? flow.graph : emptyGraph())
           setStatus(flow.status)
+          setVersion(flow.version ?? 1)
+          setPublished(Boolean(flow.published))
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
       })
@@ -114,6 +119,32 @@ export default function FlowBuilder() {
       setSaving(false)
     }
   }, [id, name, graph, status])
+
+  const publish = useCallback(
+    async (revert = false) => {
+      setPublishing(true)
+      try {
+        if (!revert && !(await save())) return
+        const response = await fetch(`/api/flows/${id}/publish`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revert }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          toast.error(data.error || 'Could not publish.')
+          return
+        }
+        if (revert && data.flow?.graph) setGraph(data.flow.graph)
+        setVersion(data.flow?.version ?? version)
+        setPublished(Boolean(data.flow?.published))
+        toast.success(revert ? 'Reverted to the published version.' : `Published v${data.flow?.version}.`)
+      } finally {
+        setPublishing(false)
+      }
+    },
+    [id, save, version],
+  )
 
   const pollRuns = useCallback(() => {
     const tick = async () => {
@@ -230,6 +261,14 @@ export default function FlowBuilder() {
         <Button variant="outline" size="sm" onClick={save} loading={saving}>
           <Save className="mr-1.5 h-4 w-4" /> Save
         </Button>
+        <Button variant="outline" size="sm" onClick={() => publish(false)} loading={publishing} title={published ? `Published v${version}` : 'Not yet published'}>
+          {published ? `Publish v${version + 1}` : 'Publish'}
+        </Button>
+        {published && (
+          <Button variant="ghost" size="sm" onClick={() => publish(true)} title="Discard draft changes and restore the published version">
+            Revert
+          </Button>
+        )}
         <Button size="sm" onClick={run} disabled={running}>
           {running ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />} Run
         </Button>

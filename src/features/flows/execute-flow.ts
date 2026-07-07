@@ -11,6 +11,9 @@ export type FlowExecutionJob = {
   flowRunId?: string
   // Resume a paused run: the user's reply to the ask-user step that paused it.
   reply?: string
+  // Scheduled/triggered runs execute the PUBLISHED graph; a manual builder run
+  // executes the working draft so you can test before publishing.
+  usePublished?: boolean
 }
 
 function jsonValue(value: unknown) {
@@ -27,7 +30,8 @@ export async function runFlowExecution(
 ): Promise<{ flowRunId: string; status: string; output: unknown }> {
   const flow = await prisma.flow.findFirst({ where: { id: job.flowId, organizationId: job.organizationId } })
   if (!flow) throw new Error('Flow not found')
-  const graph = flowGraphSchema.parse(flow.graph)
+  const source = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
+  const graph = flowGraphSchema.parse(source)
   const input = job.input ?? ''
 
   const resuming = Boolean(job.flowRunId && job.reply !== undefined)
@@ -38,6 +42,7 @@ export async function runFlowExecution(
           flowId: flow.id,
           status: 'running',
           input: { prompt: input },
+          graphSnapshot: jsonValue(graph),
           organizationId: job.organizationId,
           userId: job.userId,
         },

@@ -223,12 +223,14 @@ export async function GET(request: Request) {
         const trigger = flow.trigger as { type?: string } | null
         const schedule = flow.trigger as unknown as AgentSchedule | null
         if (!trigger || trigger.type !== 'schedule' || !schedule || typeof schedule !== 'object') continue
+        // Only PUBLISHED flows run on a schedule — a draft-only flow does not fire.
+        if (flow.publishedGraph == null) continue
         if (!isDue(schedule, flow.runs[0]?.startedAt ?? null, now)) continue
         const owner = flow.userId
           ? await prisma.user.findFirst({ where: { id: flow.userId, organizationId: flow.organizationId, isActive: true } })
           : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })
         if (!owner) continue
-        await runFlowExecution({ flowId: flow.id, organizationId: flow.organizationId, userId: owner.id, input: '' })
+        await runFlowExecution({ flowId: flow.id, organizationId: flow.organizationId, userId: owner.id, input: '', usePublished: true })
         ranFlowIds.push(flow.id)
       } catch (error) {
         apiLogger.error('cron/dispatch: flow dispatch failed, skipping', {
