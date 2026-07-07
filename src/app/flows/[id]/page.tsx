@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, Undo2, Redo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -88,6 +88,46 @@ export default function FlowBuilder() {
   }, [id])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // Undo/redo history over structural graph edits (not per-keystroke field edits).
+  const undoStack = useRef<FlowGraph[]>([])
+  const redoStack = useRef<FlowGraph[]>([])
+  const commitGraph = useCallback(
+    (next: FlowGraph) => {
+      undoStack.current.push(graph)
+      if (undoStack.current.length > 50) undoStack.current.shift()
+      redoStack.current = []
+      setGraph(next)
+    },
+    [graph],
+  )
+  const undo = useCallback(() => {
+    const prev = undoStack.current.pop()
+    if (!prev) return
+    redoStack.current.push(graph)
+    setGraph(prev)
+    setSelectedId(null)
+  }, [graph])
+  const redo = useCallback(() => {
+    const next = redoStack.current.pop()
+    if (!next) return
+    undoStack.current.push(graph)
+    setGraph(next)
+    setSelectedId(null)
+  }, [graph])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo])
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
@@ -225,6 +265,12 @@ export default function FlowBuilder() {
           className="min-w-0 flex-1 rounded-lg bg-transparent px-2 py-1 text-base font-semibold outline-none hover:bg-muted focus:bg-muted"
           placeholder="Untitled flow"
         />
+        <Button variant="ghost" size="icon" onClick={undo} aria-label="Undo" title="Undo (⌘Z)">
+          <Undo2 className="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="icon" onClick={redo} aria-label="Redo" title="Redo (⌘⇧Z)">
+          <Redo2 className="h-4 w-4" />
+        </Button>
         <div className="flex overflow-hidden rounded-lg border border-border">
           {(['build', 'test'] as const).map((m) => (
             <button
@@ -285,7 +331,7 @@ export default function FlowBuilder() {
             onSelect={setSelectedId}
             onInsertAfter={(afterId) => {
               const { graph: next, nodeId } = insertAgentAfter(graph, afterId, agents[0]?.id ?? '')
-              setGraph(next)
+              commitGraph(next)
               setSelectedId(nodeId)
             }}
           />
@@ -299,18 +345,18 @@ export default function FlowBuilder() {
               upstreamNodeIds={upstreamIds}
               insideLoop={insideLoop}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
-              onChangeType={(type) => setGraph((g) => changeNodeType(g, selectedNode.id, type))}
+              onChangeType={(type) => commitGraph(changeNodeType(graph, selectedNode.id, type))}
               onAddStep={
                 selectedNode.type === 'loop' || selectedNode.type === 'parallel'
                   ? () => {
                       const { graph: next, nodeId } = addContainerStep(graph, selectedNode.id)
-                      setGraph(next)
+                      commitGraph(next)
                       setSelectedId(nodeId)
                     }
                   : undefined
               }
               onDelete={() => {
-                setGraph((g) => deleteNode(g, selectedNode.id))
+                commitGraph(deleteNode(graph, selectedNode.id))
                 setSelectedId(null)
               }}
               onClose={() => setSelectedId(null)}
@@ -322,7 +368,7 @@ export default function FlowBuilder() {
           <div className="w-80 shrink-0">
             <CopilotPanel
               onGraph={(next) => {
-                setGraph(next as FlowGraph)
+                commitGraph(next as FlowGraph)
                 setSelectedId(null)
                 setShowCopilot(false)
               }}
