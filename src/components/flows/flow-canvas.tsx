@@ -104,10 +104,13 @@ export function FlowCanvas({
       {spine.map((node, i) => {
         const isTrigger = node.type === 'trigger'
         if (!isTrigger) stepNumber += 1
-        const loopBody =
+        const nestedIds =
           node.type === 'loop'
-            ? node.data.body.map((id) => byId.get(id)).filter((n): n is FlowNode => Boolean(n))
-            : []
+            ? node.data.body
+            : node.type === 'parallel'
+              ? node.data.branches.flat()
+              : []
+        const nested = nestedIds.map((id) => byId.get(id)).filter((n): n is FlowNode => Boolean(n))
         return (
           <Fragment key={node.id}>
             <StepCard
@@ -119,9 +122,9 @@ export function FlowCanvas({
               selected={selectedId === node.id}
               onClick={() => onSelect(node.id)}
             />
-            {loopBody.length > 0 && (
+            {nested.length > 0 && (
               <div className="ml-8 mt-1 space-y-1 border-l-2 border-dashed border-indigo-200 pl-3 dark:border-indigo-500/30">
-                {loopBody.map((body) => (
+                {nested.map((body) => (
                   <StepCard
                     key={body.id}
                     type={body.type}

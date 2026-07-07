@@ -50,15 +50,36 @@ export function updateNode(graph: FlowGraph, updated: FlowNode): FlowGraph {
   return { ...graph, nodes: graph.nodes.map((node) => (node.id === updated.id ? updated : node)) }
 }
 
-/** Change a node's type, resetting its data. Loops get a fresh body agent node. */
+/** Change a node's type, resetting its data. Loops/parallels get a body agent. */
 export function changeNodeType(graph: FlowGraph, id: string, type: FlowNode['type']): FlowGraph {
-  if (type === 'loop') {
+  // Loops and parallels need at least one body/branch step to be runnable.
+  if (type === 'loop' || type === 'parallel') {
     const bodyId = newNodeId(graph, 'b')
-    const bodyNode = { id: bodyId, type: 'agent', data: { agentId: '', input: '{{item}}' } } as FlowNode
-    const nodes = graph.nodes.map((node) => (node.id === id ? ({ id, type, data: defaultData(type, bodyId) } as FlowNode) : node))
+    const bodyNode = {
+      id: bodyId,
+      type: 'agent',
+      data: { agentId: '', input: type === 'loop' ? '{{item}}' : '{{trigger.input}}' },
+    } as FlowNode
+    const data = type === 'loop' ? defaultData('loop', bodyId) : ({ branches: [[bodyId]] } as FlowNode['data'])
+    const nodes = graph.nodes.map((node) => (node.id === id ? ({ id, type, data } as FlowNode) : node))
     return { ...graph, nodes: [...nodes, bodyNode] }
   }
   return { ...graph, nodes: graph.nodes.map((node) => (node.id === id ? ({ id, type, data: defaultData(type) } as FlowNode) : node)) }
+}
+
+/** Append a new agent step to a loop body or a new parallel branch. */
+export function addContainerStep(graph: FlowGraph, containerId: string): { graph: FlowGraph; nodeId: string } {
+  const bodyId = newNodeId(graph, 'b')
+  const container = graph.nodes.find((n) => n.id === containerId)
+  const isLoop = container?.type === 'loop'
+  const bodyNode = { id: bodyId, type: 'agent', data: { agentId: '', input: isLoop ? '{{item}}' : '{{trigger.input}}' } } as FlowNode
+  const nodes = graph.nodes.map((node) => {
+    if (node.id !== containerId) return node
+    if (node.type === 'loop') return { ...node, data: { ...node.data, body: [...node.data.body, bodyId] } }
+    if (node.type === 'parallel') return { ...node, data: { ...node.data, branches: [...node.data.branches, [bodyId]] } }
+    return node
+  })
+  return { graph: { ...graph, nodes: [...nodes, bodyNode] }, nodeId: bodyId }
 }
 
 /** Delete a node, healing the chain (its predecessor connects to its successor). */

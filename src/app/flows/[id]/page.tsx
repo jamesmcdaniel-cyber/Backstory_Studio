@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
-import { insertAgentAfter, updateNode, deleteNode, changeNodeType } from '@/lib/flows/mutate'
+import { insertAgentAfter, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
 import { FlowCanvas } from '@/components/flows/flow-canvas'
 import { StepDrawer } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
@@ -261,6 +261,15 @@ export default function FlowBuilder() {
               insideLoop={insideLoop}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
               onChangeType={(type) => setGraph((g) => changeNodeType(g, selectedNode.id, type))}
+              onAddStep={
+                selectedNode.type === 'loop' || selectedNode.type === 'parallel'
+                  ? () => {
+                      const { graph: next, nodeId } = addContainerStep(graph, selectedNode.id)
+                      setGraph(next)
+                      setSelectedId(nodeId)
+                    }
+                  : undefined
+              }
               onDelete={() => {
                 setGraph((g) => deleteNode(g, selectedNode.id))
                 setSelectedId(null)
