@@ -9,6 +9,8 @@ export type FlowExecutionJob = {
   userId: string
   input?: string
   flowRunId?: string
+  // Resume a paused run: the user's reply to the ask-user step that paused it.
+  reply?: string
 }
 
 function jsonValue(value: unknown) {
@@ -28,6 +30,7 @@ export async function runFlowExecution(
   const graph = flowGraphSchema.parse(flow.graph)
   const input = job.input ?? ''
 
+  const resuming = Boolean(job.flowRunId && job.reply !== undefined)
   const run = job.flowRunId
     ? await prisma.flowRun.update({ where: { id: job.flowRunId }, data: { status: 'running' } })
     : await prisma.flowRun.create({
@@ -39,6 +42,22 @@ export async function runFlowExecution(
           userId: job.userId,
         },
       })
+
+  // Resume state: nodes that already succeeded are skipped (reusing their
+  // stored output); the paused step is re-run with the reply injected.
+  const completed: Record<string, unknown> = {}
+  let resumeNodeId: string | undefined
+  let resumeExecutionId: string | undefined
+  if (resuming) {
+    const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
+    for (const step of priorSteps) {
+      if (step.status === 'succeeded' || step.status === 'skipped') completed[step.nodeId] = step.output
+      if (step.status === 'waiting') {
+        resumeNodeId = step.nodeId
+        resumeExecutionId = step.agentExecutionId ?? undefined
+      }
+    }
+  }
 
   const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
   let order = 0
@@ -78,21 +97,25 @@ export async function runFlowExecution(
       },
     })
     try {
-      const result = (await runAgentExecution({
-        agentId: node.agentId,
-        organizationId: job.organizationId,
-        userId: job.userId,
-        input: node.input,
-      })) as { summary?: string; status?: string; question?: string }
+      // Resuming this node? Re-enter the paused agent execution with the reply.
+      const resumeThis = node.resume && resumeNodeId === node.id && resumeExecutionId
+      const result = (await runAgentExecution(
+        resumeThis
+          ? { agentId: node.agentId, organizationId: job.organizationId, userId: job.userId, executionId: resumeExecutionId, resume: true, reply: job.reply }
+          : { agentId: node.agentId, organizationId: job.organizationId, userId: job.userId, input: node.input },
+      )) as { summary?: string; status?: string; question?: string; executionId?: string }
 
       if (typeof result?.status === 'string' && result.status.startsWith('waiting')) {
-        await prisma.flowRunStep.update({ where: { id: step.id }, data: { status: 'waiting', finishedAt: new Date() } })
+        await prisma.flowRunStep.update({
+          where: { id: step.id },
+          data: { status: 'waiting', agentExecutionId: result.executionId ?? null, finishedAt: new Date() },
+        })
         return { waiting: { status: result.status, question: result.question } }
       }
       const output = result?.summary ?? ''
       await prisma.flowRunStep.update({
         where: { id: step.id },
-        data: { status: 'succeeded', output: jsonValue(output), finishedAt: new Date() },
+        data: { status: 'succeeded', output: jsonValue(output), agentExecutionId: result.executionId ?? null, finishedAt: new Date() },
       })
       return { output }
     } catch (error) {
@@ -105,7 +128,11 @@ export async function runFlowExecution(
     }
   }
 
-  const result = await interpretFlow(graph, input, { runAgent, onStep })
+  const result = await interpretFlow(graph, input, {
+    runAgent,
+    onStep,
+    ...(resuming ? { completed, resumeNodeId } : {}),
+  })
   await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'
   await prisma.flowRun.update({

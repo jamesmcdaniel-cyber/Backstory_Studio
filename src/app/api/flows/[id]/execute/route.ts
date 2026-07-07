@@ -16,7 +16,14 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   })
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
   const body = await request.json().catch(() => ({}))
-  const input = z.object({ input: z.string().optional() }).parse(body).input ?? ''
-  const run = await runFlowExecution({ flowId: id, organizationId: auth.organizationId, userId: auth.dbUser.id, input })
+  const parsed = z.object({ input: z.string().optional(), flowRunId: z.string().optional(), reply: z.string().optional() }).parse(body)
+  const run = await runFlowExecution({
+    flowId: id,
+    organizationId: auth.organizationId,
+    userId: auth.dbUser.id,
+    input: parsed.input ?? '',
+    flowRunId: parsed.flowRunId,
+    reply: parsed.reply,
+  })
   return { success: true, run }
 })

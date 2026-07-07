@@ -8,7 +8,7 @@ export type StepOutcome = {
   error?: string
 }
 export type RunAgentResult = { output?: unknown; error?: string; waiting?: { status: string; question?: string } }
-export type RunAgentFn = (node: { id: string; agentId: string; input: string }) => Promise<RunAgentResult>
+export type RunAgentFn = (node: { id: string; agentId: string; input: string; resume?: boolean }) => Promise<RunAgentResult>
 export type InterpretResult = {
   status: 'succeeded' | 'failed' | 'waiting'
   steps: StepOutcome[]
@@ -21,6 +21,11 @@ type Opts = {
   maxSteps?: number
   maxLoopIterations?: number
   onStep?: (outcome: StepOutcome) => void
+  // Resume support: `completed` maps node ids already finished on a prior run to
+  // their output (they are skipped, not re-run); `resumeNodeId` is the node that
+  // was paused and should re-run with the user's reply injected.
+  completed?: Record<string, unknown>
+  resumeNodeId?: string
 }
 
 // Result of executing a single node — an output, or a control signal that
@@ -77,10 +82,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   ): Promise<RunAgentResult> => {
     const retries = node.data.retries ?? 0
     const timeoutMs = node.data.timeoutMs
+    const resume = opts.resumeNodeId === node.id
     let attempt = 0
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const call = opts.runAgent({ id: node.id, agentId: node.data.agentId, input: resolvedInput })
+    for (;;) {
+      const call = opts.runAgent({ id: node.id, agentId: node.data.agentId, input: resolvedInput, resume })
       const res: RunAgentResult = timeoutMs
         ? await Promise.race([call, sleep(timeoutMs).then((): RunAgentResult => ({ error: `Step timed out after ${timeoutMs}ms` }))])
         : await call
@@ -97,6 +102,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (overBudget()) return { kind: 'fail', error: 'Flow exceeded the maximum number of steps.' }
 
     if (node.type === 'trigger') return { kind: 'skip' }
+
+    // Resume: a node finished on the prior run is reused, not re-executed.
+    if (opts.completed && Object.prototype.hasOwnProperty.call(opts.completed, node.id)) {
+      const output = opts.completed[node.id]
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'skipped', output })
+      return { kind: 'ok', output }
+    }
 
     if (node.type === 'stop') {
       emit({ nodeId: node.id, status: 'stopped', output: node.data.reason ?? 'Flow stopped.' })

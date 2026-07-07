@@ -1047,7 +1047,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
           agentTaskId: agent.id,
           executionId: execution.id,
         })
-        return { status: 'waiting_for_input', question: pendingAsk.question }
+        return { status: 'waiting_for_input', question: pendingAsk.question, executionId: execution.id }
       }
 
       // Suspend for approval: persist state (reusing the pendingQuestion marker,
@@ -1084,7 +1084,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
           agentTaskId: agent.id,
           executionId: execution.id,
         })
-        return { status: 'waiting_for_approval', approvalId: pendingApproval.approvalId }
+        return { status: 'waiting_for_approval', approvalId: pendingApproval.approvalId, executionId: execution.id }
       }
 
       runner.appendToolResults(transcript, results)
@@ -1158,7 +1158,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       ownerUserId: agent.userId ?? null,
       visibility: agent.visibility === 'private' ? 'private' : 'shared',
     }).catch(() => undefined)
-    return output
+    return { ...output, executionId: execution.id }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await prisma.agentExecution.update({

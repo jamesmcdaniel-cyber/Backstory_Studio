@@ -192,6 +192,37 @@ test('multi-criteria condition (AND) routes correctly', async () => {
   assert.equal(result.output, 'HIGH')
 })
 
+test('resume skips completed nodes and re-runs the paused one', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'x' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'ask', input: 'y' } },
+      { id: 'n3', type: 'agent', data: { agentId: 'a3', input: 'got {{step.n2.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'n2' },
+      { id: 'e2', source: 'n2', target: 'n3' },
+    ],
+  }
+  const ran: string[] = []
+  const runAgent: RunAgentFn = async (n) => {
+    ran.push(n.id)
+    if (n.id === 'n2') return { output: n.resume ? 'ANSWERED' : 'ignored' }
+    return { output: n.input }
+  }
+  // Resume: n1 already completed (skipped), n2 is the paused node (re-runs w/ reply).
+  const result = await interpretFlow(graph, '', {
+    runAgent,
+    completed: { n1: 'a1' },
+    resumeNodeId: 'n2',
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(ran, ['n2', 'n3']) // n1 was skipped, not re-run
+  assert.equal(result.output, 'got ANSWERED') // n3 saw the resumed n2 output
+})
+
 test('onStep reports every node including containers', async () => {
   const graph: FlowGraph = {
     nodes: [
