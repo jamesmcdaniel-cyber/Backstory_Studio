@@ -29,6 +29,7 @@ export function serializeAgent(agent: {
     integrations: metadata.integrations || [],
     skills: metadata.skills || [],
     icon: metadata.icon || '',
+    allowSubagents: (metadata as { allowSubagents?: boolean }).allowSubagents === true,
     folder: agent.folder || null,
     visibility: agent.visibility || 'shared',
     status: agent.status.toLowerCase(),

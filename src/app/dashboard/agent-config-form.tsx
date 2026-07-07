@@ -59,6 +59,8 @@ export type AgentDraft = {
   icon: string
   folder: string
   visibility: 'shared' | 'private'
+  /** Lets this agent delegate to other agents via the run_agent tool. */
+  allowSubagents?: boolean
   schedule: {
     type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron' | 'once'
     time?: string
@@ -104,6 +106,7 @@ const emptyDraft: AgentDraft = {
   icon: '🤖',
   folder: '',
   visibility: 'shared',
+  allowSubagents: false,
   schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },
 }
 
@@ -337,6 +340,7 @@ export function AgentConfigForm({
       icon: source.icon || emptyDraft.icon,
       folder: source.folder || '',
       visibility: source.visibility || 'shared',
+      allowSubagents: source.allowSubagents === true,
       schedule: normalizeSchedule({ ...emptyDraft.schedule, ...(source.schedule || {}) }),
     } : {
       ...emptyDraft,
@@ -634,6 +638,22 @@ export function AgentConfigForm({
         ) : (
           <p className="mt-1 text-xs text-muted-foreground">Loading integrations…</p>
         )}
+      </div>
+
+      {/* ── Multi-agent handoff ─────────────────────────────────────── */}
+      <div className="rounded-lg border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>Run other agents</Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Let this agent delegate to your other agents (fan-out or pipeline stages) via a run_agent tool.
+            </p>
+          </div>
+          <Switch
+            checked={draft.allowSubagents === true}
+            onCheckedChange={(on) => setDraft({ ...draft, allowSubagents: on })}
+          />
+        </div>
       </div>
 
       {/* ── Schedule ─────────────────────────────────────────────────── */}

@@ -22,6 +22,7 @@ import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
 import { EmailToolClient, emailTools } from '@/lib/integrations/email'
 import { BUILTIN_CONNECTORS, nangoConnector, isSelected } from '@/lib/connectors/registry'
 import { resolveAgentConnectorKeys } from '@/lib/connectors/agent-connectors'
+import { agentVisibilityScope } from '@/lib/server/visibility'
 import { notify } from '@/lib/notifications/service'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
 import { cacheGet, cacheSet } from '@/lib/cache'
@@ -43,7 +44,16 @@ export type AgentExecutionJob = {
   input?: string
   resume?: boolean
   reply?: string
+  // Multi-agent handoff: depth in the sub-agent chain (0 = top-level) and the
+  // ancestor agent ids, used to bound recursion and prevent cycles.
+  depth?: number
+  ancestorAgentIds?: string[]
 }
+
+// Sub-agent handoff bounds. Kept conservative: sub-runs execute inline within
+// the parent's tool loop, so many/deep runs would blow the run's time budget.
+const MAX_SUBAGENT_DEPTH = 2
+const MAX_SUBAGENTS_PER_RUN = 15
 
 // Minimal interface that both KlavisClient and BackstoryMcpClient satisfy,
 // so ToolBinding.client can hold either without casting.
@@ -706,6 +716,78 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const strataScope = selectedStrataServers(providers)
     if (strataScope.length) {
       system += `\nThrough the Klavis Strata meta-tools, use ONLY these servers: ${strataScope.join(', ')}. When calling the discovery and execute_action tools, restrict server_names to this list and do not use other Strata servers.`
+    }
+
+    // Multi-agent handoff: an opted-in agent can delegate to other agents via a
+    // run_agent tool (fan-out over a set, or sequential pipeline stages). Bounded
+    // by depth, a per-run count cap, and a cycle guard; sub-runs share the org's
+    // token budget. Only offered to top-level/mid-chain runs under the depth cap.
+    const depth = data.depth ?? 0
+    const chain = [...(data.ancestorAgentIds ?? []), agent.id]
+    if (agentMetadata.allowSubagents === true && depth < MAX_SUBAGENT_DEPTH) {
+      const callable = await prisma.agentTask.findMany({
+        where: {
+          organizationId,
+          status: 'ACTIVE',
+          id: { notIn: chain },
+          ...agentVisibilityScope(userId),
+        },
+        select: { id: true, description: true, metadata: true },
+        take: 100,
+      })
+      const nameOf = (m: unknown) => (metadataOf(m).title as string) || ''
+      const roster = callable
+        .map((a) => `- "${nameOf(a.metadata) || a.description}"`)
+        .join('\n')
+      const runAgentTool: ToolDefinition = {
+        name: 'run_agent',
+        description:
+          'Delegate a sub-task to another agent and get its result back. Use this to run a worker agent once per item (fan-out) or to chain a pipeline stage. ' +
+          `You can call it up to ${MAX_SUBAGENTS_PER_RUN} times this run. Available agents:\n${roster || '(none)'}`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            agent: { type: 'string', description: 'The exact name of the agent to run (from the list above).' },
+            input: { type: 'string', description: 'The task/input to give that agent (e.g. the account to score).' },
+          },
+          required: ['agent', 'input'],
+        },
+      }
+      let subRunCount = 0
+      const runAgentClient: McpToolClient = {
+        executeTool: async (_serverUrl, _name, args) => {
+          const wanted = String((args as Record<string, unknown>).agent || '').trim()
+          const subInput = String((args as Record<string, unknown>).input || '').trim()
+          if (!wanted) return { error: 'Provide the name of the agent to run.' }
+          if (subRunCount >= MAX_SUBAGENTS_PER_RUN) {
+            return { error: `Sub-agent limit reached (${MAX_SUBAGENTS_PER_RUN} per run). Summarize what you have instead of running more.` }
+          }
+          const target = callable.find(
+            (a) => a.id === wanted || nameOf(a.metadata).toLowerCase() === wanted.toLowerCase() || a.description.toLowerCase() === wanted.toLowerCase(),
+          )
+          if (!target) return { error: `No agent named "${wanted}" is available to run.` }
+          if (chain.includes(target.id)) return { error: `"${wanted}" is already running upstream — cycles are not allowed.` }
+          subRunCount += 1
+          try {
+            const result = await runAgentExecution({
+              agentId: target.id,
+              organizationId,
+              userId,
+              input: subInput,
+              depth: depth + 1,
+              ancestorAgentIds: chain,
+            })
+            // A completed sub-run returns its output string; a suspended one
+            // (asked the user) returns a status object — surface that plainly.
+            if (typeof result === 'string') return { agent: nameOf(target.metadata) || target.description, output: result }
+            return { agent: wanted, note: 'The sub-agent paused for input, which pipelines do not support. Make it self-sufficient or pass what it needs in the input.' }
+          } catch (error) {
+            return { error: error instanceof Error ? error.message : String(error) }
+          }
+        },
+      }
+      tools.push(runAgentTool)
+      bindings.set('run_agent', { provider: 'agent', serverUrl: '', toolName: 'run_agent', client: runAgentClient })
     }
 
     // Graph-RAG: give the agent correlated context (Sales AI signals,

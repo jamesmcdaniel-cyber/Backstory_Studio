@@ -14,6 +14,7 @@ type Template = {
   integrations: string[]
   model: string
   exampleOutput?: string
+  allowSubagents?: boolean
 }
 
 export default function TemplateDetails() {
@@ -40,6 +41,7 @@ export default function TemplateDetails() {
         instructions: template.instructions,
         integrations: template.integrations,
         model: template.model,
+        allowSubagents: template.allowSubagents === true,
         schedule: { type: 'manual', timezone: 'UTC', isActive: false },
       }),
     })

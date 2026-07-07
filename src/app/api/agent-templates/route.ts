@@ -11,6 +11,7 @@ const templateSchema = z.object({
   tags: z.array(z.string()).default([]),
   model: z.string().default('gpt-4o'),
   exampleOutput: z.string().optional(),
+  allowSubagents: z.boolean().optional(),
 })
 
 function serializeTemplate(template: any) {
@@ -25,6 +26,7 @@ function serializeTemplate(template: any) {
     tags: config.tags || [],
     model: config.model || 'gpt-4o',
     exampleOutput: config.exampleOutput || '',
+    allowSubagents: config.allowSubagents === true,
     custom: true,
   }
 }
@@ -687,7 +689,7 @@ const builtInTemplates = [
     "name": "SalesAI Upsell Engine",
     "description": "Identifies and prioritizes SalesAI upsell targets with readiness scores, competitive-risk flags, and a ranked Top-20 motion plan.",
     "category": "Pipeline & Forecasting",
-    "instructions": "You are the SalesAI Upsell Engine. Find and rank the best accounts to expand SalesAI into, then deliver a sales-ready motion plan.\n\nBefore running, ask the user for: (1) the target segment — default \"Data Foundation + EDB only\" accounts (low-hanging fruit); stretch is \"ClosePlan-only\" customers such as Seismic, CRWD, ZS, PANW — and (2) the Slack channel to post to.\n\nSteps:\n1. Pull the account/opportunity/engagement book from the Backstory MCP (Sales AI). If Snowflake is connected, join product-usage and feature-adoption data via a read query.\n2. Filter to the target segment.\n3. Score each account's SalesAI upsell readiness 0-100 across four factors: data quality/coverage, feature maturity/adoption, AI use-case fit, and account health (engagement velocity, ARR trend). Weight and explain each.\n4. Detect risk per account: churn signals, competitive displacement threats, and win/loss patterns — flag anything that would shrink the deal cycle.\n5. Rank the Top 20 targets. For each: readiness score, the 1-2 decision-makers to engage, the best-fit use case, and the single next action.\n6. Compose a concise, scannable brief and post it to the chosen Slack channel. Include a 4-week deployment roadmap for the top 3.\n\nBe honest about data gaps. State counts precisely (\"top 20 of 142 in-segment\"). Do not fabricate scores — derive them from the retrieved data.",
+    "instructions": "You are the SalesAI Upsell Engine — an orchestrator. Find and rank the best accounts to expand SalesAI into, then deliver a sales-ready motion plan.\n\nBefore running, ask the user for: (1) the target segment — default \"Data Foundation + EDB only\" accounts (low-hanging fruit); stretch is \"ClosePlan-only\" customers such as Seismic, CRWD, ZS, PANW — and (2) the Slack channel to post to.\n\nSteps:\n1. Pull the in-segment account list from the Backstory MCP (Sales AI). If Snowflake is connected, join product-usage/feature-adoption data via a read query.\n2. For each candidate account, delegate scoring to the \"Upsell Account Scorer\" agent using the run_agent tool (pass the account name). It returns a 0-100 readiness score with sub-scores and risk flags. Score up to your per-run sub-agent limit; if the segment is larger, score the most promising first and say how many remain.\n3. Collect the scorecards, rank them, and take the Top 20. For each: readiness score, the 1-2 decision-makers to engage, the best-fit use case, and the single next action.\n4. Compose a concise, scannable brief and post it to the chosen Slack channel, with a 4-week deployment roadmap for the top 3.\n\nBe honest about data gaps and state counts precisely (\"top 20 of 142 in-segment; scored 15\"). Do not fabricate scores — they come from the Account Scorer's tool results.\n\nNote: this agent uses multi-agent handoff — enable \"Run other agents\" in its config, and make sure an \"Upsell Account Scorer\" agent exists (create it from that template).",
     "integrations": [
       "Backstory MCP",
       "Snowflake",
@@ -698,7 +700,8 @@ const builtInTemplates = [
       "weekly"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "SalesAI Upsell Engine — Data Foundation + EDB segment (top 20 of 142)\n\nTop targets by readiness:\n1. ManpowerGroup — 91/100. Data ✅ Features 🟡 Use-case ✅ Health ✅. Engage Olivia Jenkins (EB); use case: real-time analytics. Next: book exec value review.\n2. ABBYY — 84/100. New CISO → security angle. Engage Andrew Wright. Next: discovery on AI use cases.\n3. Five9 — 78/100. Single-product, expanding usage. Cross-sell candidate. Next: usage-based ROI recap.\n\n⚠️ Risk flags: Twitch (competitive mention, -18d exec touch), Slice (renewal overdue, 0% engaged).\n\n4-week roadmap (top 3): W1 discovery · W2 tailored demo · W3 business case · W4 proposal.\nPosted to #salesai-upsell."
+    "exampleOutput": "SalesAI Upsell Engine — Data Foundation + EDB segment (top 20 of 142)\n\nTop targets by readiness:\n1. ManpowerGroup — 91/100. Data ✅ Features 🟡 Use-case ✅ Health ✅. Engage Olivia Jenkins (EB); use case: real-time analytics. Next: book exec value review.\n2. ABBYY — 84/100. New CISO → security angle. Engage Andrew Wright. Next: discovery on AI use cases.\n3. Five9 — 78/100. Single-product, expanding usage. Cross-sell candidate. Next: usage-based ROI recap.\n\n⚠️ Risk flags: Twitch (competitive mention, -18d exec touch), Slice (renewal overdue, 0% engaged).\n\n4-week roadmap (top 3): W1 discovery · W2 tailored demo · W3 business case · W4 proposal.\nPosted to #salesai-upsell.",
+    "allowSubagents": true
   },
   {
     "id": "40-upsell-account-scorer",
@@ -741,6 +744,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         tags: data.tags,
         model: data.model,
         ...(data.exampleOutput ? { exampleOutput: data.exampleOutput } : {}),
+        ...(data.allowSubagents ? { allowSubagents: true } : {}),
       },
       userId: auth.dbUser.id,
       organizationId: auth.organizationId,
@@ -769,6 +773,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ...(body.tags !== undefined && { tags: body.tags }),
         ...(body.model !== undefined && { model: body.model }),
         ...(body.exampleOutput !== undefined && { exampleOutput: body.exampleOutput }),
+        ...(body.allowSubagents !== undefined && { allowSubagents: body.allowSubagents }),
       },
     },
   })

@@ -16,3 +16,5 @@ node_modules/
 .github/instructions/codacy.instructions.md
 .vercel
 .env*
+# Local editor config — mcp.json holds live bearer tokens, never commit it
+.vscode/

@@ -44,6 +44,8 @@ const agentSchema = z.object({
   folder: z.string().trim().max(60).nullish(),
   visibility: z.enum(['shared', 'private']).default('shared'),
   icon: z.string().trim().max(8).optional(),
+  // Lets this agent delegate to other agents via the run_agent tool (pipelines).
+  allowSubagents: z.boolean().optional(),
   schedule: scheduleSchema.default({ type: 'manual', timezone: 'UTC', isActive: false }),
 })
 
@@ -88,6 +90,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         integrations: data.integrations,
         skills: data.skills,
         icon: data.icon || '',
+        allowSubagents: data.allowSubagents === true,
       },
     },
   })
@@ -122,6 +125,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ...(body.integrations !== undefined && { integrations: body.integrations }),
         ...(body.skills !== undefined && { skills: body.skills }),
         ...(body.icon !== undefined && { icon: body.icon }),
+        ...(body.allowSubagents !== undefined && { allowSubagents: body.allowSubagents }),
       },
     },
   })
