@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2 } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ import { insertAgentAfter, updateNode, deleteNode, changeNodeType } from '@/lib/
 import { FlowCanvas } from '@/components/flows/flow-canvas'
 import { StepDrawer } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
+import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import type { StepStatus } from '@/components/flows/step-card'
 
 type Agent = { id: string; title: string }
@@ -48,8 +49,12 @@ export default function FlowBuilder() {
   const [running, setRunning] = useState(false)
   const [mode, setMode] = useState<'build' | 'test'>('build')
   const [showCopilot, setShowCopilot] = useState(false)
+  const [showRuns, setShowRuns] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
+  const [testInput, setTestInput] = useState('')
+  const [runs, setRuns] = useState<{ id: string; status: string; startedAt?: string }[]>([])
+  const [selectedRun, setSelectedRun] = useState<FlowRunDetail | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
@@ -113,8 +118,10 @@ export default function FlowBuilder() {
   const pollRuns = useCallback(() => {
     const tick = async () => {
       const data = await fetch(`/api/flows/${id}/runs`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
-      const latest = data?.latest
+      if (data?.runs) setRuns(data.runs.map((r: { id: string; status: string; startedAt?: string }) => ({ id: r.id, status: r.status, startedAt: r.startedAt })))
+      const latest = data?.latest as FlowRunDetail | null
       if (!latest) return
+      setSelectedRun(latest)
       const map: Record<string, StepStatus> = {}
       for (const step of latest.steps as { nodeId: string; status: StepStatus }[]) map[step.nodeId] = step.status
       setStatusByNode(map)
@@ -128,9 +135,19 @@ export default function FlowBuilder() {
     tick()
   }, [id])
 
+  const selectRun = useCallback(
+    async (runId: string) => {
+      const data = await fetch(`/api/flows/${id}/runs`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
+      const found = (data?.runs as FlowRunDetail[] | undefined)?.find((r) => r.id === runId)
+      if (found) setSelectedRun(found)
+    },
+    [id],
+  )
+
   const run = useCallback(async () => {
     setRunning(true)
     setMode('test')
+    setShowRuns(true)
     setStatusByNode({})
     try {
       if (!(await save())) return
@@ -138,7 +155,7 @@ export default function FlowBuilder() {
       const response = await fetch(`/api/flows/${id}/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ input: testInput }),
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) toast.error(data.error || 'Run failed.')
@@ -149,7 +166,7 @@ export default function FlowBuilder() {
     } finally {
       setRunning(false)
     }
-  }, [id, save, pollRuns])
+  }, [id, save, pollRuns, testInput])
 
   if (loading) {
     return (
@@ -197,6 +214,16 @@ export default function FlowBuilder() {
           <option value="active">Active</option>
           <option value="disabled">Disabled</option>
         </select>
+        <input
+          value={testInput}
+          onChange={(e) => setTestInput(e.target.value)}
+          placeholder="Test input…"
+          title="Value passed to {{trigger.input}} on Run"
+          className="w-40 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:border-indigo-400"
+        />
+        <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
+          <ListChecks className="mr-1.5 h-4 w-4" /> Runs
+        </Button>
         <Button variant="outline" size="sm" onClick={() => setShowCopilot((v) => !v)}>
           <Sparkles className="mr-1.5 h-4 w-4" /> Copilot
         </Button>
@@ -250,6 +277,23 @@ export default function FlowBuilder() {
                 setGraph(next as FlowGraph)
                 setSelectedId(null)
                 setShowCopilot(false)
+              }}
+            />
+          </div>
+        )}
+
+        {showRuns && (
+          <div className="w-80 shrink-0">
+            <RunPanel
+              runs={runs}
+              selected={selectedRun}
+              onSelectRun={selectRun}
+              onClose={() => setShowRuns(false)}
+              labelForNode={(nodeId) => {
+                const node = graph.nodes.find((n) => n.id === nodeId)
+                if (!node) return nodeId
+                if (node.type === 'agent') return node.data.label || agentsById.get(node.data.agentId) || 'Agent step'
+                return node.type.charAt(0).toUpperCase() + node.type.slice(1)
               }}
             />
           </div>
