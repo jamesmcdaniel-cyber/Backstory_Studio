@@ -637,6 +637,43 @@ model FlowRunStep {
   @@map("flow_run_steps")
 }
 
+/// A file uploaded as knowledge for an agent. We store the EXTRACTED TEXT (no
+/// blob storage); the original binary is not retained. Chunks are embedded (when
+/// embeddings are configured) and retrieved into the agent's context at run time.
+model KnowledgeDocument {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  agentId        String? // the agent this knowledge belongs to (null = org-wide)
+  userId         String?
+  filename       String
+  mimeType       String
+  sizeBytes      Int      @default(0)
+  charCount      Int      @default(0)
+  status         String   @default("ready") // ready | failed
+  error          String?
+  createdAt      DateTime @default(now())
+
+  chunks KnowledgeChunk[]
+
+  @@index([organizationId, agentId])
+  @@map("knowledge_documents")
+}
+
+model KnowledgeChunk {
+  id             String  @id @default(cuid())
+  documentId     String
+  organizationId String  @db.Uuid
+  agentId        String?
+  ordinal        Int     @default(0)
+  content        String  @db.Text
+  embedding      Json? // number[] embedding, or null when embeddings are unconfigured
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, agentId])
+  @@map("knowledge_chunks")
+}
+
 enum Plan {
   TRIAL
   STARTER
