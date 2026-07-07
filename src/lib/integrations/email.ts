@@ -35,7 +35,7 @@ export function emailTools(): ToolDefinition[] {
         properties: {
           to: { type: 'string', description: 'recipient email address' },
           subject: { type: 'string' },
-          body: { type: 'string', description: 'plain-text body' },
+          body: { type: 'string', description: 'email body — HTML (preferred) or plain text' },
         },
         required: ['to', 'subject', 'body'],
       },
@@ -63,6 +63,19 @@ export class EmailToolClient {
 
     if (name === 'send') {
       const from = process.env.EMAIL_FROM || 'Backstory <onboarding@resend.dev>'
+      const body = typeof args.body === 'string' ? args.body : String(args.body ?? '')
+
+      // Agents are instructed to compose HTML email bodies; send those as html
+      // (with a tag-stripped plain-text fallback for non-HTML clients). A plain
+      // body still sends as text, so this stays correct either way.
+      const looksHtml = /<[a-z][\s\S]*>/i.test(body)
+      const payload: Record<string, unknown> = { from, to: [args.to], subject: args.subject }
+      if (looksHtml) {
+        payload.html = body
+        payload.text = body.replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim()
+      } else {
+        payload.text = body
+      }
 
       const response = await fetch(RESEND_API_URL, {
         method: 'POST',
@@ -70,12 +83,7 @@ export class EmailToolClient {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          from,
-          to: [args.to],
-          subject: args.subject,
-          text: args.body,
-        }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(30_000),
       })
 
