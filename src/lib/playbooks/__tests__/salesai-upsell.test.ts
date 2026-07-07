@@ -21,8 +21,14 @@ test('buildUpsellGraph produces a schema-valid, fully wired graph', () => {
   assert.deepEqual(chain, ['trigger>pull', 'pull>score_each', 'score_each>brief'])
 })
 
-test('playbook agents carry the strata keys their tools need', () => {
+test('playbook agents carry the connector keys their tools need', () => {
   assert.ok(PLAYBOOK_AGENTS.puller.integrations.includes('strata:snowflake'))
+  assert.ok(PLAYBOOK_AGENTS.puller.integrations.includes('strata:salesforce')) // CRM
   assert.ok(PLAYBOOK_AGENTS.scorer.integrations.includes('strata:snowflake'))
+  assert.ok(PLAYBOOK_AGENTS.scorer.integrations.includes('strata:salesforce')) // CRM
   assert.ok(PLAYBOOK_AGENTS.composer.integrations.includes('strata:slack'))
+  // every agent can hit external REST APIs via the built-in HTTP tool
+  for (const def of Object.values(PLAYBOOK_AGENTS)) {
+    assert.ok(def.integrations.includes('HTTP API'))
+  }
 })

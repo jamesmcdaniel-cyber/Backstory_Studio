@@ -20,6 +20,7 @@ import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/li
 import { isStrataUrl, selectedStrataServers } from '@/lib/mcp/strata'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
+import { HttpToolClient, httpTools } from '@/lib/integrations/http'
 import { EmailToolClient, emailTools } from '@/lib/integrations/email'
 import { BUILTIN_CONNECTORS, nangoConnector, isSelected } from '@/lib/connectors/registry'
 import { resolveAgentConnectorKeys } from '@/lib/connectors/agent-connectors'
@@ -486,6 +487,23 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         provider: 'slack',
         organizationId,
         error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  // ---- HTTP API (built-in) --------------------------------------------------
+  // Lets an agent call external REST/JSON APIs mid-run. Always available (no
+  // credentials to configure); SSRF-guarded + response-capped in the client.
+  const httpConn = BUILTIN_CONNECTORS.find((c) => c.kind === 'builtin' && c.providerId === 'http')!
+  if (isSelected(httpConn, providers)) {
+    const client = new HttpToolClient()
+    for (const def of httpTools()) {
+      discovered.push({
+        name: toolName('http', def.name),
+        description: def.description,
+        inputSchema: def.inputSchema,
+        binding: { provider: 'http', serverUrl: '', toolName: def.name, client },
+        isWrite: httpConn.isWrite,
       })
     }
   }

@@ -84,6 +84,16 @@ export const BUILTIN_CONNECTORS: ConnectorDescriptor[] = [
     matches: has('email'),
     available: () => emailConfigured(),
   },
+  {
+    key: 'HTTP API',
+    label: 'HTTP API',
+    slug: 'http',
+    kind: 'builtin',
+    isWrite: true, // can POST to external systems
+    providerId: 'http',
+    matches: has('http'),
+    available: () => true, // no credentials required; SSRF-guarded at call time
+  },
   // Nango delivery planes (outbound as the acting user). One per capability.
   {
     key: 'slack',

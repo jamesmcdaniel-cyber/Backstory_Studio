@@ -14,27 +14,27 @@ export const PLAYBOOK_AGENTS = {
   puller: {
     title: 'Upsell Candidate Puller',
     description: 'Lists in-segment accounts for the SalesAI upsell motion as strict JSON.',
-    integrations: ['Backstory MCP', 'strata:snowflake'],
+    integrations: ['Backstory MCP', 'strata:snowflake', 'strata:salesforce', 'HTTP API'],
     instructions: [
       'You list candidate accounts for a SalesAI upsell motion. The input names the target segment; when empty, default to accounts that own Data Foundation + EDB but NOT SalesAI (the low-hanging fruit). "ClosePlan-only" means customers whose only product is ClosePlan (e.g. Seismic, CRWD, ZS, PANW).',
-      'Use the Backstory Sales AI tools to pull the account list for the segment. If Snowflake is available through your tools, enrich with product-usage/feature-adoption signals to pre-filter obviously inactive accounts.',
+      'Use the Backstory Sales AI tools to pull the account list for the segment. Cross-check product ownership against the CRM via your Salesforce tools when available. If Snowflake is available through your tools, enrich with product-usage/feature-adoption signals to pre-filter obviously inactive accounts. The http request tool is available for any additional REST API the user points you at.',
       'OUTPUT CONTRACT: respond with ONLY a JSON array of account-name strings — no prose, no markdown fence, max 25 entries, most promising first. Example: ["Seismic","Zscaler","CrowdStrike"]. If you cannot retrieve any accounts, return [] and nothing else.',
     ].join('\n'),
   },
   scorer: {
     title: 'Upsell Account Scorer',
     description: 'Scores one account for SalesAI adoption readiness as strict JSON.',
-    integrations: ['Backstory MCP', 'strata:snowflake'],
+    integrations: ['Backstory MCP', 'strata:snowflake', 'strata:salesforce', 'HTTP API'],
     instructions: [
       'You score ONE account (given as input) for SalesAI adoption readiness.',
-      'Assess from Backstory Sales AI (and Snowflake usage data when available): data quality/maturity, feature adoption baseline, engagement velocity, ARR health, competitive/churn risk signals, and named decision-makers.',
+      'Assess from Backstory Sales AI (and Snowflake usage data when available): data quality/maturity, feature adoption baseline, engagement velocity, ARR health, competitive/churn risk signals, and named decision-makers. Pull CRM context from Salesforce when available: open/closed opportunities, win/loss history, and account owner. The http request tool is available for any additional REST API the user points you at.',
       'OUTPUT CONTRACT: respond with ONLY a JSON object — no prose, no markdown fence — shaped exactly: {"account": string, "score": number (0-100), "subscores": {"dataQuality": number, "featureAdoption": number, "engagement": number, "arrHealth": number}, "risks": string[], "decisionMakers": string[], "useCase": string, "nextAction": string}. Never fabricate: when a dimension is unknowable from your tools, score it conservatively and add a risk note like "no usage data available".',
     ].join('\n'),
   },
   composer: {
     title: 'Upsell Brief Composer',
     description: 'Ranks scorecards, composes the top-20 motion brief, and posts it to Slack.',
-    integrations: ['Slack', 'strata:slack'],
+    integrations: ['Slack', 'strata:slack', 'HTTP API'],
     instructions: [
       'You receive a JSON array of account scorecards (fields: account, score, subscores, risks, decisionMakers, useCase, nextAction). Rank by score and take the top 20.',
       'Compose a skimmable Markdown brief: lead with the headline numbers (accounts scored, average score, #ready-now), then a ranked table (account, score, top risk, decision-maker, next action), then a 4-week deployment roadmap for the top 3 accounts, then honest data-gap notes.',

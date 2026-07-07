@@ -693,7 +693,9 @@ const builtInTemplates = [
     "integrations": [
       "Backstory MCP",
       "strata:snowflake",
-      "strata:slack"
+      "strata:salesforce",
+      "strata:slack",
+      "HTTP API"
     ],
     "tags": [
       "recurring",
@@ -712,7 +714,9 @@ const builtInTemplates = [
     "instructions": "You score ONE account's readiness to expand into SalesAI. Ask for the account name or id if not provided.\n\nUsing the Backstory MCP (and Snowflake product-usage data if connected), assess and return:\n- Overall readiness score 0-100.\n- Four sub-scores (0-100) with one-line rationale each: data quality/coverage, feature maturity/adoption, AI use-case fit, account health.\n- Risk flags: churn signals, competitive threats, win/loss patterns.\n- The single recommended next action and the decision-maker to engage.\n\nDerive every score from retrieved data — never guess. If a factor can't be assessed, say so and lower confidence rather than inventing a number. Keep the output compact and structured so it can feed a ranking step.",
     "integrations": [
       "Backstory MCP",
-      "strata:snowflake"
+      "strata:snowflake",
+      "strata:salesforce",
+      "HTTP API"
     ],
     "tags": [
       "on-demand"
