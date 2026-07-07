@@ -33,11 +33,22 @@ export function integrationSlug(name: string): string | null {
   return null
 }
 
+/** Display label: `strata:snowflake` reads as "Snowflake" while the raw key
+ *  stays intact for connector matching. Non-strata names pass through as-is. */
+function prettyName(name: string): string {
+  if (!name.toLowerCase().startsWith('strata:')) return name
+  return name
+    .slice('strata:'.length)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 export function IntegrationChip({ name }: { name: string }) {
+  const label = prettyName(name)
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 py-1 pl-1 pr-2.5 text-xs font-medium text-foreground/80">
-      <IntegrationLogo name={name} slug={integrationSlug(name)} className="h-4 w-4" />
-      {name}
+      <IntegrationLogo name={label} slug={integrationSlug(label) ?? integrationSlug(name)} className="h-4 w-4" />
+      {label}
     </span>
   )
 }

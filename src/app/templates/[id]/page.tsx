@@ -15,6 +15,8 @@ type Template = {
   model: string
   exampleOutput?: string
   allowSubagents?: boolean
+  // Set on templates that provision a complete multi-step Flow (agents + graph).
+  playbook?: string
 }
 
 export default function TemplateDetails() {
@@ -22,6 +24,7 @@ export default function TemplateDetails() {
   const router = useRouter()
   const [template, setTemplate] = useState<Template | null>(null)
   const [creating, setCreating] = useState(false)
+  const [deploying, setDeploying] = useState(false)
 
   useEffect(() => {
     fetch('/api/agent-templates', { cache: 'no-store' })
@@ -49,6 +52,16 @@ export default function TemplateDetails() {
     if (response.ok) router.push('/dashboard')
   }
 
+  // Playbook templates provision the full motion: agents + a wired Flow.
+  const deployPlaybook = async () => {
+    if (!template?.playbook) return
+    setDeploying(true)
+    const response = await fetch(`/api/playbooks/${template.playbook}`, { method: 'POST' })
+    const data = await response.json().catch(() => ({}))
+    setDeploying(false)
+    if (response.ok && data.flowId) router.push(`/flows/${data.flowId}`)
+  }
+
   return (
     <>
       <div className="mx-auto max-w-3xl space-y-5 p-6">
@@ -65,7 +78,16 @@ export default function TemplateDetails() {
                 <h1 className="text-2xl font-bold">{template.name}</h1>
                 <p className="mt-2 text-gray-600">{template.description}</p>
               </div>
-              <Button onClick={createAgent} loading={creating}>{creating ? 'Creating…' : 'Use template'}</Button>
+              <div className="flex shrink-0 gap-2">
+                {template.playbook && (
+                  <Button onClick={deployPlaybook} loading={deploying}>
+                    {deploying ? 'Deploying…' : 'Deploy as Flow'}
+                  </Button>
+                )}
+                <Button variant={template.playbook ? 'outline' : 'default'} onClick={createAgent} loading={creating}>
+                  {creating ? 'Creating…' : 'Use template'}
+                </Button>
+              </div>
             </div>
             <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm shadow-1">{template.instructions}</pre>
 
