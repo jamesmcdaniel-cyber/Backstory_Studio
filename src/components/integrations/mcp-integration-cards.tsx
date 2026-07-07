@@ -45,7 +45,16 @@ export function MCPIntegrationCards() {
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || 'Connection failed')
       const oauthUrl = result.results?.[0]?.oauthUrl
-      if (oauthUrl) window.open(oauthUrl, '_blank', 'width=600,height=700')
+      if (oauthUrl) {
+        const popup = window.open(oauthUrl, '_blank', 'width=600,height=700')
+        if (!popup) setActionError('Your browser blocked the sign-in popup — allow popups for this site and click Connect again.')
+      } else {
+        // Klavis returns no OAuth URL for providers that aren't OAuth-based
+        // (e.g. Snowflake uses account credentials) or are routed through Strata.
+        // There's no popup to show — the user finishes auth in Klavis directly.
+        const name = provider.charAt(0).toUpperCase() + provider.slice(1)
+        setActionError(`${name} doesn't use a Klavis sign-in popup — finish authenticating it in your Klavis dashboard (for example, Snowflake needs account credentials). It will then show as connected here.`)
+      }
       await refresh() // server cache is busted on connect; pull the fresh status
     } catch (caught) {
       setActionError(caught instanceof Error ? caught.message : 'Connection failed')
