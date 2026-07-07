@@ -728,7 +728,14 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const skillIds = Array.isArray(agentMetadata.skills) ? agentMetadata.skills.map(String) : []
     const toolQuery = [agent.objective, data.input].filter(Boolean).join('\n')
     const { tools, bindings } = await loadTools(organizationId, providers, userId, toolQuery)
-    let system = buildAgentSystemPrompt(agent.objective, skillIds)
+    // Community skills are public-library rows; resolve any attached ids that
+    // aren't built in and compose them the same way. Best-effort.
+    const communitySkills = skillIds.length
+      ? await prisma.sharedSkill
+          .findMany({ where: { id: { in: skillIds }, isActive: true }, select: { id: true, name: true, instructions: true } })
+          .catch(() => [])
+      : []
+    let system = buildAgentSystemPrompt(agent.objective, skillIds, communitySkills)
 
     // Scope Klavis Strata to the servers this agent selected, so its discovery/
     // execute meta-tools only reach the intended tools rather than all ~90.

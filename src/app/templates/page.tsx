@@ -6,8 +6,10 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   Sparkles, TrendingUp, CalendarClock, ShieldAlert, Target,
-  Inbox, LineChart, Bell, Plus,
+  Inbox, LineChart, Bell, Plus, Pencil, Trash2,
 } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -28,9 +30,14 @@ interface TemplateItem {
   name: string
   description: string
   category: string
+  instructions?: string
+  exampleOutput?: string
   integrations?: string[]
   tags?: string[]
   version?: string
+  custom?: boolean
+  mine?: boolean
+  authorName?: string
 }
 
 interface SkillItem {
@@ -41,7 +48,31 @@ interface SkillItem {
   audience: string[]
   tags: string[]
   integrations: string[]
+  instructions?: string
+  custom?: boolean
+  mine?: boolean
+  authorName?: string
 }
+
+/** Shared shape for the create/edit dialog across templates and skills. */
+type AssetDraft = {
+  id?: string
+  kind: 'template' | 'skill'
+  name: string
+  category: string
+  description: string
+  instructions: string
+  tags: string
+  integrations: string
+  exampleOutput: string
+}
+
+const emptyAsset = (kind: 'template' | 'skill'): AssetDraft => ({
+  kind, name: '', category: kind === 'template' ? 'Custom' : 'Community',
+  description: '', instructions: '', tags: '', integrations: '', exampleOutput: '',
+})
+
+const csv = (value: string) => value.split(',').map((s) => s.trim()).filter(Boolean)
 
 interface AgentItem {
   id: string
@@ -101,6 +132,70 @@ function ExplorePage() {
   // Track which skill's dropdown is open
   const [openSkillMenu, setOpenSkillMenu] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  // Create/edit dialog for community templates + skills.
+  const [dialog, setDialog] = useState<AssetDraft | null>(null)
+  const [savingAsset, setSavingAsset] = useState(false)
+
+  const openCreate = (kind: 'template' | 'skill') => setDialog(emptyAsset(kind))
+  const openEditTemplate = (t: TemplateItem) =>
+    setDialog({
+      id: t.id, kind: 'template', name: t.name, category: t.category, description: t.description,
+      instructions: t.instructions ?? '', tags: (t.tags ?? []).join(', '), integrations: (t.integrations ?? []).join(', '),
+      exampleOutput: t.exampleOutput ?? '',
+    })
+  const openEditSkill = (s: SkillItem) =>
+    setDialog({
+      id: s.id, kind: 'skill', name: s.name, category: s.category, description: s.description,
+      instructions: s.instructions ?? '', tags: (s.tags ?? []).join(', '), integrations: (s.integrations ?? []).join(', '),
+      exampleOutput: '',
+    })
+
+  const saveAsset = async () => {
+    if (!dialog || !dialog.name.trim() || !dialog.instructions.trim()) {
+      toast.error('Name and instructions are required.')
+      return
+    }
+    setSavingAsset(true)
+    const url = dialog.kind === 'template' ? '/api/agent-templates' : '/api/skills'
+    const payload =
+      dialog.kind === 'template'
+        ? { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations), exampleOutput: dialog.exampleOutput || undefined }
+        : { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations) }
+    try {
+      const res = await fetch(url, {
+        method: dialog.id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dialog.id ? { id: dialog.id, ...payload } : payload),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Save failed')
+      // Refetch so the new/edited card shows immediately.
+      if (dialog.kind === 'template') {
+        const list = await fetch('/api/agent-templates', { cache: 'no-store' }).then((r) => r.json())
+        setTemplates(list.templates || [])
+      } else {
+        const list = await fetch('/api/skills', { cache: 'no-store' }).then((r) => r.json())
+        setSkills(list.success ? list.skills : [])
+      }
+      toast.success(dialog.id ? 'Saved' : `Published to the community library`)
+      setDialog(null)
+    } catch (e: any) {
+      toast.error(e?.message || 'Could not save')
+    } finally {
+      setSavingAsset(false)
+    }
+  }
+
+  const deleteAsset = async (kind: 'template' | 'skill', id: string, name: string) => {
+    if (!confirm(`Remove "${name}" from the community library?`)) return
+    const url = kind === 'template' ? '/api/agent-templates' : '/api/skills'
+    const res = await fetch(url, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) })
+    if (res.ok) {
+      if (kind === 'template') setTemplates((prev) => prev.filter((t) => t.id !== id))
+      else setSkills((prev) => prev.filter((s) => s.id !== id))
+      toast.success('Removed')
+    } else toast.error('Could not remove')
+  }
 
   const handleTabChange = (value: string) => {
     router.replace(value === 'skills' ? '/templates?tab=skills' : '/templates', { scroll: false })
@@ -247,8 +342,11 @@ function ExplorePage() {
           {/* ── Templates tab ─────────────────────────────────────────────── */}
           <TabsContent value="templates" className="mt-6">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold">Templates</h2>
-              <p className="text-sm text-muted-foreground">Single-task and enhanced templates</p>
+              <div>
+                <h2 className="text-lg font-semibold">Templates</h2>
+                <p className="text-sm text-muted-foreground">Built-in + community templates. Yours are shared publicly.</p>
+              </div>
+              <Button size="sm" onClick={() => openCreate('template')}><Plus className="mr-1.5 h-4 w-4" /> Create template</Button>
             </div>
 
             {filteredTemplates.length === 0 ? (
@@ -271,9 +369,16 @@ function ExplorePage() {
                       )}>
                         {/* colored accent bar that brightens on hover */}
                         <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
+                        {t.mine && (
+                          <div className="absolute right-2 top-2 z-10 hidden gap-1 group-hover:flex">
+                            <button type="button" aria-label="Edit template" onClick={(e) => { e.preventDefault(); openEditTemplate(t) }} className="rounded-md border bg-card p-1.5 text-muted-foreground shadow-1 hover:text-indigo-600"><Pencil className="h-3.5 w-3.5" /></button>
+                            <button type="button" aria-label="Delete template" onClick={(e) => { e.preventDefault(); deleteAsset('template', t.id, t.name) }} className="rounded-md border bg-card p-1.5 text-muted-foreground shadow-1 hover:text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
+                          </div>
+                        )}
                         <CardHeader className="space-y-2.5 pt-5">
-                          <div>
+                          <div className="flex items-center gap-1.5">
                             <Badge variant="outline" className={cn('text-[11px] font-medium', accent.badge)}>{t.category}</Badge>
+                            {t.custom && <Badge variant="outline" className="text-[11px] font-medium border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300">Community</Badge>}
                           </div>
                           <div className="flex items-start gap-2.5">
                             <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
@@ -318,8 +423,11 @@ function ExplorePage() {
           {/* ── Skills tab ────────────────────────────────────────────────── */}
           <TabsContent value="skills" className="mt-6">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-semibold">Skills</h2>
-              <p className="text-sm text-muted-foreground">Instruction packs that extend agents at run time</p>
+              <div>
+                <h2 className="text-lg font-semibold">Skills</h2>
+                <p className="text-sm text-muted-foreground">Instruction packs that extend agents at run time. Yours are shared publicly.</p>
+              </div>
+              <Button size="sm" onClick={() => openCreate('skill')}><Plus className="mr-1.5 h-4 w-4" /> Create skill</Button>
             </div>
 
             {filteredSkills.length === 0 ? (
@@ -341,9 +449,16 @@ function ExplorePage() {
                     accent.ring,
                   )}>
                     <div className={cn('absolute inset-x-0 top-0 h-1 rounded-t-xl bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
+                    {skill.mine && (
+                      <div className="absolute right-2 top-2 z-10 hidden gap-1 group-hover:flex">
+                        <button type="button" aria-label="Edit skill" onClick={() => openEditSkill(skill)} className="rounded-md border bg-card p-1.5 text-muted-foreground shadow-1 hover:text-indigo-600"><Pencil className="h-3.5 w-3.5" /></button>
+                        <button type="button" aria-label="Delete skill" onClick={() => deleteAsset('skill', skill.id, skill.name)} className="rounded-md border bg-card p-1.5 text-muted-foreground shadow-1 hover:text-red-600"><Trash2 className="h-3.5 w-3.5" /></button>
+                      </div>
+                    )}
                     <CardHeader className="space-y-2.5 pt-5">
-                      <div>
+                      <div className="flex items-center gap-1.5">
                         <Badge variant="outline" className={cn('text-[11px] font-medium', accent.badge)}>{skill.category}</Badge>
+                        {skill.custom && <Badge variant="outline" className="text-[11px] font-medium border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300">Community</Badge>}
                       </div>
                       <div className="flex items-start gap-2.5">
                         <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
@@ -429,6 +544,61 @@ function ExplorePage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {dialog?.id ? 'Edit' : 'Create'} {dialog?.kind === 'skill' ? 'skill' : 'template'}
+            </DialogTitle>
+          </DialogHeader>
+          {dialog && (
+            <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Name</label>
+                  <Input value={dialog.name} onChange={(e) => setDialog({ ...dialog, name: e.target.value })} placeholder="e.g. Concise email replies" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Category</label>
+                  <Input value={dialog.category} onChange={(e) => setDialog({ ...dialog, category: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">Description</label>
+                <Input value={dialog.description} onChange={(e) => setDialog({ ...dialog, description: e.target.value })} placeholder="One line shown on the card" />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-muted-foreground">
+                  {dialog.kind === 'skill' ? 'Skill instructions (composed into the agent prompt)' : 'Agent instructions'}
+                </label>
+                <Textarea rows={8} value={dialog.instructions} onChange={(e) => setDialog({ ...dialog, instructions: e.target.value })} placeholder="What the agent should do…" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Tags (comma-separated)</label>
+                  <Input value={dialog.tags} onChange={(e) => setDialog({ ...dialog, tags: e.target.value })} placeholder="sales, email" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Integrations (comma-separated)</label>
+                  <Input value={dialog.integrations} onChange={(e) => setDialog({ ...dialog, integrations: e.target.value })} placeholder="Slack, Backstory MCP" />
+                </div>
+              </div>
+              {dialog.kind === 'template' && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Example output (optional)</label>
+                  <Textarea rows={3} value={dialog.exampleOutput} onChange={(e) => setDialog({ ...dialog, exampleOutput: e.target.value })} placeholder="Illustrative output shown on the detail page" />
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">Published to the public community library — visible to every workspace.</p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialog(null)}>Cancel</Button>
+            <Button onClick={saveAsset} loading={savingAsset}>{dialog?.id ? 'Save' : 'Publish'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

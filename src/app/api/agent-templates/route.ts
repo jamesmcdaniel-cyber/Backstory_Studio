@@ -14,7 +14,7 @@ const templateSchema = z.object({
   allowSubagents: z.boolean().optional(),
 })
 
-function serializeTemplate(template: any) {
+function serializeTemplate(template: any, viewerOrgId?: string) {
   const config = template.configuration && typeof template.configuration === 'object' ? template.configuration as any : {}
   return {
     id: template.id,
@@ -28,6 +28,9 @@ function serializeTemplate(template: any) {
     exampleOutput: config.exampleOutput || '',
     allowSubagents: config.allowSubagents === true,
     custom: true,
+    authorName: config.authorName || '',
+    // Only the creating org may edit/delete a community template.
+    mine: Boolean(viewerOrgId) && template.organizationId === viewerOrgId,
   }
 }
 
@@ -727,11 +730,17 @@ const builtInTemplates = [
 ]
 
 export const GET = withAuthenticatedApi(async (request, auth) => {
+  // Community templates are a PUBLIC library: readable by every workspace,
+  // writable only by the creator's org (PUT/DELETE below stay org-scoped).
   const stored = await prisma.agentTemplate.findMany({
-    where: { organizationId: auth.organizationId, isActive: true },
+    where: { isActive: true },
     orderBy: { updatedAt: 'desc' },
+    take: 500,
   })
-  const templates = [...builtInTemplates, ...stored.map(serializeTemplate)]
+  const templates = [
+    ...builtInTemplates.map((t) => ({ ...t, custom: false, mine: false })),
+    ...stored.map((t) => serializeTemplate(t, auth.organizationId)),
+  ]
   const limit = Number(request.nextUrl.searchParams.get('limit'))
   return { success: true, templates: limit > 0 ? templates.slice(0, limit) : templates }
 })
@@ -750,12 +759,13 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         model: data.model,
         ...(data.exampleOutput ? { exampleOutput: data.exampleOutput } : {}),
         ...(data.allowSubagents ? { allowSubagents: true } : {}),
+        authorName: auth.dbUser.name || auth.dbUser.email || '',
       },
       userId: auth.dbUser.id,
       organizationId: auth.organizationId,
     },
   })
-  return { success: true, template: serializeTemplate(template) }
+  return { success: true, template: serializeTemplate(template, auth.organizationId) }
 })
 
 export const PUT = withAuthenticatedApi(async (request, auth) => {
@@ -782,7 +792,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       },
     },
   })
-  return { success: true, template: serializeTemplate(template) }
+  return { success: true, template: serializeTemplate(template, auth.organizationId) }
 })
 
 export const DELETE = withAuthenticatedApi(async (request, auth) => {

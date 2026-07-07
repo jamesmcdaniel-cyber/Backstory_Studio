@@ -1,4 +1,4 @@
-import { composeInstructions } from '@/lib/skills/compose'
+import { composeInstructions, type ExtraSkill } from '@/lib/skills/compose'
 
 /**
  * Builds the agent's effective system prompt. Skills are composed into the
@@ -10,10 +10,10 @@ import { composeInstructions } from '@/lib/skills/compose'
  * Kept in its own dependency-light module (only `composeInstructions`) so it can
  * be unit-tested without pulling in Prisma, the model SDKs, or the worker.
  */
-export function buildAgentSystemPrompt(objective: string, skillIds: string[]): string {
+export function buildAgentSystemPrompt(objective: string, skillIds: string[], extraSkills: ExtraSkill[] = []): string {
   return [
     'You are an autonomous agent working on behalf of a user. Follow these instructions:',
-    composeInstructions(objective, skillIds),
+    composeInstructions(objective, skillIds, extraSkills),
     'Use the connected tools when needed. When a request maps to an available tool (for example, pulling records, accounts, or opportunities from Backstory Sales AI), CALL that tool to fetch live data rather than answering from memory or context alone.',
     'Some connected tools use progressive discovery instead of one tool per action. If your tools include a discovery/execute pair (for example discover_server_categories_or_actions, get_category_actions, get_action_details, and execute_action — the Klavis Strata pattern), call the discovery tools first to find the exact action and its inputs, then call execute_action to run it. Treat those meta-tools as your gateway to every integration behind them.',
     'If a Strata action fails with an authentication error, call handle_auth_failure with intention "get_auth_url" for that server, then tell the user plainly which service needs authentication and what it requires (e.g. "Snowflake needs account_id, username and password — add them in your Klavis dashboard under the Strata server"). NEVER ask the user to paste passwords or API keys into this conversation, and never call save_auth_data with credentials from chat; direct them to the Klavis dashboard instead, then continue with whatever data your other tools can provide.',
