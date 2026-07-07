@@ -13,6 +13,7 @@ type Template = {
   instructions: string
   integrations: string[]
   model: string
+  exampleOutput?: string
 }
 
 export default function TemplateDetails() {
@@ -65,6 +66,17 @@ export default function TemplateDetails() {
               <Button onClick={createAgent} loading={creating}>{creating ? 'Creating…' : 'Use template'}</Button>
             </div>
             <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm shadow-1">{template.instructions}</pre>
+
+            {template.exampleOutput && (
+              <div>
+                <p className="eyebrow mb-2">Example output</p>
+                <div className="rounded-lg border border-horizon-200 bg-horizon-50/40 p-4 shadow-1">
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{template.exampleOutput}</p>
+                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">Illustrative — actual output uses your live data.</p>
+              </div>
+            )}
+
             {template.integrations.length > 0 && (
               <div>
                 <p className="eyebrow mb-2">Requires</p>
