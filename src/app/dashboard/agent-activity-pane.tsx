@@ -89,20 +89,43 @@ export function resultText(activity?: Activity | null) {
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
 }
 
-// Lively "what it's doing" labels for a live run, cycled over time so the word
-// changes like a first-party chat assistant. Different rows get different words.
+// Lively "what it's doing" words for a live run, typed out then deleted like a
+// first-party chat assistant. Different rows start on different words.
 const RUNNING_WORDS = [
   'Working', 'Thinking', 'Reasoning', 'Analyzing', 'Pondering', 'Crunching',
   'Synthesizing', 'Digging in', 'Computing', 'Percolating', 'Noodling', 'Cooking',
 ]
 
-export function runningLabel(activity: Pick<Activity, 'id' | 'status'>): string {
-  if (activity.status?.toLowerCase() === 'waiting_for_input') return 'Waiting for you…'
-  // Advance ~every 2.4s (the pane re-renders on its poll); offset per row so
-  // multiple running items don't chant the same word in unison.
-  const bucket = Math.floor(Date.now() / 2400)
-  const seed = activity.id ? activity.id.charCodeAt(activity.id.length - 1) : 0
-  return `${RUNNING_WORDS[(bucket + seed) % RUNNING_WORDS.length]}…`
+/** Typewriter status: types the current word, holds, deletes, types the next. */
+function TypewriterStatus({ seed = 0 }: { seed?: number }) {
+  const [wordIndex, setWordIndex] = useState(seed % RUNNING_WORDS.length)
+  const [text, setText] = useState('')
+  const [phase, setPhase] = useState<'typing' | 'holding' | 'deleting'>('typing')
+
+  useEffect(() => {
+    const word = RUNNING_WORDS[wordIndex]
+    let timer: number
+    if (phase === 'typing') {
+      if (text.length < word.length) timer = window.setTimeout(() => setText(word.slice(0, text.length + 1)), 55)
+      else timer = window.setTimeout(() => setPhase('holding'), 1100)
+    } else if (phase === 'holding') {
+      timer = window.setTimeout(() => setPhase('deleting'), 350)
+    } else {
+      if (text.length > 0) timer = window.setTimeout(() => setText(word.slice(0, text.length - 1)), 32)
+      else {
+        setWordIndex((i) => (i + 1) % RUNNING_WORDS.length)
+        setPhase('typing')
+      }
+    }
+    return () => window.clearTimeout(timer)
+  }, [text, phase, wordIndex])
+
+  return (
+    <span>
+      {text}
+      <span className="animate-pulse">…</span>
+    </span>
+  )
 }
 
 function stepDuration(step: RunStep): string | null {
@@ -346,17 +369,9 @@ function RunRow({
   const [details, setDetails] = useState<RunDetails | null>(null)
   const [reply, setReply] = useState('')
   const [replying, setReplying] = useState(false)
-  const [, setTick] = useState(0)
   const status = activityStatus(activity)
   const isActive = ['running', 'pending', 'waiting_for_input'].includes(status)
   const timeline = buildTimeline(details)
-
-  // Cycle the "working…" word while active so the row feels alive.
-  useEffect(() => {
-    if (!isActive) return
-    const timer = window.setInterval(() => setTick((t) => t + 1), 2400)
-    return () => window.clearInterval(timer)
-  }, [isActive])
 
   useEffect(() => {
     if (!expanded) {
@@ -408,11 +423,14 @@ function RunRow({
         <div className="min-w-0">
           <div className="truncate text-sm font-medium">{activity.metadata?.title || activity.agentType}</div>
           <div className="line-clamp-1 text-xs text-gray-500">
-            {activity.metadata?.pendingQuestion?.question ||
-              activity.metadata?.headline ||
-              activity.error ||
-              resultText(activity) ||
-              (isActive ? runningLabel(activity) : 'No output')}
+            {(() => {
+              const summary =
+                activity.metadata?.pendingQuestion?.question || activity.metadata?.headline || activity.error || resultText(activity)
+              if (summary) return summary
+              if (status === 'waiting_for_input') return 'Waiting for you…'
+              if (isActive) return <TypewriterStatus seed={activity.id ? activity.id.charCodeAt(activity.id.length - 1) : 0} />
+              return 'No output'
+            })()}
           </div>
         </div>
         <time className="shrink-0 font-mono text-xs tabular-nums text-gray-400">{new Date(activity.startedAt).toLocaleString()}</time>
