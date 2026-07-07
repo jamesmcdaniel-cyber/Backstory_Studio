@@ -129,23 +129,18 @@ function ModelOption({ provider, label }: { provider: 'anthropic' | 'openai'; la
 
 // ── Schedule cadence (visual UI concept mapped onto the backend schedule) ────
 // Backend supports type manual|hourly|daily|weekly|cron|once (see due.ts). The
-// UI offers friendly visual cadences and never asks the user to type cron; an
-// "Advanced" escape hatch remains for legacy/complex crons that don't map to a
-// day-of-week pattern.
-type Cadence = 'daily' | 'daysofweek' | 'once' | 'advanced'
-
-// A day-of-week cron: `mm hh * * d[,d...]` (dom + month wild). This is what the
-// "Days of week" picker produces and round-trips.
-const DOW_CRON_RE = /^\d{1,2}\s+\d{1,2}\s+\*\s+\*\s+[0-6](?:,[0-6])*$/
+// UI offers only friendly visual cadences and never exposes raw cron.
+type Cadence = 'daily' | 'daysofweek' | 'once'
 
 const DAY_LABELS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'] as const
 
 function cadenceOf(schedule: AgentDraft['schedule']): Cadence {
   if (schedule.type === 'once') return 'once'
   if (schedule.type === 'daily') return 'daily'
-  if (schedule.type === 'cron' && schedule.cron && DOW_CRON_RE.test(schedule.cron)) return 'daysofweek'
-  // weekly, hourly, every-other-day, and arbitrary crons fall back to advanced.
-  return 'advanced'
+  // Everything else recurring — day-of-week crons plus legacy weekly / hourly /
+  // every-other-day / arbitrary crons — surfaces as the flexible "days of week"
+  // picker; a legacy schedule converts to a clean cron on its next save.
+  return 'daysofweek'
 }
 
 /** HH:MM + selected weekdays → a `mm hh * * d,d` cron. */
@@ -155,11 +150,14 @@ function dowCron(time: string, days: number[]): string {
   return `${Number.isNaN(mm) ? 0 : mm} ${Number.isNaN(hh) ? 9 : hh} * * ${list}`
 }
 
-/** Parse the selected weekdays out of a day-of-week cron's 5th field. */
+/** Parse the selected weekdays out of a cron's 5th field, defaulting to
+ *  weekdays when the field is absent or not a plain day list (e.g. a legacy
+ *  arbitrary cron) so the "days of week" picker always has a sane selection. */
 function daysFromCron(cron: string | undefined): number[] {
   const dow = (cron || '').trim().split(/\s+/)[4]
   if (!dow) return [1, 2, 3, 4, 5]
-  return dow.split(',').map((n) => parseInt(n, 10)).filter((n) => n >= 0 && n <= 6)
+  const parsed = dow.split(',').map((n) => parseInt(n, 10)).filter((n) => n >= 0 && n <= 6)
+  return parsed.length ? parsed : [1, 2, 3, 4, 5]
 }
 
 /** Today as YYYY-MM-DD in local time — the earliest selectable one-time date. */
@@ -423,9 +421,8 @@ export function AgentConfigForm({
     const timezone = draft.schedule.timezone || browserTimezone()
     const schedule: AgentDraft['schedule'] =
       next === 'daily' ? { type: 'daily', time, timezone, isActive: true }
-      : next === 'daysofweek' ? { type: 'cron', cron: dowCron(time, selectedDays.length ? selectedDays : [1, 2, 3, 4, 5]), time, timezone, isActive: true }
       : next === 'once' ? { type: 'once', runAt: draft.schedule.runAt || todayKey(), time, timezone, isActive: true }
-      : { type: 'cron', cron: draft.schedule.type === 'cron' ? (draft.schedule.cron || '0 9 * * 1-5') : '0 9 * * 1-5', timezone, isActive: true }
+      : { type: 'cron', cron: dowCron(time, selectedDays.length ? selectedDays : [1, 2, 3, 4, 5]), time, timezone, isActive: true }
     setDraft({ ...draft, schedule })
   }
 
@@ -615,7 +612,6 @@ export function AgentConfigForm({
                   <SelectItem value="daily">Daily</SelectItem>
                   <SelectItem value="daysofweek">Days of week</SelectItem>
                   <SelectItem value="once">Once (specific date)</SelectItem>
-                  <SelectItem value="advanced">Advanced (cron)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -658,44 +654,30 @@ export function AgentConfigForm({
               </div>
             )}
 
-            {cadence !== 'advanced' ? (
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label>Time</Label>
-                  <Input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
-                </div>
-                <div>
-                  <Label>Timezone</Label>
-                  <Select
-                    value={draft.schedule.timezone}
-                    onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {/* Keep a browser-detected zone outside the common list selectable. */}
-                      {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
-                        <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
-                      )}
-                      {COMMON_TIMEZONES.map((tz) => (
-                        <SelectItem key={tz} value={tz}>{tz}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            ) : (
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Cron expression</Label>
-                <Input
-                  placeholder="0 9 * * 1-5"
-                  value={draft.schedule.cron || ''}
-                  onChange={(event) => setDraft({ ...draft, schedule: { ...draft.schedule, type: 'cron', cron: event.target.value } })}
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  5-field cron, evaluated in {draft.schedule.timezone || 'UTC'}. For power users — the options above cover most schedules.
-                </p>
+                <Label>Time</Label>
+                <Input type="time" value={scheduleTime} onChange={(event) => setScheduleTime(event.target.value)} />
               </div>
-            )}
+              <div>
+                <Label>Timezone</Label>
+                <Select
+                  value={draft.schedule.timezone}
+                  onValueChange={(timezone) => setDraft({ ...draft, schedule: { ...draft.schedule, timezone } })}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {/* Keep a browser-detected zone outside the common list selectable. */}
+                    {!COMMON_TIMEZONES.includes(draft.schedule.timezone as (typeof COMMON_TIMEZONES)[number]) && draft.schedule.timezone && (
+                      <SelectItem value={draft.schedule.timezone}>{draft.schedule.timezone}</SelectItem>
+                    )}
+                    {COMMON_TIMEZONES.map((tz) => (
+                      <SelectItem key={tz} value={tz}>{tz}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
 
             {scheduleSummary && <p className="text-xs text-muted-foreground">{scheduleSummary}</p>}
           </div>
