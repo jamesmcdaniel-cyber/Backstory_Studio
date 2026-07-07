@@ -64,7 +64,12 @@ export const POST = withAuthenticatedApi(async (_request, auth) => {
     agentIds[key] = agent.id
   }
 
-  const graph = buildUpsellGraph({ puller: agentIds.puller, scorer: agentIds.scorer, composer: agentIds.composer })
+  const graph = buildUpsellGraph({
+    puller: agentIds.puller,
+    scorer: agentIds.scorer,
+    composer: agentIds.composer,
+    publisher: agentIds.publisher,
+  })
   const flow = await prisma.flow.create({
     data: {
       name: PLAYBOOK_FLOW_NAME,

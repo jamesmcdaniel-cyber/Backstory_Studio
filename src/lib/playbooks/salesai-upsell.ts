@@ -2,10 +2,15 @@ import type { FlowGraph } from '@/lib/flows/graph'
 
 /**
  * The SalesAI Upsell Engine playbook (from the BRD): a deterministic Flow that
- * pulls in-segment accounts from Backstory Sales AI (+ Snowflake usage), fans
- * out a readiness scorer per account, then composes and posts the top-20 brief
- * to Slack. One-click provisioned: agents are created (idempotently) and the
- * flow graph is wired to their ids.
+ * covers the full solution architecture —
+ *   Data sources: Backstory MCP (primary), CRM (Salesforce), usage data
+ *   (Snowflake), Query API (http tool)
+ *   AI processing: readiness score, competitive risk, use-case alignment,
+ *   sales-motion planning (all four in the scorer's contract)
+ *   Outputs: Priority Matrix, Stakeholder List, Action Plans, Executive Digest
+ *   (four parallel builders), assembled and posted to Slack by a publisher.
+ * One-click provisioned: agents are created (idempotently) and the flow graph
+ * is wired to their ids.
  */
 
 export const PLAYBOOK_FLOW_NAME = 'SalesAI Upsell Engine'
@@ -23,29 +28,55 @@ export const PLAYBOOK_AGENTS = {
   },
   scorer: {
     title: 'Upsell Account Scorer',
-    description: 'Scores one account for SalesAI adoption readiness as strict JSON.',
+    description: 'Scores one account across readiness, competitive risk, use-case fit, and sales motion — strict JSON.',
     integrations: ['Backstory MCP', 'strata:snowflake', 'strata:salesforce', 'HTTP API'],
     instructions: [
-      'You score ONE account (given as input) for SalesAI adoption readiness.',
-      'Assess from Backstory Sales AI (and Snowflake usage data when available): data quality/maturity, feature adoption baseline, engagement velocity, ARR health, competitive/churn risk signals, and named decision-makers. Pull CRM context from Salesforce when available: open/closed opportunities, win/loss history, and account owner. The http request tool is available for any additional REST API the user points you at.',
-      'OUTPUT CONTRACT: respond with ONLY a JSON object — no prose, no markdown fence — shaped exactly: {"account": string, "score": number (0-100), "subscores": {"dataQuality": number, "featureAdoption": number, "engagement": number, "arrHealth": number}, "risks": string[], "decisionMakers": string[], "useCase": string, "nextAction": string}. Never fabricate: when a dimension is unknowable from your tools, score it conservatively and add a risk note like "no usage data available".',
+      'You analyze ONE account (given as input) for SalesAI expansion across ALL FOUR dimensions of the upsell engine: adoption readiness, competitive risk, use-case alignment, and sales-motion planning.',
+      'Sources: Backstory Sales AI (engagement, stakeholders, activity), Salesforce CRM (opportunities, win/loss history, account owner), Snowflake (product usage / feature adoption) — plus the http request tool for any extra API the user names. Use what is available; never fabricate what is not.',
+      'OUTPUT CONTRACT: respond with ONLY a JSON object — no prose, no markdown fence — shaped exactly:',
+      '{"account": string, "score": number (0-100), "subscores": {"dataQuality": number, "featureAdoption": number, "engagement": number, "arrHealth": number}, "competitiveRisk": {"level": "low"|"medium"|"high", "threats": string[], "churnSignals": string[]}, "useCaseAlignment": {"primary": string, "rationale": string, "additional": string[]}, "salesMotion": {"decisionMakers": string[], "entryPoint": string, "timelineWeeks": number, "firstMeetingGoal": string}, "dataGaps": string[]}',
+      'Scoring discipline: when a dimension is unknowable from your tools, score it conservatively and record why in dataGaps (e.g. "no usage data available"). decisionMakers must be real named contacts from Backstory/CRM, never invented.',
     ].join('\n'),
   },
   composer: {
-    title: 'Upsell Brief Composer',
-    description: 'Ranks scorecards, composes the top-20 motion brief, and posts it to Slack.',
+    title: 'Upsell Output Composer',
+    description: 'Builds one named deliverable (matrix, stakeholders, action plans, or digest) from the scorecards.',
+    integrations: ['HTTP API'],
+    instructions: [
+      'You build ONE named deliverable from a set of account scorecards (JSON array with fields: account, score, subscores, competitiveRisk, useCaseAlignment, salesMotion, dataGaps). The input names which deliverable to produce, then provides the scorecards. Produce clean Markdown for exactly that deliverable — nothing else.',
+      'PRIORITY MATRIX: tier every scored account into NOW / NEXT / NURTURE / MONITOR by readiness score crossed with competitive-risk level (high risk pulls a ready account into NOW — expansion defends the account). One table per tier: account, score, risk level, primary use case, one-line rationale.',
+      'STAKEHOLDER LIST: for the top accounts, the named decision-makers with role/relationship context from the scorecards, the entry point, and who should engage them. Group by account; flag accounts with no known stakeholders as a gap.',
+      'ACTION PLANS: for the top 5 accounts, a concrete 4-week deployment roadmap — week-by-week actions, the entry use case, first-meeting goal, and the success metric that proves readiness for the SalesAI conversation.',
+      'EXECUTIVE DIGEST: at most 300 words for sales leadership — segment health in one paragraph, the top 5 opportunities with scores, aggregate risk themes, and a single recommended focus for the coming week. Lead with the numbers (accounts scored, ready-now count, average score).',
+      'Always state counts precisely and carry the scorecards\' dataGaps through honestly. Use only what the scorecards contain — never invent accounts, people, or numbers.',
+    ].join('\n'),
+  },
+  publisher: {
+    title: 'Upsell Digest Publisher',
+    description: 'Assembles the four deliverables and posts them to Slack.',
     integrations: ['Slack', 'strata:slack', 'HTTP API'],
     instructions: [
-      'You receive a JSON array of account scorecards (fields: account, score, subscores, risks, decisionMakers, useCase, nextAction). Rank by score and take the top 20.',
-      'Compose a skimmable Markdown brief: lead with the headline numbers (accounts scored, average score, #ready-now), then a ranked table (account, score, top risk, decision-maker, next action), then a 4-week deployment roadmap for the top 3 accounts, then honest data-gap notes.',
-      'Post the brief to Slack using your Slack tools — default to the channel named in the brief request or #sales-ai-upsell; if posting fails, still return the full brief as your final answer.',
-      'State counts precisely ("top 20 of 23 scored"). Never invent scores — use only what the scorecards contain.',
+      'You receive a JSON object with four Markdown deliverables: matrix (Priority Matrix), stakeholders (Stakeholder List), actions (Action Plans), digest (Executive Digest).',
+      'Post to Slack using your Slack tools — default channel #sales-ai-upsell unless the input names another: send the Executive Digest as the main message, then the Priority Matrix, Stakeholder List, and Action Plans as follow-up messages (thread replies when supported).',
+      'If posting fails, do not retry more than once; instead return the full assembled report. Either way, your final answer is the complete report: digest first, then matrix, stakeholders, and action plans, under clear ## headings.',
     ].join('\n'),
   },
 } as const
 
 /** Wire the playbook flow graph to the provisioned agent ids. */
-export function buildUpsellGraph(agentIds: { puller: string; scorer: string; composer: string }): FlowGraph {
+export function buildUpsellGraph(agentIds: { puller: string; scorer: string; composer: string; publisher: string }): FlowGraph {
+  const composerBranch = (id: string, deliverable: string, label: string) =>
+    ({
+      id,
+      type: 'agent',
+      data: {
+        agentId: agentIds.composer,
+        label,
+        input: `Produce the ${deliverable}.\n\nScorecards: {{step.score_each.output}}`,
+        onError: 'continue',
+      },
+    }) as const
+
   return {
     nodes: [
       { id: 'trigger', type: 'trigger', data: { trigger: { type: 'manual', input: 'Data Foundation + EDB only' } } },
@@ -62,32 +93,45 @@ export function buildUpsellGraph(agentIds: { puller: string; scorer: string; com
       {
         id: 'score_each',
         type: 'loop',
-        data: { label: 'Score each account', over: '{{step.pull.output}}', concurrency: 5, body: ['score'] },
+        data: { label: 'Score each account (4-dimension analysis)', over: '{{step.pull.output}}', concurrency: 5, body: ['score'] },
       },
       {
         id: 'score',
         type: 'agent',
         data: {
           agentId: agentIds.scorer,
-          label: 'Readiness score',
+          label: 'Readiness · risk · use case · motion',
           input: '{{item}}',
           onError: 'continue',
           outputFields: [
             { name: 'account', type: 'string' },
             { name: 'score', type: 'number' },
-            { name: 'risks', type: 'array' },
-            { name: 'decisionMakers', type: 'array' },
-            { name: 'nextAction', type: 'string' },
+            { name: 'competitiveRisk', type: 'object' },
+            { name: 'useCaseAlignment', type: 'object' },
+            { name: 'salesMotion', type: 'object' },
+            { name: 'dataGaps', type: 'array' },
           ],
         },
       },
       {
-        id: 'brief',
+        id: 'outputs',
+        type: 'parallel',
+        data: {
+          label: 'Build the four deliverables',
+          branches: [['matrix'], ['stakeholders'], ['actions'], ['digest']],
+        },
+      },
+      composerBranch('matrix', 'PRIORITY MATRIX', 'Priority Matrix'),
+      composerBranch('stakeholders', 'STAKEHOLDER LIST', 'Stakeholder List'),
+      composerBranch('actions', 'ACTION PLANS', 'Action Plans'),
+      composerBranch('digest', 'EXECUTIVE DIGEST', 'Executive Digest'),
+      {
+        id: 'publish',
         type: 'agent',
         data: {
-          agentId: agentIds.composer,
-          label: 'Compose + post Slack brief',
-          input: 'Scorecards: {{step.score_each.output}}',
+          agentId: agentIds.publisher,
+          label: 'Assemble + post to Slack',
+          input: 'Deliverables: {{step.outputs.output}}',
           retries: 1,
         },
       },
@@ -95,7 +139,8 @@ export function buildUpsellGraph(agentIds: { puller: string; scorer: string; com
     edges: [
       { id: 'e0', source: 'trigger', target: 'pull' },
       { id: 'e1', source: 'pull', target: 'score_each' },
-      { id: 'e2', source: 'score_each', target: 'brief' },
+      { id: 'e2', source: 'score_each', target: 'outputs' },
+      { id: 'e3', source: 'outputs', target: 'publish' },
     ],
   }
 }
