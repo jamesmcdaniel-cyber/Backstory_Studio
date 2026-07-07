@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { interpretFlow, type RunAgentFn } from '../interpret'
+import { interpretFlow, type RunAgentFn, type RunActionFn } from '../interpret'
 import type { FlowGraph } from '@/lib/flows/graph'
 
 // A runAgent stub that echoes a canned output per agentId (default: echoes input).
@@ -221,6 +221,48 @@ test('resume skips completed nodes and re-runs the paused one', async () => {
   assert.equal(result.status, 'succeeded')
   assert.deepEqual(ran, ['n2', 'n3']) // n1 was skipped, not re-run
   assert.equal(result.output, 'got ANSWERED') // n3 saw the resumed n2 output
+})
+
+test('tool and http steps resolve templates and thread output', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'lookup', args: '{"account":"{{trigger.input}}"}' } },
+      { id: 'h1', type: 'http', data: { method: 'POST', url: 'https://example.com/hook', body: 'got {{step.t1.output.score}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 't1' },
+      { id: 'e1', source: 't1', target: 'h1' },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push({ kind: node.kind, ...node.config })
+    return node.kind === 'tool' ? { output: '{"score":88}' } : { output: `sent:${node.config.body}` }
+  }
+  const runAgent: RunAgentFn = async () => ({ output: 'unused' })
+  const result = await interpretFlow(graph, 'Acme', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(calls[0].args, '{"account":"Acme"}') // template resolved into tool args
+  assert.equal(result.output, 'sent:got 88') // http body saw the tool's structured output
+})
+
+test('a failing tool step honors onError', async () => {
+  const graph = (onError: 'stop' | 'continue'): FlowGraph => ({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'boom', onError } },
+      { id: 'a1', type: 'agent', data: { agentId: 'ok', input: 'x' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 't1' },
+      { id: 'e1', source: 't1', target: 'a1' },
+    ],
+  })
+  const runAction: RunActionFn = async () => ({ error: 'tool exploded' })
+  const runAgent: RunAgentFn = async () => ({ output: 'OK' })
+  assert.equal((await interpretFlow(graph('stop'), '', { runAgent, runAction })).status, 'failed')
+  assert.equal((await interpretFlow(graph('continue'), '', { runAgent, runAction })).output, 'OK')
 })
 
 test('onStep reports every node including containers', async () => {

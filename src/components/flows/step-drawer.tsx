@@ -1,20 +1,40 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Trash2, Plus } from 'lucide-react'
+import { X, Trash2, Plus, Copy, Link2, RefreshCw } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField } from '@/lib/flows/graph'
 import { DataTree } from '@/components/flows/data-tree'
 import type { DataField } from '@/lib/flows/datatree'
 
-type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop'>
+type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'agent', label: 'Run agent' },
+  { value: 'tool', label: 'Tool call' },
+  { value: 'http', label: 'HTTP request' },
   { value: 'condition', label: 'If / else' },
   { value: 'loop', label: 'For each' },
   { value: 'parallel', label: 'Parallel' },
   { value: 'stop', label: 'Stop' },
 ]
+
+export type ToolCatalog = { id: string; name: string; tools: { name: string; description: string }[] }[]
+
+/** Frequencies the schedule editor offers (matches AgentSchedule types). */
+const FREQUENCIES = [
+  { value: 'hourly', label: 'Hourly' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'cron', label: 'Cron expression' },
+  { value: 'once', label: 'Once' },
+] as const
+
+type TriggerData = {
+  type?: 'manual' | 'schedule' | 'webhook'
+  schedule?: { type?: string; time?: string; cron?: string; timezone?: string; runAt?: string; isActive?: boolean }
+  input?: string
+}
 
 const fieldClass =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
@@ -31,20 +51,26 @@ function clausesOf(data: Extract<FlowNode, { type: 'condition' }>['data']): Cond
 
 export function StepDrawer({
   node,
+  flowId,
   agents,
+  toolCatalog,
   dataFields,
   onChange,
   onChangeType,
   onAddStep,
+  onDuplicate,
   onDelete,
   onClose,
 }: {
   node: FlowNode
+  flowId: string
   agents: { id: string; title: string }[]
+  toolCatalog: ToolCatalog
   dataFields: DataField[]
   onChange: (node: FlowNode) => void
   onChangeType: (type: EditableType) => void
   onAddStep?: () => void
+  onDuplicate?: () => void
   onDelete: () => void
   onClose: () => void
 }) {
@@ -70,6 +96,16 @@ export function StepDrawer({
     }
     if (node.type === 'loop') {
       onChange({ ...node, data: { ...node.data, over: `${node.data.over ?? ''}${token}` } })
+      return
+    }
+    if (node.type === 'tool') {
+      onChange({ ...node, data: { ...node.data, args: `${node.data.args ?? ''}${token}` } })
+      return
+    }
+    if (node.type === 'http') {
+      const field = activeField === 'http.url' ? 'url' : activeField === 'http.headers' ? 'headers' : 'body'
+      const existing = (node.data as unknown as Record<string, string | undefined>)[field] ?? ''
+      onChange({ ...node, data: { ...node.data, [field]: `${existing}${token}` } })
     }
   }
 
@@ -84,18 +120,11 @@ export function StepDrawer({
 
       <div className="flex-1 space-y-5 p-4">
         {isTrigger ? (
-          <div>
-            <label className={labelClass}>Trigger type</label>
-            <select
-              className={fieldClass}
-              value={(node.data.trigger as { type?: string } | undefined)?.type ?? 'manual'}
-              onChange={(e) => onChange({ ...node, data: { trigger: { type: e.target.value } } })}
-            >
-              <option value="manual">Manual / on run</option>
-              <option value="schedule">Schedule</option>
-            </select>
-            <p className="mt-2 text-xs text-muted-foreground">Set the flow&apos;s schedule from the top bar. Signal triggers are coming soon.</p>
-          </div>
+          <TriggerEditor
+            flowId={flowId}
+            trigger={(node.data.trigger as TriggerData | undefined) ?? { type: 'manual' }}
+            onChange={(trigger) => onChange({ ...node, data: { trigger } })}
+          />
         ) : (
           <>
             <div>
@@ -111,6 +140,16 @@ export function StepDrawer({
             <div>
               <label className={labelClass}>Label (optional)</label>
               <input className={fieldClass} value={(node.data as { label?: string }).label ?? ''} placeholder="A short name for this step" onChange={(e) => setLabel(e.target.value)} />
+            </div>
+            <div>
+              <label className={labelClass}>Notes (optional)</label>
+              <textarea
+                rows={2}
+                className={fieldClass}
+                value={(node.data as { note?: string }).note ?? ''}
+                placeholder="Why this step exists, gotchas, links…"
+                onChange={(e) => onChange({ ...node, data: { ...node.data, note: e.target.value || undefined } } as FlowNode)}
+              />
             </div>
           </>
         )}
@@ -292,6 +331,130 @@ export function StepDrawer({
           </div>
         )}
 
+        {node.type === 'tool' && (
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>Connection</label>
+              <select
+                className={fieldClass}
+                value={node.data.connectionId}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, connectionId: e.target.value, toolName: '' } })}
+              >
+                <option value="">Select a connection…</option>
+                {toolCatalog.map((conn) => (
+                  <option key={conn.id} value={conn.id}>
+                    {conn.name}
+                  </option>
+                ))}
+              </select>
+              {toolCatalog.length === 0 && (
+                <p className="mt-1.5 text-xs text-amber-600">No MCP connections yet — add one on the MCP Servers page.</p>
+              )}
+            </div>
+            <div>
+              <label className={labelClass}>Tool</label>
+              <select
+                className={fieldClass}
+                value={node.data.toolName}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, toolName: e.target.value } })}
+              >
+                <option value="">Select a tool…</option>
+                {(toolCatalog.find((c) => c.id === node.data.connectionId)?.tools ?? []).map((tool) => (
+                  <option key={tool.name} value={tool.name} title={tool.description}>
+                    {tool.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Arguments (JSON)</label>
+              <textarea
+                rows={4}
+                className={`${fieldClass} font-mono text-xs`}
+                value={node.data.args ?? '{}'}
+                placeholder={'{"query": "{{trigger.input}}"}'}
+                onFocus={() => setActiveField('tool.args')}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, args: e.target.value } })}
+              />
+              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
+              <DataTree fields={dataFields} onInsert={insertToken} />
+            </div>
+            <div>
+              <label className={labelClass}>On error</label>
+              <select
+                className={fieldClass}
+                value={node.data.onError ?? 'stop'}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
+              >
+                <option value="stop">Stop flow</option>
+                <option value="continue">Continue</option>
+              </select>
+            </div>
+            <p className="text-xs text-muted-foreground">Runs this exact tool with these arguments — deterministic, no agent in the loop.</p>
+          </div>
+        )}
+
+        {node.type === 'http' && (
+          <div className="space-y-3">
+            <div className="flex gap-1.5">
+              <select
+                className={smallField}
+                value={node.data.method}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, method: e.target.value as typeof node.data.method } })}
+              >
+                {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <input
+                className={`${smallField} flex-1`}
+                value={node.data.url}
+                placeholder="https://example.com/webhook"
+                onFocus={() => setActiveField('http.url')}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, url: e.target.value } })}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Headers (JSON, optional)</label>
+              <textarea
+                rows={2}
+                className={`${fieldClass} font-mono text-xs`}
+                value={node.data.headers ?? ''}
+                placeholder={'{"authorization": "Bearer …"}'}
+                onFocus={() => setActiveField('http.headers')}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, headers: e.target.value || undefined } })}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Body</label>
+              <textarea
+                rows={4}
+                className={`${fieldClass} font-mono text-xs`}
+                value={node.data.body ?? ''}
+                placeholder={'{"text": "{{step.n1.output}}"}'}
+                onFocus={() => setActiveField('http.body')}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, body: e.target.value || undefined } })}
+              />
+              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
+              <DataTree fields={dataFields} onInsert={insertToken} />
+            </div>
+            <div>
+              <label className={labelClass}>On error</label>
+              <select
+                className={fieldClass}
+                value={node.data.onError ?? 'stop'}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
+              >
+                <option value="stop">Stop flow</option>
+                <option value="continue">Continue</option>
+              </select>
+            </div>
+            <p className="text-xs text-muted-foreground">Calls an external URL (public hosts only). The response body becomes this step&apos;s output.</p>
+          </div>
+        )}
+
         {node.type === 'stop' && (
           <div>
             <label className={labelClass}>Reason (optional)</label>
@@ -302,9 +465,14 @@ export function StepDrawer({
       </div>
 
       {!isTrigger && (
-        <div className="border-t border-border p-4">
-          <Button variant="outline" className="w-full text-red-600 hover:text-red-700" onClick={onDelete}>
-            <Trash2 className="mr-1.5 h-4 w-4" /> Delete step
+        <div className="flex gap-2 border-t border-border p-4">
+          {onDuplicate && (
+            <Button variant="outline" className="flex-1" onClick={onDuplicate}>
+              <Copy className="mr-1.5 h-4 w-4" /> Duplicate
+            </Button>
+          )}
+          <Button variant="outline" className="flex-1 text-red-600 hover:text-red-700" onClick={onDelete}>
+            <Trash2 className="mr-1.5 h-4 w-4" /> Delete
           </Button>
         </div>
       )}
@@ -343,6 +511,133 @@ function OutputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onCha
       <button type="button" onClick={() => onChange([...fields, { name: '', type: 'any' }])} className="mt-1.5 flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
         <Plus className="h-3.5 w-3.5" /> Add field
       </button>
+    </div>
+  )
+}
+
+/** The trigger node's editor: manual, a real schedule, or an inbound webhook. */
+function TriggerEditor({
+  flowId,
+  trigger,
+  onChange,
+}: {
+  flowId: string
+  trigger: TriggerData
+  onChange: (trigger: TriggerData) => void
+}) {
+  const [webhook, setWebhook] = useState<{ url: string; secret: string | null } | null>(null)
+  const [minting, setMinting] = useState(false)
+  const type = trigger.type ?? 'manual'
+  const schedule = trigger.schedule ?? { type: 'daily', time: '09:00', timezone: 'UTC', isActive: true }
+
+  const setSchedule = (patch: Partial<NonNullable<TriggerData['schedule']>>) =>
+    onChange({ ...trigger, type: 'schedule', schedule: { ...schedule, ...patch, isActive: true } })
+
+  const mintWebhook = async (rotate: boolean) => {
+    setMinting(true)
+    try {
+      const response = await fetch(`/api/flows/${flowId}/trigger-secret`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rotate }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast.error(data.error || 'Could not create the webhook URL.')
+        return
+      }
+      setWebhook({ url: data.url, secret: data.secret })
+      if (data.secret) toast.success('Webhook secret created — copy it now; it is shown only once.')
+    } finally {
+      setMinting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className={labelClass}>Trigger type</label>
+        <select
+          className={fieldClass}
+          value={type}
+          onChange={(e) => {
+            const next = e.target.value as 'manual' | 'schedule' | 'webhook'
+            onChange(next === 'schedule' ? { ...trigger, type: next, schedule: { ...schedule, isActive: true } } : { ...trigger, type: next })
+          }}
+        >
+          <option value="manual">Manual / on run</option>
+          <option value="schedule">Schedule</option>
+          <option value="webhook">Webhook (external)</option>
+        </select>
+      </div>
+
+      {type === 'schedule' && (
+        <div className="space-y-3">
+          <div>
+            <label className={labelClass}>Frequency</label>
+            <select className={fieldClass} value={schedule.type ?? 'daily'} onChange={(e) => setSchedule({ type: e.target.value })}>
+              {FREQUENCIES.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {['daily', 'weekly', 'once'].includes(schedule.type ?? 'daily') && (
+            <div>
+              <label className={labelClass}>Time (HH:MM)</label>
+              <input className={fieldClass} value={schedule.time ?? '09:00'} placeholder="09:00" onChange={(e) => setSchedule({ time: e.target.value })} />
+            </div>
+          )}
+          {schedule.type === 'once' && (
+            <div>
+              <label className={labelClass}>Date (YYYY-MM-DD)</label>
+              <input className={fieldClass} value={schedule.runAt ?? ''} placeholder="2026-07-15" onChange={(e) => setSchedule({ runAt: e.target.value })} />
+            </div>
+          )}
+          {schedule.type === 'cron' && (
+            <div>
+              <label className={labelClass}>Cron expression</label>
+              <input className={`${fieldClass} font-mono`} value={schedule.cron ?? ''} placeholder="0 9 * * 1-5" onChange={(e) => setSchedule({ cron: e.target.value })} />
+            </div>
+          )}
+          <div>
+            <label className={labelClass}>Timezone</label>
+            <input className={fieldClass} value={schedule.timezone ?? 'UTC'} placeholder="America/Denver" onChange={(e) => setSchedule({ timezone: e.target.value })} />
+          </div>
+          <div>
+            <label className={labelClass}>Input for scheduled runs (optional)</label>
+            <textarea rows={2} className={fieldClass} value={trigger.input ?? ''} placeholder="Passed as {{trigger.input}} on each scheduled run" onChange={(e) => onChange({ ...trigger, input: e.target.value || undefined })} />
+          </div>
+          <p className="text-xs text-muted-foreground">Scheduled runs execute the <strong>published</strong> version — publish the flow to arm the schedule.</p>
+        </div>
+      )}
+
+      {type === 'webhook' && (
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" size="sm" className="flex-1" onClick={() => mintWebhook(false)} loading={minting}>
+              <Link2 className="mr-1.5 h-3.5 w-3.5" /> Get webhook URL
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => mintWebhook(true)} title="Rotate the secret (invalidates the old one)">
+              <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {webhook && (
+            <div className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-2.5">
+              <p className="break-all font-mono text-[11px]">{webhook.url}</p>
+              {webhook.secret ? (
+                <p className="break-all font-mono text-[11px] text-amber-700 dark:text-amber-400">x-trigger-secret: {webhook.secret}</p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">A secret already exists — rotate to mint a new one.</p>
+              )}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            POST to the URL with the <code className="font-mono">x-trigger-secret</code> header; the JSON body (or its <code className="font-mono">input</code> field) becomes {'{{trigger.input}}'}. Runs the <strong>published</strong> version.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

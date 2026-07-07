@@ -9,6 +9,9 @@ export type StepOutcome = {
 }
 export type RunAgentResult = { output?: unknown; error?: string; waiting?: { status: string; question?: string } }
 export type RunAgentFn = (node: { id: string; agentId: string; input: string; resume?: boolean }) => Promise<RunAgentResult>
+// Deterministic (non-agent) steps: MCP tool calls and HTTP requests. `config`
+// arrives with every template already resolved against the flow context.
+export type RunActionFn = (node: { id: string; kind: 'tool' | 'http'; config: Record<string, unknown> }) => Promise<RunAgentResult>
 export type InterpretResult = {
   status: 'succeeded' | 'failed' | 'waiting'
   steps: StepOutcome[]
@@ -18,6 +21,7 @@ export type InterpretResult = {
 
 type Opts = {
   runAgent: RunAgentFn
+  runAction?: RunActionFn
   maxSteps?: number
   maxLoopIterations?: number
   onStep?: (outcome: StepOutcome) => void
@@ -119,6 +123,35 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'condition') {
       // Conditions route on the main chain; inside a body they cannot branch.
       return { kind: 'skip' }
+    }
+
+    if (node.type === 'tool' || node.type === 'http') {
+      // Resolve every template in the node config, then delegate to runAction.
+      const config: Record<string, unknown> =
+        node.type === 'tool'
+          ? {
+              connectionId: node.data.connectionId,
+              toolName: node.data.toolName,
+              args: resolveTemplate(node.data.args ?? '{}', ctx),
+            }
+          : {
+              method: node.data.method,
+              url: resolveTemplate(node.data.url, ctx),
+              headers: node.data.headers ? resolveTemplate(node.data.headers, ctx) : undefined,
+              body: node.data.body ? resolveTemplate(node.data.body, ctx) : undefined,
+            }
+      const res: RunAgentResult = opts.runAction
+        ? await opts.runAction({ id: node.id, kind: node.type, config })
+        : { error: `${node.type} steps are not supported in this runtime.` }
+      if (res.error) {
+        emit({ nodeId: node.id, status: 'failed', error: res.error })
+        if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
+        return { kind: 'fail', error: res.error }
+      }
+      const output = asStructured(res.output)
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
     }
 
     if (node.type === 'agent') {

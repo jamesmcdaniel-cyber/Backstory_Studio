@@ -208,10 +208,11 @@ export async function GET(request: Request) {
       }
     }
 
-    // Scheduled flows: reuse the same due-check. A flow's schedule lives on
-    // flow.trigger (flat AgentSchedule shape); its most-recent flow_run.startedAt
-    // is the "last run" marker. Recurring flows are owned by this cron (no BullMQ
-    // scheduler for flows), so run them even in worker mode.
+    // Scheduled flows: reuse the same due-check. A flow's schedule lives at
+    // flow.trigger.schedule (a real AgentSchedule: hourly/daily/weekly/cron/once);
+    // its most-recent flow_run.startedAt is the "last run" marker. Recurring
+    // flows are owned by this cron (no BullMQ scheduler for flows), so run them
+    // even in worker mode.
     const flows = await prisma.flow.findMany({
       where: { status: 'ACTIVE' },
       include: { runs: { orderBy: { startedAt: 'desc' }, take: 1, select: { startedAt: true } } },
@@ -220,8 +221,8 @@ export async function GET(request: Request) {
     const ranFlowIds: string[] = []
     for (const flow of flows) {
       try {
-        const trigger = flow.trigger as { type?: string } | null
-        const schedule = flow.trigger as unknown as AgentSchedule | null
+        const trigger = flow.trigger as { type?: string; schedule?: AgentSchedule; input?: string } | null
+        const schedule = trigger?.schedule
         if (!trigger || trigger.type !== 'schedule' || !schedule || typeof schedule !== 'object') continue
         // Only PUBLISHED flows run on a schedule — a draft-only flow does not fire.
         if (flow.publishedGraph == null) continue
@@ -230,7 +231,14 @@ export async function GET(request: Request) {
           ? await prisma.user.findFirst({ where: { id: flow.userId, organizationId: flow.organizationId, isActive: true } })
           : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })
         if (!owner) continue
-        await runFlowExecution({ flowId: flow.id, organizationId: flow.organizationId, userId: owner.id, input: '', usePublished: true })
+        await runFlowExecution({
+          flowId: flow.id,
+          organizationId: flow.organizationId,
+          userId: owner.id,
+          input: trigger.input ?? '',
+          usePublished: true,
+          trigger: { type: 'schedule' },
+        })
         ranFlowIds.push(flow.id)
       } catch (error) {
         apiLogger.error('cron/dispatch: flow dispatch failed, skipping', {

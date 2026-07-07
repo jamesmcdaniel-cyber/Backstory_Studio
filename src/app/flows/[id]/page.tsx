@@ -8,10 +8,10 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
-import { insertAgentAfter, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
+import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
 import { buildDataTree } from '@/lib/flows/datatree'
 import { FlowCanvas } from '@/components/flows/flow-canvas'
-import { StepDrawer } from '@/components/flows/step-drawer'
+import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import type { StepStatus } from '@/components/flows/step-card'
@@ -59,7 +59,11 @@ export default function FlowBuilder() {
   const [testInput, setTestInput] = useState('')
   const [runs, setRuns] = useState<{ id: string; status: string; startedAt?: string }[]>([])
   const [selectedRun, setSelectedRun] = useState<FlowRunDetail | null>(null)
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalog>([])
+  // Serialized snapshot of the last-saved state, for the unsaved-changes dot.
+  const [savedSnapshot, setSavedSnapshot] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const dirty = savedSnapshot !== '' && JSON.stringify({ name, graph, status }) !== savedSnapshot
 
   useEffect(() => {
     let cancelled = false
@@ -71,11 +75,13 @@ export default function FlowBuilder() {
         if (cancelled) return
         const flow = (flowsData.flows || []).find((f: { id: string }) => f.id === id)
         if (flow) {
+          const g = flow.graph && flow.graph.nodes ? flow.graph : emptyGraph()
           setName(flow.name)
-          setGraph(flow.graph && flow.graph.nodes ? flow.graph : emptyGraph())
+          setGraph(g)
           setStatus(flow.status)
           setVersion(flow.version ?? 1)
           setPublished(Boolean(flow.published))
+          setSavedSnapshot(JSON.stringify({ name: flow.name, graph: g, status: flow.status }))
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
       })
@@ -83,12 +89,29 @@ export default function FlowBuilder() {
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
+    // The tool catalog loads separately — discovery can be slow and must not
+    // block the canvas paint.
+    fetch('/api/flows/tool-catalog', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data.success) setToolCatalog(data.connections)
+      })
+      .catch(() => undefined)
     return () => {
       cancelled = true
     }
   }, [id])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // Warn before leaving with unsaved edits.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (dirty) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [dirty])
 
   // Undo/redo history over structural graph edits (not per-keystroke field edits).
   const undoStack = useRef<FlowGraph[]>([])
@@ -160,8 +183,19 @@ export default function FlowBuilder() {
     for (const step of selectedRun?.steps ?? []) lastOutputs[step.nodeId] = tryParse(step.output)
     const upstream = upstreamIds.map((uid) => {
       const n = graph.nodes.find((x) => x.id === uid)
-      const label = n?.type === 'agent' ? n.data.label || agentsById.get(n.data.agentId) || 'Agent step' : n ? n.type : uid
-      return { id: uid, label, outputFields: n?.type === 'agent' ? n.data.outputFields : undefined }
+      const label =
+        n?.type === 'agent'
+          ? n.data.label || agentsById.get(n.data.agentId) || 'Agent step'
+          : n?.type === 'tool'
+            ? n.data.label || n.data.toolName || 'Tool call'
+            : n?.type === 'http'
+              ? n.data.label || `${n.data.method} request`
+              : n
+                ? n.type
+                : uid
+      const outputFields =
+        n?.type === 'agent' || n?.type === 'tool' || n?.type === 'http' ? n.data.outputFields : undefined
+      return { id: uid, label, outputFields }
     })
     return buildDataTree({ upstream, insideLoop, lastOutputs })
   }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById])
@@ -179,6 +213,7 @@ export default function FlowBuilder() {
         toast.error(data.error || 'Could not save the flow.')
         return false
       }
+      setSavedSnapshot(JSON.stringify({ name, graph, status }))
       return true
     } finally {
       setSaving(false)
@@ -329,8 +364,9 @@ export default function FlowBuilder() {
         <Button variant="outline" size="sm" onClick={() => setShowCopilot((v) => !v)}>
           <Sparkles className="mr-1.5 h-4 w-4" /> Copilot
         </Button>
-        <Button variant="outline" size="sm" onClick={save} loading={saving}>
+        <Button variant="outline" size="sm" onClick={save} loading={saving} className="relative">
           <Save className="mr-1.5 h-4 w-4" /> Save
+          {dirty && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-400" title="Unsaved changes" />}
         </Button>
         <Button variant="outline" size="sm" onClick={() => publish(false)} loading={publishing} title={published ? `Published v${version}` : 'Not yet published'}>
           {published ? `Publish v${version + 1}` : 'Publish'}
@@ -354,8 +390,13 @@ export default function FlowBuilder() {
             statusByNode={mode === 'test' ? statusByNode : {}}
             selectedId={selectedId}
             onSelect={setSelectedId}
-            onInsertAfter={(afterId) => {
-              const { graph: next, nodeId } = insertAgentAfter(graph, afterId, agents[0]?.id ?? '')
+            onInsertAfter={(afterId, type) => {
+              const { graph: next, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? agents[0]?.id ?? '' : undefined)
+              commitGraph(next)
+              setSelectedId(nodeId)
+            }}
+            onAppendBranch={(conditionId, branch, type) => {
+              const { graph: next, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? agents[0]?.id ?? '' : undefined)
               commitGraph(next)
               setSelectedId(nodeId)
             }}
@@ -366,10 +407,17 @@ export default function FlowBuilder() {
           <div className="w-80 shrink-0">
             <StepDrawer
               node={selectedNode}
+              flowId={id}
               agents={agents}
+              toolCatalog={toolCatalog}
               dataFields={dataFields}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
               onChangeType={(type) => commitGraph(changeNodeType(graph, selectedNode.id, type))}
+              onDuplicate={() => {
+                const { graph: next, nodeId } = duplicateNode(graph, selectedNode.id)
+                commitGraph(next)
+                setSelectedId(nodeId)
+              }}
               onAddStep={
                 selectedNode.type === 'loop' || selectedNode.type === 'parallel'
                   ? () => {

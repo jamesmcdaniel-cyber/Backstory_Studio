@@ -1,7 +1,10 @@
 import { prisma } from '@/lib/prisma'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { flowGraphSchema } from '@/lib/flows/graph'
-import { interpretFlow, type RunAgentFn } from './interpret'
+import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
+import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
+import { assertPublicUrl } from '@/lib/net/ssrf'
+import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 
 export type FlowExecutionJob = {
   flowId: string
@@ -14,7 +17,13 @@ export type FlowExecutionJob = {
   // Scheduled/triggered runs execute the PUBLISHED graph; a manual builder run
   // executes the working draft so you can test before publishing.
   usePublished?: boolean
+  // How this run was started — persisted on the FlowRun for provenance.
+  trigger?: { type: 'manual' | 'schedule' | 'webhook'; [key: string]: unknown }
 }
+
+// Bounds for http steps: response size kept promptable, one attempt ≤ 30s.
+const HTTP_TIMEOUT_MS = 30_000
+const HTTP_MAX_RESPONSE_CHARS = 50_000
 
 function jsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? null))
@@ -42,6 +51,7 @@ export async function runFlowExecution(
           flowId: flow.id,
           status: 'running',
           input: { prompt: input },
+          trigger: jsonValue(job.trigger ?? { type: 'manual' }),
           graphSnapshot: jsonValue(graph),
           organizationId: job.organizationId,
           userId: job.userId,
@@ -133,8 +143,91 @@ export async function runFlowExecution(
     }
   }
 
+  // Deterministic steps: MCP tool calls and HTTP requests. Same FlowRunStep
+  // bookkeeping as agent steps so the run panel shows their input/output.
+  const runAction: RunActionFn = async (node) => {
+    const step = await prisma.flowRunStep.create({
+      data: {
+        flowRunId: run.id,
+        nodeId: node.id,
+        order: order++,
+        status: 'running',
+        input: jsonValue(node.config),
+        startedAt: new Date(),
+      },
+    })
+    const finish = async (patch: { status: string; output?: unknown; error?: string }) => {
+      await prisma.flowRunStep.update({
+        where: { id: step.id },
+        data: {
+          status: patch.status,
+          output: patch.output !== undefined ? jsonValue(patch.output) : undefined,
+          error: patch.error ? patch.error.slice(0, 300) : undefined,
+          finishedAt: new Date(),
+        },
+      })
+    }
+    try {
+      if (node.kind === 'tool') {
+        const connectionId = String(node.config.connectionId || '')
+        const conn = await prisma.mcpConnection.findFirst({
+          where: { id: connectionId, organizationId: job.organizationId, isActive: true },
+        })
+        if (!conn) throw new Error('The selected connection no longer exists — pick another in the step config.')
+        const fresh = await ensureFreshConnectionToken(conn)
+        const client = new McpClient(mcpConfigFromConnection(fresh))
+        let args: Record<string, unknown> = {}
+        try {
+          const parsed = JSON.parse(String(node.config.args || '{}'))
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed
+        } catch {
+          throw new Error('Tool arguments are not valid JSON after template substitution.')
+        }
+        const result = await client.executeTool(fresh.serverUrl, String(node.config.toolName), args)
+        const output = typeof result === 'string' ? result : JSON.stringify(result ?? null)
+        await finish({ status: 'succeeded', output })
+        return { output }
+      }
+      // http
+      const url = String(node.config.url || '')
+      await assertPublicUrl(url) // SSRF guard: no internal/private targets
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS)
+      try {
+        let headers: Record<string, string> = { 'content-type': 'application/json' }
+        if (node.config.headers) {
+          try {
+            const parsed = JSON.parse(String(node.config.headers))
+            if (parsed && typeof parsed === 'object') headers = { ...headers, ...parsed }
+          } catch {
+            throw new Error('Headers are not valid JSON after template substitution.')
+          }
+        }
+        const method = String(node.config.method || 'POST').toUpperCase()
+        const response = await fetch(url, {
+          method,
+          headers,
+          body: method === 'GET' ? undefined : (node.config.body as string | undefined),
+          signal: controller.signal,
+          redirect: 'error', // a redirect could bypass the SSRF check
+        })
+        const text = (await response.text()).slice(0, HTTP_MAX_RESPONSE_CHARS)
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`)
+        await finish({ status: 'succeeded', output: text })
+        return { output: text }
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      await finish({ status: 'failed', error: message })
+      return { error: message }
+    }
+  }
+
   const result = await interpretFlow(graph, input, {
     runAgent,
+    runAction,
     onStep,
     ...(resuming ? { completed, resumeNodeId } : {}),
   })

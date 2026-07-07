@@ -11,7 +11,7 @@ function jsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? null))
 }
 
-const triggerSchema = z.object({ type: z.enum(['manual', 'schedule', 'signal']).default('manual') }).passthrough()
+const triggerSchema = z.object({ type: z.enum(['manual', 'schedule', 'webhook', 'signal']).default('manual') }).passthrough()
 const flowSchema = z.object({
   name: z.string().min(1),
   description: z.string().default(''),
@@ -60,7 +60,16 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       ...(body.description !== undefined && { description: body.description }),
       ...(body.status !== undefined && { status: body.status }),
       ...(body.visibility !== undefined && { visibility: body.visibility }),
-      ...(body.trigger !== undefined && { trigger: jsonValue(body.trigger) }),
+      // Preserve the webhook secret hash across trigger edits — the client
+      // never sees it, so a plain PUT would silently wipe it.
+      ...(body.trigger !== undefined && {
+        trigger: jsonValue({
+          ...body.trigger,
+          ...((existing.trigger as Record<string, unknown> | null)?.webhookSecretHash
+            ? { webhookSecretHash: (existing.trigger as Record<string, unknown>).webhookSecretHash }
+            : {}),
+        }),
+      }),
       ...(body.graph !== undefined && { graph: jsonValue(body.graph) }),
     },
   })

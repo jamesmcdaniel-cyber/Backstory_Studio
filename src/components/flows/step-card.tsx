@@ -1,6 +1,6 @@
 'use client'
 
-import { Bot, GitBranch, Repeat, Rows3, Zap, CircleStop } from 'lucide-react'
+import { Bot, GitBranch, Repeat, Rows3, Zap, CircleStop, Wrench, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FlowNode } from '@/lib/flows/graph'
 
@@ -13,6 +13,8 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   loop: Repeat,
   parallel: Rows3,
   stop: CircleStop,
+  tool: Wrench,
+  http: Globe,
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {
