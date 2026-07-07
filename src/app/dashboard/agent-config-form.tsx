@@ -12,6 +12,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { MiniCalendar } from '@/components/ui/mini-calendar'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { KnowledgePanel } from '@/app/dashboard/knowledge-panel'
 import { cn } from '@/lib/utils'
 
 /**
@@ -781,6 +782,8 @@ export function AgentConfigForm({
           .
         </p>
       </div>
+
+      {editingAgent?.id && <KnowledgePanel agentId={editingAgent.id} />}
 
       {editingAgent && (
         <div>

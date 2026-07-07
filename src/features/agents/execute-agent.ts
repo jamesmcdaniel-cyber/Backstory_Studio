@@ -11,6 +11,7 @@ import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection } from '@/li
 import { recordAudit } from '@/lib/audit'
 import { createApproval, requiresApproval } from '@/lib/agents/approval'
 import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
+import { retrieveKnowledge, renderKnowledge } from '@/lib/knowledge/retrieve'
 import { embeddingsConfigured, embedQuery, embedTexts, cosineSimilarity } from '@/lib/rag/embeddings'
 import { getGraphRagStore } from '@/lib/rag/get-store'
 import { indexExecution } from '@/lib/rag/indexer'
@@ -827,6 +828,30 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       }
     } catch (error) {
       apiLogger.warn('execute-agent: RAG context skipped', {
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    // Uploaded file knowledge: retrieve the most relevant chunks for this agent
+    // and inject them into the system prompt. Best-effort — never blocks a run.
+    try {
+      const knowledgeHits = await retrieveKnowledge({
+        organizationId,
+        agentId: agent.id,
+        query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
+      })
+      const knowledgeBlock = renderKnowledge(knowledgeHits)
+      if (knowledgeBlock) {
+        system = `${system}\n\n${knowledgeBlock}`
+        await recordEvent(execution.id, null, 'knowledge.retrieved', {
+          source: 'uploaded-files',
+          files: [...new Set(knowledgeHits.map((h) => h.filename))],
+          summary: `Pulled ${knowledgeHits.length} passage(s) from ${new Set(knowledgeHits.map((h) => h.filename)).size} uploaded file(s).`,
+        })
+      }
+    } catch (error) {
+      apiLogger.warn('execute-agent: knowledge retrieval skipped', {
         organizationId,
         error: error instanceof Error ? error.message : String(error),
       })
