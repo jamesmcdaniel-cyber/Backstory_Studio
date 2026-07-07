@@ -777,10 +777,14 @@ export async function runAgentExecution(data: AgentExecutionJob) {
               depth: depth + 1,
               ancestorAgentIds: chain,
             })
-            // A completed sub-run returns its output string; a suspended one
-            // (asked the user) returns a status object — surface that plainly.
-            if (typeof result === 'string') return { agent: nameOf(target.metadata) || target.description, output: result }
-            return { agent: wanted, note: 'The sub-agent paused for input, which pipelines do not support. Make it self-sufficient or pass what it needs in the input.' }
+            // A completed sub-run returns { summary }; a suspended one (asked
+            // the user / awaiting approval) returns { status: 'waiting_*' }.
+            const sub = result as { summary?: string; status?: string; question?: string }
+            if (typeof sub?.summary === 'string') return { agent: nameOf(target.metadata) || target.description, output: sub.summary }
+            if (typeof sub?.status === 'string' && sub.status.startsWith('waiting')) {
+              return { agent: wanted, note: `The sub-agent paused (${sub.status}${sub.question ? `: ${sub.question}` : ''}), which pipelines do not support. Make it self-sufficient or pass what it needs in the input.` }
+            }
+            return { agent: wanted, note: 'The sub-agent produced no output.' }
           } catch (error) {
             return { error: error instanceof Error ? error.message : String(error) }
           }
