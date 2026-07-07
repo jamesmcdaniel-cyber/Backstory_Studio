@@ -57,6 +57,7 @@ const LOCAL_LOGOS: Record<string, string> = {
   googlesheets: '/logos/googlesheets.webp',
   monday: '/logos/monday.jpg',
   mondaydotcom: '/logos/monday.jpg',
+  qwen: '/logos/qwen.webp',
 }
 
 function localLogo(slug: string): string | undefined {
