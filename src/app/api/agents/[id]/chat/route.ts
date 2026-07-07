@@ -2,7 +2,7 @@ import type { AgentChatMessage, Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { generateStructured } from '@/lib/llm/model-runner'
-import { openAICompatConfigured } from '@/lib/llm/openai-compat'
+import { qwenConfigured } from '@/lib/llm/qwen'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { buildAssistantContext } from '@/features/agents/assistant-context'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
@@ -167,7 +167,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
 })
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  if (!process.env.ANTHROPIC_API_KEY && !openAICompatConfigured()) {
+  if (!process.env.ANTHROPIC_API_KEY && !qwenConfigured()) {
     throw new ApiError('No model provider is configured', 503, 'AI_UNAVAILABLE')
   }
   const agentId = agentIdFromRequest(request)

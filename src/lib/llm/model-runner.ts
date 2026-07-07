@@ -1,15 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { apiLogger } from '@/lib/logger'
-import { openAICompatClient, openAICompatConfigured, openAICompatModel } from './openai-compat'
+import { qwenClient, qwenConfigured, qwenModel } from './qwen'
 import {
   type IRMessage,
   type ProviderKind,
   irUser,
   irToolResults,
   irFromAnthropic,
-  irFromOpenAI,
   toAnthropicMessages,
-  toOpenAIMessages,
 } from './ir'
 
 export type ToolDefinition = {
@@ -95,14 +93,14 @@ interface Provider {
   next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn>
 }
 
+// Anthropic-wire provider. Serves BOTH Claude (api.anthropic.com) and Qwen
+// (DashScope's Anthropic-compatible endpoint) — same Messages API, different
+// client — so one implementation covers both. The client is injected by
+// buildProvider so this class stays free of endpoint/key selection.
 class AnthropicProvider implements Provider {
   readonly kind = 'anthropic' as const
-  private readonly client: Anthropic
 
-  constructor(readonly model: string) {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured')
-    this.client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
-  }
+  constructor(readonly model: string, private readonly client: Anthropic) {}
 
   async next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
     const stream = this.client.messages.stream({
@@ -153,51 +151,10 @@ class AnthropicProvider implements Provider {
   }
 }
 
-// OpenAI-compatible provider — the OpenAI chat-completions wire format, now
-// served by Qwen (see openai-compat.ts). ChatGPT/OpenAI is no longer offered.
-class OpenAIProvider implements Provider {
-  readonly kind = 'openai' as const
-  private readonly client = openAICompatClient()
-
-  constructor(readonly model: string) {}
-
-  async next(ir: IRMessage[], system: string, tools: ToolDefinition[]): Promise<ModelTurn> {
-    const response = await this.client.chat.completions.create({
-      model: openAICompatModel(this.model),
-      messages: toOpenAIMessages(ir, system),
-      ...(tools.length
-        ? {
-            tools: tools.map((tool) => ({
-              type: 'function' as const,
-              function: {
-                name: tool.name,
-                description: tool.description,
-                parameters: tool.inputSchema,
-              },
-            })),
-            tool_choice: 'auto' as const,
-          }
-        : {}),
-    })
-    const message = response.choices[0]?.message
-    if (!message) throw new Error('Model returned no message')
-    ir.push(irFromOpenAI(message))
-
-    return {
-      text: (message.content || '').trim(),
-      toolCalls: (message.tool_calls || [])
-        .filter((call) => call.type === 'function')
-        .map((call) => ({
-          id: call.id,
-          name: call.function.name,
-          input: JSON.parse(call.function.arguments || '{}') as Record<string, unknown>,
-        })),
-      usage: {
-        inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0,
-      },
-    }
-  }
+/** An Anthropic SDK client for Claude (api.anthropic.com). */
+function claudeClient(): Anthropic {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured')
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
 }
 
 /**
@@ -254,10 +211,11 @@ class AgentRunner implements ModelRunner {
 }
 
 // ---------------------------------------------------------------------------
-// Default models. Claude is the default provider. AGENT_MODEL drives agent
-// runs; SUMMARY_MODEL drives cheap surfaces (headlines, run Q&A). The
-// non-Claude slot is Qwen (OpenAI-compatible) — set QWEN_API_KEY/QWEN_BASE_URL/
-// QWEN_MODEL to enable it; ChatGPT/OpenAI is no longer offered.
+// Default models. Both Claude and Qwen speak the Anthropic Messages API (Qwen
+// via DashScope's Anthropic-compatible endpoint), so routing picks an ENDPOINT,
+// not a wire format. AGENT_MODEL drives agent runs; SUMMARY_MODEL drives cheap
+// surfaces (headlines, run Q&A). Qwen activates when QWEN_API_KEY/QWEN_BASE_URL/
+// QWEN_MODEL are set; ChatGPT/OpenAI is no longer used.
 // ---------------------------------------------------------------------------
 export const DEFAULT_AGENT_MODEL = process.env.AGENT_MODEL?.trim() || 'claude-sonnet-5'
 export const DEFAULT_SUMMARY_MODEL = process.env.SUMMARY_MODEL?.trim() || 'claude-haiku-4-5'
@@ -265,38 +223,39 @@ const FALLBACK_CLAUDE_MODEL = 'claude-opus-4-8'
 // UI id for the Qwen slot; the exact model string is resolved from QWEN_MODEL.
 const FALLBACK_QWEN_MODEL = 'qwen-3.7'
 
-const hasQwen = () => openAICompatConfigured()
+const hasQwen = () => qwenConfigured()
 const hasAnthropic = () => !!process.env.ANTHROPIC_API_KEY
 const isClaude = (model: string) => model.startsWith('claude')
 
-/** A routed step in the provider chain: the provider and the model to use on it. */
-type RouteStep = { provider: ProviderKind; model: string }
+/** A routed step: which endpoint (Claude vs Qwen) and the model to send it. */
+type RouteStep = { target: 'claude' | 'qwen'; model: string }
 
 /**
- * Explicit model routing. Returns the ORDERED provider chain for a run: the
- * requested model's provider first (its own model), then the OTHER provider as a
- * fallback (with a sensible default model for it). Only providers whose key is
+ * Explicit model routing. Returns the ORDERED endpoint chain for a run: the
+ * requested model's endpoint first (its own model), then the OTHER endpoint as a
+ * fallback (with a sensible default model for it). Only endpoints whose key is
  * configured appear — so an agent saved with a Qwen model still runs on Claude
- * when Qwen isn't configured, and every run gains a cross-provider fallback when
+ * when Qwen isn't configured, and every run gains a cross-endpoint fallback when
  * both are present. This is the single source of truth for run routing.
- * Provider kind 'openai' is the OpenAI-compatible (Qwen) wire format.
  */
 export function routeModel(requested?: string): RouteStep[] {
   const model = requested?.trim() || DEFAULT_AGENT_MODEL
   const wantsClaude = isClaude(model)
-  const anthropicStep: RouteStep = { provider: 'anthropic', model: wantsClaude ? model : FALLBACK_CLAUDE_MODEL }
-  const qwenStep: RouteStep = { provider: 'openai', model: wantsClaude ? FALLBACK_QWEN_MODEL : model }
-  const ordered = wantsClaude ? [anthropicStep, qwenStep] : [qwenStep, anthropicStep]
-  return ordered.filter((step) => (step.provider === 'openai' ? hasQwen() : hasAnthropic()))
+  const claudeStep: RouteStep = { target: 'claude', model: wantsClaude ? model : FALLBACK_CLAUDE_MODEL }
+  const qwenStep: RouteStep = { target: 'qwen', model: wantsClaude ? FALLBACK_QWEN_MODEL : model }
+  const ordered = wantsClaude ? [claudeStep, qwenStep] : [qwenStep, claudeStep]
+  return ordered.filter((step) => (step.target === 'qwen' ? hasQwen() : hasAnthropic()))
 }
 
 function buildProvider(step: RouteStep): Provider {
-  return step.provider === 'anthropic' ? new AnthropicProvider(step.model) : new OpenAIProvider(step.model)
+  return step.target === 'qwen'
+    ? new AnthropicProvider(qwenModel(step.model), qwenClient())
+    : new AnthropicProvider(step.model, claudeClient())
 }
 
 /**
  * Build the agent runner for the requested model: an AgentRunner over the routed
- * provider chain (primary + cross-provider fallback). Keeps the same signature
+ * endpoint chain (primary + cross-endpoint fallback). Keeps the same signature
  * and ModelRunner contract as before; callers are unchanged.
  */
 export function createModelRunner(requested?: string): ModelRunner {
@@ -307,14 +266,14 @@ export function createModelRunner(requested?: string): ModelRunner {
   return new AgentRunner(chain)
 }
 
-// Resolve which provider/model to use for a cheap "summary" call, honoring
-// SUMMARY_MODEL but falling back to whichever provider's key is present.
-function summaryTarget(): { provider: 'openai' | 'anthropic'; model: string } | null {
+// Resolve which endpoint/model to use for a cheap "summary" call, honoring
+// SUMMARY_MODEL but falling back to whichever endpoint's key is present.
+function summaryTarget(): { target: 'claude' | 'qwen'; model: string } | null {
   const wantsClaude = isClaude(DEFAULT_SUMMARY_MODEL)
-  if (wantsClaude && hasAnthropic()) return { provider: 'anthropic', model: DEFAULT_SUMMARY_MODEL }
-  if (!wantsClaude && hasQwen()) return { provider: 'openai', model: DEFAULT_SUMMARY_MODEL }
-  if (hasAnthropic()) return { provider: 'anthropic', model: 'claude-haiku-4-5' }
-  if (hasQwen()) return { provider: 'openai', model: FALLBACK_QWEN_MODEL }
+  if (wantsClaude && hasAnthropic()) return { target: 'claude', model: DEFAULT_SUMMARY_MODEL }
+  if (!wantsClaude && hasQwen()) return { target: 'qwen', model: DEFAULT_SUMMARY_MODEL }
+  if (hasAnthropic()) return { target: 'claude', model: 'claude-haiku-4-5' }
+  if (hasQwen()) return { target: 'qwen', model: FALLBACK_QWEN_MODEL }
   return null
 }
 
@@ -326,32 +285,19 @@ export async function generateHeadline(summary: string): Promise<string | null> 
   const system =
     'Summarize what an AI agent run accomplished in one short, friendly past-tense line of at most 10 words. Respond with the line only — no quotes, no preamble.'
   try {
-    let text = ''
-    if (target.provider === 'anthropic') {
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
-      const response = await client.messages.create({
-        model: target.model,
-        max_tokens: 64,
-        system,
-        messages: [{ role: 'user', content: summary.slice(0, 4000) }],
-      })
-      text = response.content
-        .filter((block): block is Anthropic.TextBlock => block.type === 'text')
-        .map((block) => block.text)
-        .join(' ')
-        .trim()
-    } else {
-      const client = openAICompatClient()
-      const response = await client.chat.completions.create({
-        model: openAICompatModel(target.model),
-        max_tokens: 64,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: summary.slice(0, 4000) },
-        ],
-      })
-      text = (response.choices[0]?.message?.content || '').trim()
-    }
+    // Both endpoints speak the Anthropic Messages API.
+    const client = target.target === 'qwen' ? qwenClient() : claudeClient()
+    const response = await client.messages.create({
+      model: target.target === 'qwen' ? qwenModel(target.model) : target.model,
+      max_tokens: 64,
+      system,
+      messages: [{ role: 'user', content: summary.slice(0, 4000) }],
+    })
+    const text = response.content
+      .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+      .map((block) => block.text)
+      .join(' ')
+      .trim()
     return text ? text.split('\n')[0].slice(0, 120) : null
   } catch {
     return null
@@ -385,22 +331,22 @@ export function isProviderAvailabilityError(error: unknown): boolean {
   return status === 401 || status === 403 || status === 429 || status >= 500
 }
 
-/** Provider order for structured calls: honor the default model's provider, try the other second. */
+/** Endpoint order for structured calls: honor the default model's endpoint, try the other second. */
 export function structuredProviderOrder(input: {
   defaultModel: string
-  openai: boolean
+  qwen: boolean
   anthropic: boolean
-}): Array<'openai' | 'anthropic'> {
+}): Array<'claude' | 'qwen'> {
   const wantsClaude = input.defaultModel.startsWith('claude')
-  const order: Array<'openai' | 'anthropic'> = wantsClaude
-    ? ['anthropic', 'openai']
-    : ['openai', 'anthropic']
-  return order.filter((provider) => (provider === 'openai' ? input.openai : input.anthropic))
+  const order: Array<'claude' | 'qwen'> = wantsClaude ? ['claude', 'qwen'] : ['qwen', 'claude']
+  return order.filter((target) => (target === 'qwen' ? input.qwen : input.anthropic))
 }
 
-async function anthropicStructured(opts: StructuredOpts): Promise<string> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: LLM_TIMEOUT_MS, maxRetries: LLM_MAX_RETRIES })
-  const model = isClaude(DEFAULT_AGENT_MODEL) ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL
+/**
+ * One structured call over the Anthropic Messages API (both Claude and Qwen
+ * speak it). `output_config` json_schema constrains the reply to the schema.
+ */
+async function anthropicWireStructured(opts: StructuredOpts, client: Anthropic, model: string): Promise<string> {
   const response = await client.messages.create({
     model,
     max_tokens: opts.maxTokens ?? 4096,
@@ -414,27 +360,10 @@ async function anthropicStructured(opts: StructuredOpts): Promise<string> {
     .join('')
 }
 
-async function openaiStructured(opts: StructuredOpts): Promise<string> {
-  const client = openAICompatClient()
-  const response = await client.chat.completions.create({
-    model: openAICompatModel(isClaude(DEFAULT_AGENT_MODEL) ? FALLBACK_QWEN_MODEL : DEFAULT_AGENT_MODEL),
-    max_tokens: opts.maxTokens ?? 4096,
-    messages: [
-      { role: 'system', content: opts.system },
-      { role: 'user', content: opts.user },
-    ],
-    response_format: {
-      type: 'json_schema',
-      json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
-    },
-  })
-  return response.choices[0]?.message?.content || ''
-}
-
 export async function generateStructured(opts: StructuredOpts): Promise<string> {
   const order = structuredProviderOrder({
     defaultModel: DEFAULT_AGENT_MODEL,
-    openai: hasQwen(),
+    qwen: hasQwen(),
     anthropic: hasAnthropic(),
   })
   if (order.length === 0) {
@@ -442,14 +371,16 @@ export async function generateStructured(opts: StructuredOpts): Promise<string> 
   }
 
   let lastError: unknown
-  for (const provider of order) {
+  for (const target of order) {
     try {
-      return provider === 'anthropic' ? await anthropicStructured(opts) : await openaiStructured(opts)
+      return target === 'qwen'
+        ? await anthropicWireStructured(opts, qwenClient(), qwenModel(FALLBACK_QWEN_MODEL))
+        : await anthropicWireStructured(opts, claudeClient(), isClaude(DEFAULT_AGENT_MODEL) ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL)
     } catch (error) {
       lastError = error
       if (!isProviderAvailabilityError(error)) throw error
-      apiLogger.warn('generateStructured: provider unavailable, trying fallback', {
-        provider,
+      apiLogger.warn('generateStructured: endpoint unavailable, trying fallback', {
+        target,
         status: (error as { status?: number }).status,
         error: error instanceof Error ? error.message.slice(0, 200) : String(error),
       })

@@ -2,26 +2,26 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isProviderAvailabilityError, structuredProviderOrder } from '../model-runner'
 
-test('gpt default prefers openai, falls back to anthropic', () => {
+test('qwen default prefers qwen, falls back to claude', () => {
   assert.deepEqual(
-    structuredProviderOrder({ defaultModel: 'qwen-3.7', openai: true, anthropic: true }),
-    ['openai', 'anthropic'],
+    structuredProviderOrder({ defaultModel: 'qwen-3.7', qwen: true, anthropic: true }),
+    ['qwen', 'claude'],
   )
 })
 
-test('claude default prefers anthropic', () => {
+test('claude default prefers claude', () => {
   assert.deepEqual(
-    structuredProviderOrder({ defaultModel: 'claude-opus-4-8', openai: true, anthropic: true }),
-    ['anthropic', 'openai'],
+    structuredProviderOrder({ defaultModel: 'claude-opus-4-8', qwen: true, anthropic: true }),
+    ['claude', 'qwen'],
   )
 })
 
 test('only configured providers appear', () => {
   assert.deepEqual(
-    structuredProviderOrder({ defaultModel: 'qwen-3.7', openai: false, anthropic: true }),
-    ['anthropic'],
+    structuredProviderOrder({ defaultModel: 'qwen-3.7', qwen: false, anthropic: true }),
+    ['claude'],
   )
-  assert.deepEqual(structuredProviderOrder({ defaultModel: 'qwen-3.7', openai: false, anthropic: false }), [])
+  assert.deepEqual(structuredProviderOrder({ defaultModel: 'qwen-3.7', qwen: false, anthropic: false }), [])
 })
 
 test('quota/auth/overload errors are availability failures; schema errors are not', () => {

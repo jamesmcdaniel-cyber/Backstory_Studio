@@ -133,17 +133,17 @@ test('routeModel orders the requested provider first, then the fallback', () => 
     process.env.QWEN_API_KEY = 'y'
     process.env.QWEN_BASE_URL = 'https://qwen.example/v1'
     assert.deepEqual(routeModel('claude-opus-4-8'), [
-      { provider: 'anthropic', model: 'claude-opus-4-8' },
-      { provider: 'openai', model: 'qwen-3.7' },
+      { target: 'claude', model: 'claude-opus-4-8' },
+      { target: 'qwen', model: 'qwen-3.7' },
     ])
     assert.deepEqual(routeModel('qwen-3.7'), [
-      { provider: 'openai', model: 'qwen-3.7' },
-      { provider: 'anthropic', model: 'claude-opus-4-8' },
+      { target: 'qwen', model: 'qwen-3.7' },
+      { target: 'claude', model: 'claude-opus-4-8' },
     ])
     // Only the configured provider survives when Qwen is not configured.
     delete process.env.QWEN_API_KEY
     delete process.env.QWEN_BASE_URL
-    assert.deepEqual(routeModel('qwen-3.7'), [{ provider: 'anthropic', model: 'claude-opus-4-8' }])
+    assert.deepEqual(routeModel('qwen-3.7'), [{ target: 'claude', model: 'claude-opus-4-8' }])
   } finally {
     if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = prevA
