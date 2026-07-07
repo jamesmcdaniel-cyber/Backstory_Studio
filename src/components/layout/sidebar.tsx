@@ -21,6 +21,7 @@ import {
   Search,
   Server,
   Trash2,
+  Workflow,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { CommandPalette } from '@/components/search/command-palette'
@@ -88,6 +89,7 @@ export function notifyAgentsChanged() {
 const navigation = [
   { name: 'Home', href: '/dashboard', icon: Brain },
   { name: 'Integrations', href: '/integrations', icon: Plug },
+  { name: 'Flows', href: '/flows', icon: Workflow },
   { name: 'Explore', href: '/templates', icon: FileText },
   { name: 'MCP Servers', href: '/connections', icon: Server },
 ]
