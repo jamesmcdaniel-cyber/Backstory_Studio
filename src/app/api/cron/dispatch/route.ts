@@ -17,6 +17,7 @@ import { timingSafeEqual } from 'crypto'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
+import { runFlowExecution } from '@/features/flows/execute-flow'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
 import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
@@ -207,7 +208,39 @@ export async function GET(request: Request) {
       }
     }
 
-    return Response.json({ success: true, due: dueCount, ran: ranIds })
+    // Scheduled flows: reuse the same due-check. A flow's schedule lives on
+    // flow.trigger (flat AgentSchedule shape); its most-recent flow_run.startedAt
+    // is the "last run" marker. Recurring flows are owned by this cron (no BullMQ
+    // scheduler for flows), so run them even in worker mode.
+    const flows = await prisma.flow.findMany({
+      where: { status: 'ACTIVE' },
+      include: { runs: { orderBy: { startedAt: 'desc' }, take: 1, select: { startedAt: true } } },
+      take: 100,
+    })
+    const ranFlowIds: string[] = []
+    for (const flow of flows) {
+      try {
+        const trigger = flow.trigger as { type?: string } | null
+        const schedule = flow.trigger as unknown as AgentSchedule | null
+        if (!trigger || trigger.type !== 'schedule' || !schedule || typeof schedule !== 'object') continue
+        if (!isDue(schedule, flow.runs[0]?.startedAt ?? null, now)) continue
+        const owner = flow.userId
+          ? await prisma.user.findFirst({ where: { id: flow.userId, organizationId: flow.organizationId, isActive: true } })
+          : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })
+        if (!owner) continue
+        await runFlowExecution({ flowId: flow.id, organizationId: flow.organizationId, userId: owner.id, input: '' })
+        ranFlowIds.push(flow.id)
+      } catch (error) {
+        apiLogger.error('cron/dispatch: flow dispatch failed, skipping', {
+          flowId: flow.id,
+          organizationId: flow.organizationId,
+          error: capError(error),
+        })
+        continue
+      }
+    }
+
+    return Response.json({ success: true, due: dueCount, ran: ranIds, ranFlows: ranFlowIds })
   } catch (error) {
     apiLogger.error('cron/dispatch: unhandled error', {
       error: error instanceof Error ? error.message : String(error),
