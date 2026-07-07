@@ -30,7 +30,9 @@ export class KlavisError extends Error {
 
 function classify(status: number, detail: string): KlavisError {
   if (/creation limit reached|limit:\s*\d+/i.test(detail)) {
-    return new KlavisError('Klavis account instance limit reached. Disconnect a tool or upgrade your Klavis plan.', status, 'limit_reached', detail)
+    // Klavis caps distinct end-users per account (free tier: 3), not tools —
+    // each workspace member who connects a Klavis tool counts as one user.
+    return new KlavisError('Klavis plan limit reached — your Klavis account is at its user limit. Upgrade your Klavis plan to connect tools for more people.', status, 'limit_reached', detail)
   }
   if (status === 401 || status === 403) return new KlavisError('Klavis API key is invalid or unauthorized.', status, 'unauthorized', detail)
   if (status === 422 || status === 400) return new KlavisError(`Klavis rejected the request: ${detail.slice(0, 160)}`, status, 'invalid_request', detail)
