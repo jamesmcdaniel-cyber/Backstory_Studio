@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { ChevronRight, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Markdown } from '@/components/ui/markdown'
 import type { StepStatus } from './step-card'
 
 export type RunStep = {
@@ -45,6 +46,23 @@ function preview(value: unknown): string {
   }
 }
 
+/** Prose step outputs render as Markdown; structured data stays monospaced. */
+function OutputView({ value }: { value: unknown }) {
+  const isProse =
+    typeof value === 'string' &&
+    value.trim() !== '' &&
+    value.trim()[0] !== '{' &&
+    value.trim()[0] !== '['
+  if (isProse) {
+    return (
+      <div className="max-h-56 overflow-auto rounded border border-border/60 bg-background px-2.5 py-2">
+        <Markdown className="text-xs [&_p]:leading-5">{value as string}</Markdown>
+      </div>
+    )
+  }
+  return <pre className="max-h-40 overflow-auto rounded bg-muted px-2 py-1.5 text-xs">{preview(value)}</pre>
+}
+
 function StepRow({ step, label }: { step: RunStep; label: string }) {
   const [open, setOpen] = useState(false)
   return (
@@ -63,7 +81,7 @@ function StepRow({ step, label }: { step: RunStep; label: string }) {
           </div>
           <div>
             <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Output</p>
-            <pre className="max-h-40 overflow-auto rounded bg-muted px-2 py-1.5 text-xs">{preview(step.output)}</pre>
+            <OutputView value={step.output} />
           </div>
         </div>
       )}
