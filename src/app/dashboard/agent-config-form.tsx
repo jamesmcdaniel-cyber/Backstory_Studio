@@ -516,9 +516,10 @@ export function AgentConfigForm({
         <Label>Connected tools</Label>
         {availableIntegrations ? (
           <div className="mt-2 space-y-3">
-            {/* All configured/available tools across planes (built-ins, Nango,
-                Klavis), deduped, with brand logos. */}
-            {availableIntegrations.tools.length > 0 && (
+            {/* All attachable tools across planes (built-ins, Nango, Klavis, and
+                custom Backstory-MCP connections) in one wrapping row group so
+                they flow together rather than breaking onto separate rows. */}
+            {(availableIntegrations.tools.length > 0 || availableIntegrations.connections.length > 0) && (
               <div className="flex flex-wrap gap-2">
                 {availableIntegrations.tools.map((t) => {
                   const selected = draft.integrations.includes(t.key)
@@ -545,11 +546,6 @@ export function AgentConfigForm({
                     </button>
                   )
                 })}
-              </div>
-            )}
-            {/* Custom Backstory-MCP connections (loaded for every agent). */}
-            {availableIntegrations.connections.length > 0 && (
-              <div className="flex flex-wrap gap-2">
                 {availableIntegrations.connections.map((c) => {
                   const selected = draft.integrations.includes(c.name)
                   return (

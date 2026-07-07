@@ -255,14 +255,14 @@ function ExplorePage() {
                         {/* colored accent bar that brightens on hover */}
                         <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
                         <CardHeader className="space-y-2.5 pt-5">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
-                                <Icon className="h-[18px] w-[18px]" />
-                              </span>
-                              <CardTitle className="text-base leading-snug">{t.name}</CardTitle>
-                            </div>
-                            <Badge variant="outline" className={cn('shrink-0 text-xs font-medium', accent.badge)}>{t.category}</Badge>
+                          <div>
+                            <Badge variant="outline" className={cn('text-[11px] font-medium', accent.badge)}>{t.category}</Badge>
+                          </div>
+                          <div className="flex items-start gap-2.5">
+                            <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
+                              <Icon className="h-[18px] w-[18px]" />
+                            </span>
+                            <CardTitle className="min-w-0 text-base leading-snug">{t.name}</CardTitle>
                           </div>
                           {t.tags && t.tags.length > 0 && (
                             <div className="flex flex-wrap gap-1">
@@ -319,14 +319,14 @@ function ExplorePage() {
                   )}>
                     <div className={cn('absolute inset-x-0 top-0 h-1 bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />
                     <CardHeader className="space-y-2.5 pt-5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
-                            <Icon className="h-[18px] w-[18px]" />
-                          </span>
-                          <CardTitle className="text-base leading-snug">{skill.name}</CardTitle>
-                        </div>
-                        <Badge variant="outline" className={cn('shrink-0 text-xs font-medium', accent.badge)}>{skill.category}</Badge>
+                      <div>
+                        <Badge variant="outline" className={cn('text-[11px] font-medium', accent.badge)}>{skill.category}</Badge>
+                      </div>
+                      <div className="flex items-start gap-2.5">
+                        <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-105', accent.tile)}>
+                          <Icon className="h-[18px] w-[18px]" />
+                        </span>
+                        <CardTitle className="min-w-0 text-base leading-snug">{skill.name}</CardTitle>
                       </div>
                       {skill.tags && skill.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1">
