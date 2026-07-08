@@ -15,7 +15,7 @@ import { buildDataTree } from '@/lib/flows/datatree'
 import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 import { validateFlowGraph } from '@/lib/flows/validate'
-import { FlowCanvas } from '@/components/flows/flow-canvas'
+import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
@@ -508,6 +508,34 @@ export default function FlowBuilder() {
     }
   }, [id, name, router])
 
+  const applyInsertSeed = useCallback((next: FlowGraph, nodeId: string, seed?: FlowInsertSeed): FlowGraph => {
+    if (!seed) return next
+    const node = next.nodes.find((entry) => entry.id === nodeId)
+    if (!node) return next
+    if (node.type === 'agent') {
+      return updateNode(next, {
+        ...node,
+        data: {
+          ...node.data,
+          agentId: seed.agentId ?? node.data.agentId,
+          ...(seed.label ? { label: seed.label } : {}),
+        },
+      })
+    }
+    if (node.type === 'tool') {
+      return updateNode(next, {
+        ...node,
+        data: {
+          ...node.data,
+          connectionId: seed.connectionId ?? node.data.connectionId,
+          toolName: seed.toolName ?? node.data.toolName,
+          ...(seed.label ? { label: seed.label } : {}),
+        },
+      })
+    }
+    return next
+  }, [])
+
   if (loading) {
     return (
       <div className="flex h-full flex-col">
@@ -648,20 +676,31 @@ export default function FlowBuilder() {
 
       {/* Body: canvas + optional drawer + optional copilot */}
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-y-auto bg-muted/30 p-8">
+        <div
+          className="min-w-0 flex-1 overflow-y-auto bg-white p-8"
+          style={{
+            backgroundImage: 'radial-gradient(circle, rgba(15, 23, 42, 0.22) 1px, transparent 1px)',
+            backgroundSize: '28px 28px',
+          }}
+        >
           <FlowCanvas
             graph={graph}
             agentName={(agentId) => agentsById.get(agentId) ?? ''}
+            agents={agents}
+            toolCatalog={toolCatalog}
             statusByNode={mode === 'test' ? statusByNode : {}}
             selectedId={selectedId}
             onSelect={setSelectedId}
-            onInsertAfter={(afterId, type) => {
-              const { graph: next, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? agents[0]?.id ?? '' : undefined)
+            onChangeNode={(node) => setGraph((g) => updateNode(g, node))}
+            onInsertAfter={(afterId, type, seed) => {
+              const { graph: inserted, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
+              const next = applyInsertSeed(inserted, nodeId, seed)
               commitGraph(next)
               setSelectedId(nodeId)
             }}
-            onAppendBranch={(conditionId, branch, type) => {
-              const { graph: next, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? agents[0]?.id ?? '' : undefined)
+            onAppendBranch={(conditionId, branch, type, seed) => {
+              const { graph: inserted, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
+              const next = applyInsertSeed(inserted, nodeId, seed)
               commitGraph(next)
               setSelectedId(nodeId)
             }}

@@ -31,7 +31,7 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
     case 'tool':
       return { connectionId: '', toolName: '', args: '{}' }
     case 'http':
-      return { method: 'POST', url: '', bodyMode: 'json', responseType: 'auto', failOnHttpError: true, retries: 0, body: '{\n  "input": "{{trigger.input}}"\n}' }
+      return { method: 'POST', url: '', bodyMode: 'json', responseType: 'auto', failOnHttpError: true, retries: 0, body: '' }
     case 'transform':
       return { fields: [{ name: '', value: '' }] }
     case 'filter':
