@@ -10,7 +10,7 @@ export type FlowValidationIssue = {
 
 export type FlowValidationContext = {
   agents?: { id: string; title?: string }[]
-  toolCatalog?: { id: string; name?: string; tools?: { name: string }[] }[]
+  toolCatalog?: { id: string; name?: string; tools?: { name: string; inputSchema?: unknown }[] }[]
   requireRunnable?: boolean
 }
 
@@ -74,6 +74,16 @@ function validateJsonField(issues: FlowValidationIssue[], value: string | undefi
   }
 }
 
+function parseObjectJson(value: string | undefined): Record<string, unknown> | null {
+  if (!value?.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -129,6 +139,16 @@ function validateTriggerConfig(issues: FlowValidationIssue[], trigger: unknown) 
   }
 }
 
+function requiredToolArgs(inputSchema: unknown): string[] {
+  if (!isRecord(inputSchema)) return []
+  if (inputSchema.type !== undefined && inputSchema.type !== 'object') return []
+  return Array.isArray(inputSchema.required) ? inputSchema.required.filter((item): item is string => typeof item === 'string') : []
+}
+
+function argHasValue(value: unknown): boolean {
+  return value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')
+}
+
 function conditionClauses(node: Extract<FlowNode, { type: 'condition' | 'filter' }>) {
   if (node.data.clauses?.length) return node.data.clauses
   if (node.type === 'condition' && (node.data.left !== undefined || node.data.right !== undefined)) {
@@ -160,6 +180,10 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
   const toolNamesByConnection = new Map((context.toolCatalog ?? []).map((connection) => [
     connection.id,
     new Set((connection.tools ?? []).map((tool) => tool.name)),
+  ]))
+  const toolsByConnection = new Map((context.toolCatalog ?? []).map((connection) => [
+    connection.id,
+    new Map((connection.tools ?? []).map((tool) => [tool.name, tool])),
   ]))
   const byId = new Map<string, FlowNode>()
   const triggerIds = graph.nodes.filter((node) => node.type === 'trigger').map((node) => node.id)
@@ -212,6 +236,18 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         }
       }
       validateJsonField(issues, node.data.args, `${nodeLabel(node)} arguments must be valid JSON.`, node.id)
+      const selectedTool = toolsByConnection.get(node.data.connectionId)?.get(node.data.toolName)
+      const requiredArgs = requiredToolArgs(selectedTool?.inputSchema)
+      if (requiredArgs.length) {
+        const parsedArgs = parseObjectJson(node.data.args)
+        if (parsedArgs) {
+          for (const argName of requiredArgs) {
+            if (!argHasValue(parsedArgs[argName])) {
+              add(issues, 'error', 'MISSING_TOOL_ARG', `${nodeLabel(node)} needs "${argName}".`, node.id)
+            }
+          }
+        }
+      }
     }
 
     if (node.type === 'http') {

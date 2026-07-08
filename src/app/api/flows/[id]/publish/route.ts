@@ -6,6 +6,7 @@ import { serializeFlow } from '@/lib/flows/serialize'
 import { flowGraphSchema } from '@/lib/flows/graph'
 import { validateFlowGraph, validationErrorMessage } from '@/lib/flows/validate'
 import { preserveWebhookSecretHash, triggerFromGraph } from '@/lib/flows/trigger'
+import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
 import { recordAudit } from '@/lib/audit'
 
 function jsonValue(value: unknown) {
@@ -31,21 +32,20 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   }
 
   const graph = flowGraphSchema.parse(existing.graph)
+  const usedConnectionIds = Array.from(new Set(graph.nodes.filter((node) => node.type === 'tool').map((node) => node.data.connectionId).filter(Boolean)))
   const [agents, connections] = await Promise.all([
     prisma.agentTask.findMany({
       where: { organizationId: auth.organizationId, status: 'ACTIVE', ...agentVisibilityScope(auth.dbUser.id) },
       select: { id: true, description: true },
       take: 500,
     }),
-    prisma.mcpConnection.findMany({
-      where: { organizationId: auth.organizationId, isActive: true },
-      select: { id: true, name: true },
-      take: 100,
-    }),
+    usedConnectionIds.length
+      ? loadFlowToolCatalog(auth.organizationId, { connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
+      : Promise.resolve([]),
   ])
   const validation = validateFlowGraph(graph, {
     agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
-    toolCatalog: connections.map((connection) => ({ id: connection.id, name: connection.name })),
+    toolCatalog: connections,
   })
   if (!validation.ok) {
     throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')

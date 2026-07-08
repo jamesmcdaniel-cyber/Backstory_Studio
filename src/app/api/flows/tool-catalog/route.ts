@@ -1,7 +1,5 @@
-import { prisma } from '@/lib/prisma'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
-import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
-import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
+import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
 
 export const runtime = 'nodejs'
 
@@ -9,30 +7,6 @@ export const runtime = 'nodejs'
 // tools, for the flow builder's deterministic tool-step picker. Discovery is
 // best-effort per connection: one unreachable server doesn't empty the list.
 export const GET = withAuthenticatedApi(async (_request, auth) => {
-  const connections = await prisma.mcpConnection.findMany({
-    where: { organizationId: auth.organizationId, isActive: true },
-    take: 25,
-  })
-  const catalog = await Promise.all(
-    connections.map(async (conn) => {
-      try {
-        const fresh = await ensureFreshConnectionToken(conn)
-        const client = new McpClient(mcpConfigFromConnection(fresh))
-        const tools = await client.getServerTools(fresh.serverUrl)
-        return {
-          id: conn.id,
-          name: conn.name,
-          tools: tools.slice(0, 100).map((tool) => ({
-            name: tool.name,
-            description: tool.description ?? '',
-            // The tool's JSON-schema drives the per-argument form in the builder.
-            inputSchema: tool.inputSchema ?? null,
-          })),
-        }
-      } catch {
-        return { id: conn.id, name: conn.name, tools: [] as { name: string; description: string }[] }
-      }
-    }),
-  )
+  const catalog = await loadFlowToolCatalog(auth.organizationId, { takeConnections: 25, takeTools: 100 })
   return { success: true, connections: catalog }
 })

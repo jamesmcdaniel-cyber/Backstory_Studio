@@ -27,7 +27,7 @@ export function schemaFields(inputSchema: unknown): SchemaField[] {
   }))
 }
 
-function parseArgs(args: string | undefined): Record<string, string> {
+export function parseArgs(args: string | undefined): Record<string, string> {
   if (!args) return {}
   try {
     const parsed = JSON.parse(args)
@@ -42,14 +42,32 @@ function parseArgs(args: string | undefined): Record<string, string> {
   return {}
 }
 
+function parseJsonLike(raw: string): unknown {
+  const trimmed = raw.trim()
+  if (!trimmed) return undefined
+  if (!/^(?:true|false|null|-?\d|\{|\[|")/.test(trimmed)) return undefined
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return undefined
+  }
+}
+
+function isJsonValueField(field: SchemaField): boolean {
+  return ['object', 'array', 'any'].includes(field.type)
+}
+
 /** Re-serialize form values to a JSON args string, coercing where the schema says so. */
-function serializeArgs(values: Record<string, string>, fields: SchemaField[]): string {
+export function serializeArgs(values: Record<string, string>, fields: SchemaField[]): string {
   const out: Record<string, unknown> = {}
   for (const field of fields) {
     const raw = values[field.name]
     if (raw === undefined || raw === '') continue
-    // Leave {{token}} values as strings — they're resolved at run time.
-    if (raw.includes('{{')) {
+    const parsed = isJsonValueField(field) ? parseJsonLike(raw) : undefined
+    if (parsed !== undefined) {
+      out[field.name] = parsed
+    } else if (raw.includes('{{')) {
+      // Exact-token object/array values are preserved by resolveTemplateValue at runtime.
       out[field.name] = raw
     } else if (field.type === 'number' || field.type === 'integer') {
       const n = Number(raw)
@@ -61,6 +79,14 @@ function serializeArgs(values: Record<string, string>, fields: SchemaField[]): s
     }
   }
   return JSON.stringify(out, null, 2)
+}
+
+function placeholderFor(field: SchemaField): string {
+  if (field.description) return field.description
+  if (field.type === 'object') return '{"id": "{{trigger.input.id}}"} or {{trigger.input.record}}'
+  if (field.type === 'array') return '["one", "two"] or {{trigger.input.items}}'
+  if (field.type === 'any') return 'Text, JSON, or a value from Available data'
+  return 'Add a value or choose one below'
 }
 
 const fieldClass =
@@ -188,11 +214,23 @@ export function ToolArgsEditor({
                   <option value="true">true</option>
                   <option value="false">false</option>
                 </select>
+              ) : isJsonValueField(field) ? (
+                <textarea
+                  rows={field.type === 'array' || field.type === 'object' ? 4 : 2}
+                  className={`${fieldClass} min-h-[76px] resize-y font-mono text-xs`}
+                  value={values[field.name] ?? ''}
+                  placeholder={placeholderFor(field)}
+                  onFocus={(e) => {
+                    setActiveArg(field.name)
+                    activeElRef.current = e.currentTarget
+                  }}
+                  onChange={(e) => setValue(field.name, e.target.value)}
+                />
               ) : (
                 <input
                   className={fieldClass}
                   value={values[field.name] ?? ''}
-                  placeholder={field.description || 'Add a value or choose one below'}
+                  placeholder={placeholderFor(field)}
                   onFocus={(e) => {
                     setActiveArg(field.name)
                     activeElRef.current = e.currentTarget

@@ -45,6 +45,46 @@ test('validateFlowGraph checks tool connection, tool name, and JSON args', () =>
   assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON'))
 })
 
+test('validateFlowGraph checks required tool arguments from input schema', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't', type: 'tool', data: { connectionId: 'c1', toolName: 'send', args: '{"channel":"{{trigger.input.channel}}"}' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 't' }],
+  }
+  const result = validateFlowGraph(graph, {
+    toolCatalog: [
+      {
+        id: 'c1',
+        tools: [
+          {
+            name: 'send',
+            inputSchema: { type: 'object', required: ['channel', 'message'], properties: { channel: { type: 'string' }, message: { type: 'string' } } },
+          },
+        ],
+      },
+    ],
+  })
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((issue) => issue.code === 'MISSING_TOOL_ARG' && issue.message.includes('message')))
+  assert.ok(!result.errors.some((issue) => issue.code === 'MISSING_TOOL_ARG' && issue.message.includes('channel')))
+})
+
+test('validateFlowGraph accepts required object tool args supplied by exact data tokens', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't', type: 'tool', data: { connectionId: 'c1', toolName: 'upsert', args: '{"record":"{{trigger.input.record}}"}' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 't' }],
+  }
+  const result = validateFlowGraph(graph, {
+    toolCatalog: [{ id: 'c1', tools: [{ name: 'upsert', inputSchema: { type: 'object', required: ['record'] } }] }],
+  })
+  assert.equal(result.ok, true)
+})
+
 test('validateFlowGraph checks loop bodies and switch defaults', () => {
   const graph: FlowGraph = {
     nodes: [

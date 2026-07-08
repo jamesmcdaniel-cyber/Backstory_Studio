@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { flowGraphSchema } from '@/lib/flows/graph'
 import { validateFlowGraph, validationErrorMessage } from '@/lib/flows/validate'
+import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 import { assertPublicUrl } from '@/lib/net/ssrf'
@@ -44,21 +45,20 @@ export async function runFlowExecution(
   const source = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
   const graph = flowGraphSchema.parse(source)
   const input = job.input ?? ''
-  const [agents, connections] = await Promise.all([
+  const usedConnectionIds = Array.from(new Set(graph.nodes.filter((node) => node.type === 'tool').map((node) => node.data.connectionId).filter(Boolean)))
+  const [agents, toolCatalog] = await Promise.all([
     prisma.agentTask.findMany({
       where: { organizationId: job.organizationId, status: 'ACTIVE' },
       select: { id: true, description: true },
       take: 500,
     }),
-    prisma.mcpConnection.findMany({
-      where: { organizationId: job.organizationId, isActive: true },
-      select: { id: true, name: true },
-      take: 100,
-    }),
+    usedConnectionIds.length
+      ? loadFlowToolCatalog(job.organizationId, { connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
+      : Promise.resolve([]),
   ])
   const validation = validateFlowGraph(graph, {
     agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
-    toolCatalog: connections.map((connection) => ({ id: connection.id, name: connection.name })),
+    toolCatalog,
   })
   if (!validation.ok) {
     throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
