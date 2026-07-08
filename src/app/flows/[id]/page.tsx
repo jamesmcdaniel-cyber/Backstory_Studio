@@ -18,6 +18,7 @@ import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import { ResizablePanel } from '@/components/flows/resizable-panel'
+import { TestInputPanel } from '@/components/flows/test-input-panel'
 import type { StepStatus } from '@/components/flows/step-card'
 
 type Agent = { id: string; title: string }
@@ -155,6 +156,7 @@ export default function FlowBuilder() {
   // there; the top-bar toggle can still hide it.
   const [showCopilot, setShowCopilot] = useState(true)
   const [showRuns, setShowRuns] = useState(false)
+  const [showTestInput, setShowTestInput] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
   const [testInput, setTestInput] = useState('')
@@ -256,6 +258,7 @@ export default function FlowBuilder() {
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
   const inputFields = useMemo(() => triggerInputFields(graph), [graph])
+  const hasInputFields = inputFields.some((field) => field.name.trim())
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
   const loopContext = useMemo(() => parentLoop(graph, selectedId), [graph, selectedId])
   const parallelContext = useMemo(() => parentParallelBranch(graph, selectedId), [graph, selectedId])
@@ -475,13 +478,24 @@ export default function FlowBuilder() {
           <option value="active">Active</option>
           <option value="disabled">Disabled</option>
         </select>
-        <input
-          value={testInput}
-          onChange={(e) => setTestInput(e.target.value)}
-          placeholder="Run input..."
-          title="Value passed to the flow when you click Run. Lists can be JSON or comma-separated."
-          className="w-40 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:border-indigo-400"
-        />
+        {hasInputFields ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowTestInput((open) => !open)}
+            title="Fill the values passed to this flow when you click Run"
+          >
+            Test input
+          </Button>
+        ) : (
+          <input
+            value={testInput}
+            onChange={(e) => setTestInput(e.target.value)}
+            placeholder="Run input..."
+            title="Value passed to the flow when you click Run. Lists can be JSON or comma-separated."
+            className="w-40 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:border-indigo-400"
+          />
+        )}
         <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
           <ListChecks className="mr-1.5 h-4 w-4" /> Runs
         </Button>
@@ -504,6 +518,10 @@ export default function FlowBuilder() {
           {running ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />} Run
         </Button>
       </div>
+
+      {hasInputFields && (showTestInput || mode === 'test') && (
+        <TestInputPanel fields={inputFields} value={testInput} onChange={setTestInput} />
+      )}
 
       {(validation.errors.length > 0 || validation.warnings.length > 0) && (
         <div className="border-b border-border bg-amber-50 px-4 py-2 text-amber-950">
