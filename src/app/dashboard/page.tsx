@@ -8,6 +8,7 @@ import { AgentActivityPane, resultText } from './agent-activity-pane'
 import { AgentConfigForm, type AgentDraft } from './agent-config-form'
 import { AssistantPanel } from './assistant-panel'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
@@ -185,10 +186,10 @@ function AgentHQ() {
     setSelectedRun(null)
   }, [selectedAgentId])
 
-  // Setup pane shows when nothing usable is selected, the selected agent is
-  // not fully configured, or the user explicitly opened configuration.
-  const creatingNew = selectedAgentId === NEW_AGENT || (!selectedAgent && !loading)
-  const showSetup = creatingNew || !selectedAgent || !isConfigured(selectedAgent) || configureOpen
+  // Setup opens only when creating a new agent, editing an incomplete agent,
+  // or explicitly toggling configuration for the selected agent.
+  const creatingNew = selectedAgentId === NEW_AGENT
+  const showSetup = creatingNew || Boolean(selectedAgent && (!isConfigured(selectedAgent) || configureOpen))
   const editingAgent = showSetup && selectedAgent && selectedAgentId !== NEW_AGENT ? selectedAgent : null
 
   const greeting = useMemo(() => {
@@ -203,7 +204,7 @@ function AgentHQ() {
     if (counts.waiting_for_input) parts.push(`${counts.waiting_for_input} need your input`)
     if (counts.failed) parts.push(`${counts.failed} hit errors`)
     if (counts.running) parts.push(`${counts.running} running`)
-    return parts.length ? `${parts.join(', ')}.` : 'No runs yet for this agent.'
+    return parts.length ? `${parts.join(', ')}.` : 'Ready for the first run.'
   }, [selectedAgent, agents.length, agentActivities])
 
   const selectAgent = (id: string) => {
@@ -517,6 +518,16 @@ function AgentHQ() {
               onChanged={() => load(true).catch(() => undefined)}
               onSelectRun={setSelectedRun}
             />
+          )}
+
+          {!loading && !showSetup && !selectedAgent && agents.length === 0 && (
+            <div className="p-4">
+              <EmptyState
+                icon={Play}
+                title="No runs yet"
+                description="Create agent and logs will show here"
+              />
+            </div>
           )}
         </section>
 

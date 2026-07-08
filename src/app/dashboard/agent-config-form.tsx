@@ -842,13 +842,11 @@ export function AgentConfigForm({
 
       {editingAgent?.id && <KnowledgePanel agentId={editingAgent.id} />}
 
-      {editingAgent && (
+      {editingAgent && (runsLoading || runs.length > 0) && (
         <div>
           <p className="eyebrow mb-2">Recent runs</p>
           {runsLoading ? (
             <p className="text-sm text-gray-500"><Loader2 className="inline h-3.5 w-3.5 animate-spin" /> Loading…</p>
-          ) : runs.length === 0 ? (
-            <p className="text-sm text-gray-500">No runs yet.</p>
           ) : (
             <ul className="divide-y rounded-lg border">
               {runs.map((run) => (
