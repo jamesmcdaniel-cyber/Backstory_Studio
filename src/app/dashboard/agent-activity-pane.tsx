@@ -149,16 +149,152 @@ const PROVIDER_NAMES: Record<string, string> = {
   email: 'Email', backstory: 'Backstory', jira: 'Jira', github: 'GitHub',
   notion: 'Notion', hubspot: 'HubSpot', clickup: 'ClickUp', linear: 'Linear',
   asana: 'Asana', confluence: 'Confluence', trello: 'Trello',
+  snowflake: 'Snowflake', google_drive: 'Google Drive', google_sheets: 'Google Sheets',
+  googledrive: 'Google Drive', googlesheets: 'Google Sheets', zendesk: 'Zendesk',
+  monday: 'Monday', airtable: 'Airtable',
 }
 // Where the logo slug differs from the provider key (Simple Icons has no
 // "email"/"people.ai" mark; use Resend / fall through to an initial tile).
-const PROVIDER_LOGO_SLUGS: Record<string, string> = { email: 'resend' }
+const PROVIDER_LOGO_SLUGS: Record<string, string> = {
+  email: 'resend',
+  google_drive: 'googledrive',
+  google_sheets: 'googlesheets',
+  monday: 'mondaydotcom',
+}
 
-function stepProvider(node: string): { slug: string; name: string } | null {
+type ProviderLogo = { slug: string; name: string }
+
+const PROVIDER_ALIASES: Array<{ key: string; aliases: string[] }> = [
+  { key: 'salesforce', aliases: ['salesforce', 'salesforcecrm'] },
+  { key: 'slack', aliases: ['slack'] },
+  { key: 'gmail', aliases: ['gmail', 'googlemail'] },
+  { key: 'google_drive', aliases: ['googledrive', 'googledriveapi'] },
+  { key: 'google_sheets', aliases: ['googlesheets', 'googlesheetsapi'] },
+  { key: 'github', aliases: ['github'] },
+  { key: 'jira', aliases: ['jira'] },
+  { key: 'linear', aliases: ['linear'] },
+  { key: 'asana', aliases: ['asana'] },
+  { key: 'notion', aliases: ['notion'] },
+  { key: 'hubspot', aliases: ['hubspot'] },
+  { key: 'snowflake', aliases: ['snowflake'] },
+  { key: 'zendesk', aliases: ['zendesk'] },
+  { key: 'confluence', aliases: ['confluence'] },
+  { key: 'trello', aliases: ['trello'] },
+  { key: 'monday', aliases: ['monday', 'mondaydotcom'] },
+  { key: 'airtable', aliases: ['airtable'] },
+  { key: 'granola', aliases: ['granola'] },
+  { key: 'backstory', aliases: ['backstory', 'backstorymcp', 'peopleai', 'people'] },
+]
+
+const STRATA_TARGET_KEYS = new Set([
+  'server', 'server_name', 'servername', 'server_names', 'servernames',
+  'mcp_server', 'mcpserver', 'mcp_server_name', 'provider', 'integration',
+  'app', 'service', 'category', 'action', 'action_name', 'actionname',
+  'tool', 'tool_name', 'toolname',
+])
+
+function providerLogo(key: string): ProviderLogo {
+  return { slug: PROVIDER_LOGO_SLUGS[key] ?? key, name: PROVIDER_NAMES[key] ?? key }
+}
+
+function compact(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function providerFromString(value: string, loose = false): ProviderLogo | null {
+  const normalized = compact(value.replace(/^strata:/i, ''))
+  if (!normalized || normalized === 'klavis' || normalized === 'klavisstrata') return null
+  for (const { key, aliases } of PROVIDER_ALIASES) {
+    if (aliases.some((alias) => {
+      const a = compact(alias)
+      return loose
+        ? normalized.includes(a)
+        : normalized === a || normalized.startsWith(a) || normalized.endsWith(a)
+    })) {
+      return providerLogo(key)
+    }
+  }
+  return null
+}
+
+function parseMaybeJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}
+
+function providerFromStrataPayload(value: unknown, depth = 0): ProviderLogo | null {
+  if (depth > 4 || value == null) return null
+  const parsed = parseMaybeJson(value)
+  if (typeof parsed === 'string') return providerFromString(parsed)
+  if (Array.isArray(parsed)) {
+    for (const item of parsed) {
+      const provider = providerFromStrataPayload(item, depth + 1)
+      if (provider) return provider
+    }
+    return null
+  }
+  if (typeof parsed !== 'object') return null
+  const record = parsed as Record<string, unknown>
+  for (const [key, item] of Object.entries(record)) {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    if (!STRATA_TARGET_KEYS.has(normalizedKey)) continue
+    const provider = providerFromStrataPayload(item, depth + 1)
+    if (provider) return provider
+  }
+  for (const [key, item] of Object.entries(record)) {
+    const normalizedKey = key.toLowerCase()
+    if (!normalizedKey.includes('action') && !normalizedKey.includes('server')) continue
+    const provider = providerFromStrataPayload(item, depth + 1)
+    if (provider) return provider
+  }
+  if (depth > 0) {
+    for (const item of Object.values(record)) {
+      const provider = providerFromStrataPayload(item, depth + 1)
+      if (provider) return provider
+    }
+  }
+  return null
+}
+
+function providersMentioned(value: unknown): ProviderLogo | null {
+  const parsed = parseMaybeJson(value)
+  let text = ''
+  if (typeof parsed === 'string') text = parsed
+  else if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { content?: unknown }).content)) {
+    text = ((parsed as { content: Array<{ text?: unknown }> }).content)
+      .map((part) => typeof part.text === 'string' ? part.text : '')
+      .join('\n')
+  } else {
+    return null
+  }
+  const hits = new Map<string, ProviderLogo>()
+  for (const { key, aliases } of PROVIDER_ALIASES) {
+    if (aliases.some((alias) => compact(text).includes(compact(alias)))) hits.set(key, providerLogo(key))
+  }
+  return hits.size === 1 ? [...hits.values()][0] : null
+}
+
+function stepProvider(step: Pick<RunStep, 'node' | 'input' | 'output'>): ProviderLogo | null {
+  const node = step.node
   if (!node.includes('.')) return null // ask_user and other non-tool steps
   let provider = node.split('.')[0]
   if (provider.startsWith('nango:')) provider = provider.slice('nango:'.length) // nango:slack → slack
   if (!provider) return null
+  const providerKey = compact(provider)
+  if (providerKey === 'klavisstrata' || providerKey === 'strata') {
+    return (
+      providerFromStrataPayload(step.input) ??
+      providerFromStrataPayload(step.output) ??
+      providersMentioned(step.output) ??
+      { slug: 'klavis', name: 'Klavis' }
+    )
+  }
   // Custom MCP connections carry their slugified connection name as the
   // provider (e.g. "Backstory MCP" → backstory_mcp), so an exact-key lookup
   // misses them — fall back to a known provider key contained in the slug so
@@ -199,7 +335,7 @@ function ToolCallCard({ step }: { step: RunStep }) {
       >
         <span className="flex min-w-0 items-center gap-2">
           {(() => {
-            const provider = stepProvider(step.node)
+            const provider = stepProvider(step)
             return provider ? (
               <IntegrationLogo slug={provider.slug} name={provider.name} className="h-4 w-4 shrink-0 rounded-sm" />
             ) : (

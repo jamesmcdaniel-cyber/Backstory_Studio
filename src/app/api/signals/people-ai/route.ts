@@ -10,7 +10,7 @@ import { routeSignal } from '@/lib/signals/router'
 import { captureError } from '@/lib/observability/sentry'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+export const maxDuration = 1200
 
 /**
  * People.ai SalesAI webhook receiver (registered via POST /v1/salesai/webhooks).

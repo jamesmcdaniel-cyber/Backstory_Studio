@@ -5,6 +5,9 @@ import { agentVisibilityScope } from '@/lib/server/visibility'
 import { runFlowExecution } from '@/features/flows/execute-flow'
 import { parseFlowInput } from '@/lib/flows/input'
 
+export const runtime = 'nodejs'
+export const maxDuration = 1200
+
 // POST /api/flows/[id]/execute — run a flow manually. id is the path segment
 // before "execute".
 export const POST = withAuthenticatedApi(async (request, auth) => {

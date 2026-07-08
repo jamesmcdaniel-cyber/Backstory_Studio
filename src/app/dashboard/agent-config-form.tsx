@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Loader2, Play, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -265,6 +266,7 @@ export function AgentConfigForm({
   const router = useRouter()
   const [draft, setDraft] = useState<AgentDraft>(emptyDraft)
   const [saving, setSaving] = useState(false)
+  const [publishingTemplate, setPublishingTemplate] = useState(false)
   // Snapshot of the draft as last populated/saved, so Run can tell whether
   // there are unsaved edits that must be persisted before executing.
   const baselineRef = useRef<string>(JSON.stringify(emptyDraft))
@@ -413,6 +415,47 @@ export function AgentConfigForm({
   const openRun = (runId: string) => {
     if (onOpenRun) onOpenRun(runId)
     else router.push(`/dashboard?run=${runId}`)
+  }
+
+  const publishTemplate = async () => {
+    if (!editingAgent) return
+    const title = draft.title.trim()
+    const instructions = draft.instructions.trim()
+    if (!title || !instructions) {
+      toast.error('Name and instructions are required before adding a template.')
+      return
+    }
+    setPublishingTemplate(true)
+    try {
+      const tags = Array.from(new Set([
+        'agent',
+        ...(draft.folder.trim() ? [draft.folder.trim()] : []),
+        ...draft.skills.map((skillId) => skillNames[skillId]).filter((name): name is string => Boolean(name)),
+      ]))
+      const response = await fetch('/api/agent-templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: title,
+          description: draft.description.trim() || title,
+          category: 'Custom',
+          instructions,
+          integrations: draft.integrations,
+          skills: draft.skills,
+          tags,
+          model: draft.model,
+          icon: draft.icon,
+          allowSubagents: draft.allowSubagents === true,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not add this agent to templates.')
+      toast.success('Added to template catalogue.')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not add this agent to templates.')
+    } finally {
+      setPublishingTemplate(false)
+    }
   }
 
   // ── Schedule (visual cadence UI ↔ backend schedule) ───────────────────────
@@ -878,6 +921,17 @@ export function AgentConfigForm({
               ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
               : <Play className="mr-1.5 h-4 w-4" />}
             {dirty ? 'Save & run' : 'Run'}
+          </Button>
+        )}
+        {editingAgent && (
+          <Button
+            variant="outline"
+            disabled={saving || publishingTemplate || !draft.title || !draft.instructions}
+            loading={publishingTemplate}
+            onClick={publishTemplate}
+            className="shrink-0"
+          >
+            Add to templates
           </Button>
         )}
         <Button className="flex-1" disabled={saving || !draft.title || !draft.instructions} onClick={submit}>

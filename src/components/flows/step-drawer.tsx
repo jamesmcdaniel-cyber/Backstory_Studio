@@ -8,6 +8,7 @@ import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type Condi
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
+import { AGENT_RUN_MAX_DURATION_SECONDS } from '@/lib/agents/timeouts'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
@@ -447,12 +448,13 @@ export function StepDrawer({
               <input
                 type="number"
                 min={1}
+                max={AGENT_RUN_MAX_DURATION_SECONDS}
                 className={fieldClass}
                 value={node.data.timeoutMs ? Math.round(node.data.timeoutMs / 1000) : ''}
                 placeholder="No timeout"
                 onChange={(e) => {
                   const secs = Number(e.target.value)
-                  onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? secs * 1000 : undefined } })
+                  onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? Math.max(1, Math.min(AGENT_RUN_MAX_DURATION_SECONDS, secs)) * 1000 : undefined } })
                 }}
               />
             </div>

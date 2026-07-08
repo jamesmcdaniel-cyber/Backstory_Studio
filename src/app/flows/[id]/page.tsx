@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertTriangle, ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, Undo2, Redo2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/lib/flows/graph'
 import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
@@ -151,11 +152,20 @@ function sampleLoopItem(loop: Extract<FlowNode, { type: 'loop' }>, lastOutputs: 
   return previewLoopItems(value)[0]
 }
 
+function filenameSlug(value: string): string {
+  return (value || 'flow')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'flow'
+}
+
 export default function FlowBuilder() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
 
   const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
   const [graph, setGraph] = useState<FlowGraph>(emptyGraph())
   const [status, setStatus] = useState('draft')
   const [version, setVersion] = useState(1)
@@ -180,7 +190,7 @@ export default function FlowBuilder() {
   // Serialized snapshot of the last-saved state, for the unsaved-changes dot.
   const [savedSnapshot, setSavedSnapshot] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const dirty = savedSnapshot !== '' && JSON.stringify({ name, graph, status }) !== savedSnapshot
+  const dirty = savedSnapshot !== '' && JSON.stringify({ name, description, graph, status }) !== savedSnapshot
 
   useEffect(() => {
     let cancelled = false
@@ -194,11 +204,12 @@ export default function FlowBuilder() {
         if (flow) {
           const g = flow.graph && flow.graph.nodes ? flow.graph : emptyGraph()
           setName(flow.name)
+          setDescription(flow.description || '')
           setGraph(g)
           setStatus(flow.status)
           setVersion(flow.version ?? 1)
           setPublished(Boolean(flow.published))
-          setSavedSnapshot(JSON.stringify({ name: flow.name, graph: g, status: flow.status }))
+          setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g, status: flow.status }))
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
       })
@@ -337,19 +348,19 @@ export default function FlowBuilder() {
       const response = await fetch('/api/flows', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, graph, status: status.toUpperCase() }),
+        body: JSON.stringify({ id, name, description, graph, status: status.toUpperCase() }),
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
         toast.error(data.error || 'Could not save the flow.')
         return false
       }
-      setSavedSnapshot(JSON.stringify({ name, graph, status }))
+      setSavedSnapshot(JSON.stringify({ name, description, graph, status }))
       return true
     } finally {
       setSaving(false)
     }
-  }, [id, name, graph, status])
+  }, [id, name, description, graph, status])
 
   const publish = useCallback(
     async (revert = false) => {
@@ -439,6 +450,64 @@ export default function FlowBuilder() {
     }
   }, [id, save, pollRuns, testInput, validation])
 
+  const duplicateFlow = useCallback(async () => {
+    const flowName = name.trim() || 'Untitled flow'
+    const response = await fetch('/api/flows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: `${flowName} copy`,
+        description,
+        graph,
+      }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (response.ok && data.flow?.id) {
+      toast.success('Flow duplicated.')
+      router.push(`/flows/${data.flow.id}`)
+    } else {
+      toast.error(data.error || 'Could not duplicate the flow.')
+    }
+  }, [name, description, graph, router])
+
+  const downloadFlow = useCallback(() => {
+    const flowName = name.trim() || 'Untitled flow'
+    const payload = {
+      name: flowName,
+      description,
+      status,
+      version,
+      graph,
+      exportedAt: new Date().toISOString(),
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${filenameSlug(flowName)}.json`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }, [name, description, status, version, graph])
+
+  const deleteFlow = useCallback(async () => {
+    const flowName = name.trim() || 'this flow'
+    if (!window.confirm(`Delete "${flowName}"? This cannot be undone.`)) return
+    const response = await fetch('/api/flows', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (response.ok) {
+      toast.success('Flow deleted.')
+      router.push('/flows')
+    } else {
+      toast.error(data.error || 'Could not delete the flow.')
+    }
+  }, [id, name, router])
+
   if (loading) {
     return (
       <div className="flex h-full flex-col">
@@ -491,6 +560,26 @@ export default function FlowBuilder() {
           <option value="active">Active</option>
           <option value="disabled">Disabled</option>
         </select>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon" aria-label="Flow settings" title="Flow settings">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Flow settings</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={duplicateFlow}>
+              <Copy className="h-4 w-4" /> Duplicate
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={downloadFlow}>
+              <Download className="h-4 w-4" /> Download JSON
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={deleteFlow} className="text-red-600 focus:text-red-700">
+              <Trash2 className="h-4 w-4" /> Delete flow
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {hasInputFields ? (
           <Button
             variant="outline"

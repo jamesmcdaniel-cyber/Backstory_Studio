@@ -8,7 +8,7 @@ import { flowInputFromWebhookBody } from '@/lib/flows/input'
 import { ApiError } from '@/lib/server/api-handler'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+export const maxDuration = 1200
 
 // External webhook trigger for flows. Authenticated by the per-flow secret
 // (hash stored in flow.trigger.webhookSecretHash) instead of a session — mirrors

@@ -7,7 +7,7 @@ import { inlineExecution } from '@/lib/queue/execution-mode'
 import { executionVisibilityScope } from '@/lib/server/visibility'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+export const maxDuration = 1200
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-2)

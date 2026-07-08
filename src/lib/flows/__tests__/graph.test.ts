@@ -23,6 +23,26 @@ test('flowGraphSchema accepts a valid agent+condition graph', () => {
   assert.deepEqual(trigger?.data.trigger.inputFields[0], { name: 'account', type: 'string', description: 'Customer name.' })
 })
 
+test('flowGraphSchema allows agent timeouts up to 20 minutes', () => {
+  const graph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}', timeoutMs: 1_200_000 } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  assert.equal(flowGraphSchema.parse(graph).nodes[1].type, 'agent')
+  assert.throws(() =>
+    flowGraphSchema.parse({
+      ...graph,
+      nodes: [
+        { id: 'trigger', type: 'trigger', data: {} },
+        { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}', timeoutMs: 1_200_001 } },
+      ],
+    }),
+  )
+})
+
 test('flowGraphSchema rejects an unknown node type', () => {
   assert.throws(() => flowGraphSchema.parse({ nodes: [{ id: 'x', type: 'webhook', data: {} }], edges: [] }))
 })

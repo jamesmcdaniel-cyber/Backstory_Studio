@@ -12,8 +12,10 @@ type Template = {
   description: string
   instructions: string
   integrations: string[]
+  skills?: string[]
   model: string
   exampleOutput?: string
+  icon?: string
   allowSubagents?: boolean
   // Set on templates that provision a complete multi-step Flow (agents + graph).
   playbook?: string
@@ -43,7 +45,9 @@ export default function TemplateDetails() {
         description: template.description,
         instructions: template.instructions,
         integrations: template.integrations,
+        skills: template.skills || [],
         model: template.model,
+        icon: template.icon || '',
         allowSubagents: template.allowSubagents === true,
         schedule: { type: 'manual', timezone: 'UTC', isActive: false },
       }),

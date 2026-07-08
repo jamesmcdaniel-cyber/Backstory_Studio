@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { AGENT_MODEL_TURN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 
 /**
  * Qwen provider — via DashScope's ANTHROPIC-compatible endpoint.
@@ -16,7 +17,7 @@ import Anthropic from '@anthropic-ai/sdk'
  * ChatGPT/OpenAI is no longer used.
  */
 
-const TIMEOUT_MS = 120_000
+const TIMEOUT_MS = AGENT_MODEL_TURN_TIMEOUT_MS
 const MAX_RETRIES = 1
 
 /** True when the Qwen endpoint is fully configured (key + base URL). */

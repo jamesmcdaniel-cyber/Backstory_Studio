@@ -1,5 +1,6 @@
 import IORedis from 'ioredis'
 import { Queue, type QueueOptions, type WorkerOptions } from 'bullmq'
+import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 
 export const QUEUE_NAMES = {
   AGENT_EXECUTION: 'agent-execution',
@@ -34,7 +35,7 @@ export const workerConfig = {
   // per turn and resumes from the last completed turn (not from the top), and
   // already-completed tool calls are replayed from the step ledger instead of
   // re-fired — so we allow one stall recovery.
-  lockDuration: 300_000,
+  lockDuration: AGENT_RUN_TIMEOUT_MS,
   maxStalledCount: 1,
 } satisfies Partial<WorkerOptions>
 

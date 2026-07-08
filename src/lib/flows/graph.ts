@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 
 /** Comparison operators available to a condition node. */
 export const CONDITION_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches'] as const
@@ -27,7 +28,7 @@ const agentNode = z.object({
     // Per-step reliability: retry the agent up to `retries` times with backoff,
     // and abort a single attempt after `timeoutMs`.
     retries: z.number().int().min(0).max(5).optional(),
-    timeoutMs: z.number().int().min(1000).max(600000).optional(),
+    timeoutMs: z.number().int().min(1000).max(AGENT_RUN_TIMEOUT_MS).optional(),
     // Declared output schema — fields this step is expected to produce. Powers
     // the datatree field picker for downstream mapping.
     outputFields: z.array(outputFieldSchema).optional(),

@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { apiLogger } from '@/lib/logger'
 import { qwenClient, qwenConfigured, qwenModel } from './qwen'
+import { AGENT_MODEL_TURN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 import {
   type IRMessage,
   type ProviderKind,
@@ -47,15 +48,15 @@ export interface ModelRunner {
 
 const ADAPTIVE_THINKING_MODELS = /^claude-(opus-4-[678]|sonnet-(4-6|5)|fable-5|mythos-5)/
 
-// Bound a single model call below the BullMQ job lock (300s, see
+// Bound a single model call below the BullMQ job lock (20m, see
 // queue/config.ts) so a hung/slow call can't outlive the lock and make a run
 // both dead-letter (stalled) and complete. The SDK `timeout` only wraps the
 // fetch (which resolves at response HEADERS for a stream), so it bounds
 // non-streaming calls; STREAM_DEADLINE_MS is an explicit end-to-end cap passed
 // as an AbortSignal to the streaming turn to bound the body read too.
-const LLM_TIMEOUT_MS = 120_000
+const LLM_TIMEOUT_MS = AGENT_MODEL_TURN_TIMEOUT_MS
 const LLM_MAX_RETRIES = 1
-const STREAM_DEADLINE_MS = 240_000
+const STREAM_DEADLINE_MS = AGENT_MODEL_TURN_TIMEOUT_MS
 
 const CACHE_CONTROL = { type: 'ephemeral' as const }
 

@@ -10,7 +10,7 @@ import { hashToken, timingSafeEqualHex } from '@/lib/crypto/secrets'
 import { rateLimit } from '@/lib/ratelimit'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+export const maxDuration = 1200
 
 function legacyPlaintextMatch(provided: string, expected: string) {
   const a = Buffer.from(provided)

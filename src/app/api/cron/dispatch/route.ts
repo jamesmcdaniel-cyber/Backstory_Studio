@@ -22,13 +22,14 @@ import { parseFlowInput } from '@/lib/flows/input'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
 import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
+import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300
+export const maxDuration = 1200
 export const dynamic = 'force-dynamic'
 
 const MAX_AGENTS_PER_TICK = 25
-const STUCK_RUN_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+const STUCK_RUN_TIMEOUT_MS = AGENT_RUN_TIMEOUT_MS
 const MAX_ERROR_LENGTH = 300
 
 function capError(error: unknown): string {
