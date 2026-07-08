@@ -65,8 +65,38 @@ function add(
   issues.push({ level, code, message, ...(nodeId ? { nodeId } : {}) })
 }
 
-function validateJsonField(issues: FlowValidationIssue[], value: string | undefined, message: string, nodeId: string) {
-  if (!value?.trim()) return
+function hasTemplate(value: string | undefined): boolean {
+  return Boolean(value?.includes('{{'))
+}
+
+function validateHttpUrl(issues: FlowValidationIssue[], value: string, nodeId: string) {
+  if (!value.trim()) {
+    add(issues, 'error', 'MISSING_HTTP_URL', 'HTTP request needs a URL.', nodeId)
+    return
+  }
+  if (hasTemplate(value)) return
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:') {
+      add(issues, 'error', 'INVALID_HTTP_URL', 'HTTP request URL must start with https://.', nodeId)
+    }
+  } catch {
+    add(issues, 'error', 'INVALID_HTTP_URL', 'HTTP request URL is not valid.', nodeId)
+  }
+}
+
+function validateJsonObjectField(issues: FlowValidationIssue[], value: string | undefined, message: string, nodeId: string) {
+  if (!value?.trim() || hasTemplate(value)) return
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) add(issues, 'error', 'INVALID_JSON_OBJECT', message, nodeId)
+  } catch {
+    add(issues, 'error', 'INVALID_JSON_OBJECT', message, nodeId)
+  }
+}
+
+function validateTemplatedJsonField(issues: FlowValidationIssue[], value: string | undefined, message: string, nodeId: string) {
+  if (!value?.trim() || hasTemplate(value)) return
   try {
     JSON.parse(value)
   } catch {
@@ -235,7 +265,7 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
           add(issues, 'error', 'UNKNOWN_TOOL', `${nodeLabel(node)} uses a tool that is not available on the selected connection.`, node.id)
         }
       }
-      validateJsonField(issues, node.data.args, `${nodeLabel(node)} arguments must be valid JSON.`, node.id)
+      validateJsonObjectField(issues, node.data.args, `${nodeLabel(node)} arguments must be a JSON object.`, node.id)
       const selectedTool = toolsByConnection.get(node.data.connectionId)?.get(node.data.toolName)
       const requiredArgs = requiredToolArgs(selectedTool?.inputSchema)
       if (requiredArgs.length) {
@@ -251,8 +281,15 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
     }
 
     if (node.type === 'http') {
-      if (!node.data.url.trim()) add(issues, 'error', 'MISSING_HTTP_URL', `${nodeLabel(node)} needs a URL.`, node.id)
-      validateJsonField(issues, node.data.headers, `${nodeLabel(node)} headers must be valid JSON.`, node.id)
+      validateHttpUrl(issues, node.data.url, node.id)
+      validateJsonObjectField(issues, node.data.headers, `${nodeLabel(node)} headers must be a JSON object.`, node.id)
+      validateJsonObjectField(issues, node.data.query, `${nodeLabel(node)} query params must be a JSON object.`, node.id)
+      if ((node.data.bodyMode ?? 'json') === 'json') {
+        validateTemplatedJsonField(issues, node.data.body, `${nodeLabel(node)} body must be valid JSON or a data value.`, node.id)
+      }
+      if ((node.data.bodyMode ?? 'json') !== 'none' && ['GET', 'DELETE'].includes(node.data.method) && node.data.body?.trim()) {
+        add(issues, 'warning', 'HTTP_BODY_IGNORED', `${nodeLabel(node)} will not send a body for ${node.data.method}.`, node.id)
+      }
     }
 
     if (node.type === 'loop') {

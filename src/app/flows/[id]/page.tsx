@@ -12,6 +12,7 @@ import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/l
 import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
 import { buildDataTree } from '@/lib/flows/datatree'
 import { parseFlowInput } from '@/lib/flows/input'
+import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 import { validateFlowGraph } from '@/lib/flows/validate'
 import { FlowCanvas } from '@/components/flows/flow-canvas'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
@@ -95,6 +96,19 @@ function triggerInputFields(graph: FlowGraph): OutputField[] {
     type: ['string', 'number', 'boolean', 'object', 'array', 'any'].includes(String(field.type)) ? field.type as OutputField['type'] : 'any',
     description: typeof field.description === 'string' ? field.description : undefined,
   }))
+}
+
+function outputFieldsForNode(node: FlowNode | undefined, toolCatalog: ToolCatalog): OutputField[] | undefined {
+  if (!node) return undefined
+  if (node.type === 'agent') return node.data.outputFields
+  if (node.type === 'http') return node.data.outputFields?.length ? node.data.outputFields : httpOutputFields()
+  if (node.type !== 'tool') return undefined
+  if (node.data.outputFields?.length) return node.data.outputFields
+  const tool = toolCatalog
+    .find((connection) => connection.id === node.data.connectionId)
+    ?.tools.find((entry) => entry.name === node.data.toolName)
+  const fields = outputFieldsFromJsonSchema(tool?.outputSchema)
+  return fields.length ? fields : undefined
 }
 
 function previewLoopItems(value: unknown): unknown[] {
@@ -306,12 +320,11 @@ export default function FlowBuilder() {
               : n
                 ? n.type
                 : uid
-      const outputFields =
-        n?.type === 'agent' || n?.type === 'tool' || n?.type === 'http' ? n.data.outputFields : undefined
+      const outputFields = outputFieldsForNode(n, toolCatalog)
       return { id: uid, label, outputFields }
     })
     return buildDataTree({ upstream, insideLoop, lastOutputs, triggerInput, inputFields })
-  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById, loopContext, testInput, inputFields])
+  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById, loopContext, testInput, inputFields, toolCatalog])
 
   const validation = useMemo(
     () => validateFlowGraph(graph, { agents, toolCatalog }),
@@ -583,8 +596,8 @@ export default function FlowBuilder() {
               }}
               onAddStep={
                 selectedNode.type === 'loop' || selectedNode.type === 'parallel'
-                  ? () => {
-                      const { graph: next, nodeId } = addContainerStep(graph, selectedNode.id)
+                  ? (type) => {
+                      const { graph: next, nodeId } = addContainerStep(graph, selectedNode.id, type, type === 'agent' ? agents[0]?.id ?? '' : undefined)
                       commitGraph(next)
                       setSelectedId(nodeId)
                     }

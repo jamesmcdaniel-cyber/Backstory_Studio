@@ -2,7 +2,7 @@ import { prisma } from '@/lib/prisma'
 import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 
-export type FlowToolSummary = { name: string; description: string; inputSchema?: unknown }
+export type FlowToolSummary = { name: string; description: string; inputSchema?: unknown; outputSchema?: unknown }
 export type FlowToolCatalogConnection = { id: string; name: string; tools: FlowToolSummary[] }
 
 export async function loadFlowToolCatalog(
@@ -30,6 +30,7 @@ export async function loadFlowToolCatalog(
             name: tool.name,
             description: tool.description ?? '',
             inputSchema: tool.inputSchema ?? null,
+            outputSchema: tool.outputSchema ?? null,
           })),
         }
       } catch {

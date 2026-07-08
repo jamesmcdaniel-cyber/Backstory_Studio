@@ -78,6 +78,31 @@ test('loop fans out over an array and collects results', async () => {
   assert.deepEqual(result.output, ['ran:score A', 'ran:score B', 'ran:score C'])
 })
 
+test('loop honors concurrency while preserving output order', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', concurrency: 2, body: ['echo'] } },
+      { id: 'echo', type: 'agent', data: { agentId: 'echo', input: '{{item}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  let active = 0
+  let maxActive = 0
+  const delays: Record<string, number> = { '0': 30, '1': 5, '2': 10, '3': 1 }
+  const runAgent: RunAgentFn = async (node) => {
+    active += 1
+    maxActive = Math.max(maxActive, active)
+    await new Promise((resolve) => setTimeout(resolve, delays[node.input] ?? 1))
+    active -= 1
+    return { output: node.input }
+  }
+  const result = await interpretFlow(graph, [0, 1, 2, 3], { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(maxActive, 2)
+  assert.deepEqual(result.output, ['0', '1', '2', '3'])
+})
+
 test('waiting sub-run halts the flow', async () => {
   const graph: FlowGraph = {
     nodes: [
@@ -288,6 +313,51 @@ test('tool and http steps resolve templates and thread output', async () => {
   assert.equal(result.output, 'sent:got 88') // http body saw the tool's structured output
 })
 
+test('http steps preserve structured query, headers, and body values', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'h1',
+        type: 'http',
+        data: {
+          method: 'POST',
+          url: 'https://example.com/accounts/{{trigger.input.accountId}}',
+          query: '{"tags": "{{trigger.input.tags}}", "active": "{{trigger.input.active}}"}',
+          headers: '{"authorization": "Bearer {{trigger.input.token}}"}',
+          bodyMode: 'json',
+          responseType: 'json',
+          failOnHttpError: false,
+          retries: 2,
+          timeoutMs: 15000,
+          body: '{"record": "{{trigger.input.record}}"}',
+        },
+      },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'h1' }],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push(node.config)
+    return { output: { ok: true } }
+  }
+  const input = { accountId: 'acct_1', tags: ['a', 'b'], active: true, token: 'tok', record: { name: 'Acme' } }
+  const result = await interpretFlow(graph, input, { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(calls[0], {
+    method: 'POST',
+    url: 'https://example.com/accounts/acct_1',
+    query: { tags: ['a', 'b'], active: true },
+    headers: { authorization: 'Bearer tok' },
+    body: { record: { name: 'Acme' } },
+    bodyMode: 'json',
+    responseType: 'json',
+    failOnHttpError: false,
+    retries: 2,
+    timeoutMs: 15000,
+  })
+})
+
 test('tool args preserve object values from loop items', async () => {
   const graph: FlowGraph = {
     nodes: [
@@ -307,6 +377,42 @@ test('tool args preserve object values from loop items', async () => {
   const result = await interpretFlow(graph, input, { runAgent, runAction })
   assert.equal(result.status, 'succeeded')
   assert.deepEqual(calls[0].args, { account: { name: 'Acme', score: 91 }, name: 'Acme' })
+})
+
+test('tool steps pass retry and timeout config to the action runtime', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'tool',
+        type: 'tool',
+        data: {
+          connectionId: 'c1',
+          toolName: 'send',
+          retries: 2,
+          timeoutMs: 15000,
+          args: '{"message":"{{trigger.input.message}}"}',
+        },
+      },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'tool' }],
+  }
+  const calls: Record<string, unknown>[] = []
+  const result = await interpretFlow(graph, { message: 'hello' }, {
+    runAgent: async () => ({ output: '' }),
+    runAction: async (node) => {
+      calls.push(node.config)
+      return { output: { ok: true } }
+    },
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(calls[0], {
+    connectionId: 'c1',
+    toolName: 'send',
+    args: { message: 'hello' },
+    retries: 2,
+    timeoutMs: 15000,
+  })
 })
 
 test('a failing tool step honors onError', async () => {
@@ -358,7 +464,7 @@ test('filter drops loop items that fail and ends the chain when it fails', async
 })
 
 test('switch routes to the matching case, else default', async () => {
-  const graph = (tier: string): FlowGraph => ({
+  const graph = (_tier: string): FlowGraph => ({
     nodes: [
       { id: 'trigger', type: 'trigger', data: {} },
       { id: 'sw', type: 'switch', data: { cases: [{ id: 'ent', left: '{{trigger.input}}', op: 'eq', right: 'enterprise' }, { id: 'mid', left: '{{trigger.input}}', op: 'eq', right: 'mid' }] } },

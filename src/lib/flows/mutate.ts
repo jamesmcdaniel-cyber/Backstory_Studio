@@ -31,7 +31,7 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
     case 'tool':
       return { connectionId: '', toolName: '', args: '{}' }
     case 'http':
-      return { method: 'POST', url: '', body: '{\n  "input": "{{trigger.input}}"\n}' }
+      return { method: 'POST', url: '', bodyMode: 'json', responseType: 'auto', failOnHttpError: true, retries: 0, body: '{\n  "input": "{{trigger.input}}"\n}' }
     case 'transform':
       return { fields: [{ name: '', value: '' }] }
     case 'filter':
@@ -132,23 +132,22 @@ export function changeNodeType(graph: FlowGraph, id: string, type: StepType): Fl
   return { ...graph, nodes: graph.nodes.map((node) => (node.id === id ? ({ id, type, data: defaultData(type) } as FlowNode) : node)) }
 }
 
-/** Append a new agent step to a loop body or a new parallel branch. */
-export function addContainerStep(graph: FlowGraph, containerId: string): { graph: FlowGraph; nodeId: string } {
-  const bodyId = newNodeId(graph, 'b')
+/** Append a new typed step to a loop body or a new parallel branch. */
+export function addContainerStep(graph: FlowGraph, containerId: string, type: StepType = 'agent', agentId?: string): { graph: FlowGraph; nodeId: string } {
   const container = graph.nodes.find((n) => n.id === containerId)
   const isLoop = container?.type === 'loop'
-  const bodyNode = {
-    id: bodyId,
-    type: 'agent',
-    data: { agentId: '', input: isLoop ? 'Process this item:\n{{item}}' : 'Use this flow input:\n{{trigger.input}}' },
-  } as FlowNode
+  const { node, extraNodes } = makeNode(graph, type, agentId)
+  const bodyNode =
+    node.type === 'agent' && isLoop
+      ? ({ ...node, data: { ...node.data, input: 'Process this item:\n{{item}}' } } as FlowNode)
+      : node
   const nodes = graph.nodes.map((node) => {
     if (node.id !== containerId) return node
-    if (node.type === 'loop') return { ...node, data: { ...node.data, body: [...node.data.body, bodyId] } }
-    if (node.type === 'parallel') return { ...node, data: { ...node.data, branches: [...node.data.branches, [bodyId]] } }
+    if (node.type === 'loop') return { ...node, data: { ...node.data, body: [...node.data.body, bodyNode.id] } }
+    if (node.type === 'parallel') return { ...node, data: { ...node.data, branches: [...node.data.branches, [bodyNode.id]] } }
     return node
   })
-  return { graph: { ...graph, nodes: [...nodes, bodyNode] }, nodeId: bodyId }
+  return { graph: { ...graph, nodes: [...nodes, bodyNode, ...extraNodes] }, nodeId: bodyNode.id }
 }
 
 /** Duplicate a step in place: the copy is inserted right after the original. */

@@ -31,18 +31,20 @@ test('validateFlowGraph reports missing agents and dangling edges', () => {
   assert.match(validationErrorMessage(result), /agent|edge|missing/i)
 })
 
-test('validateFlowGraph checks tool connection, tool name, and JSON args', () => {
+test('validateFlowGraph checks tool connection, tool name, and object-shaped JSON args', () => {
   const graph: FlowGraph = {
     nodes: [
       { id: 'trigger', type: 'trigger', data: {} },
       { id: 't', type: 'tool', data: { connectionId: 'c1', toolName: 'missing_tool', args: '{"broken":' } },
+      { id: 'arr', type: 'tool', data: { connectionId: 'c1', toolName: 'send', args: '[]' } },
     ],
-    edges: [{ id: 'e1', source: 'trigger', target: 't' }],
+    edges: [{ id: 'e1', source: 'trigger', target: 't' }, { id: 'e2', source: 't', target: 'arr' }],
   }
   const result = validateFlowGraph(graph, { toolCatalog: [{ id: 'c1', tools: [{ name: 'send' }] }] })
   assert.equal(result.ok, false)
   assert.ok(result.errors.some((issue) => issue.code === 'UNKNOWN_TOOL'))
-  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON'))
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON_OBJECT' && issue.nodeId === 't'))
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON_OBJECT' && issue.nodeId === 'arr'))
 })
 
 test('validateFlowGraph checks required tool arguments from input schema', () => {
@@ -83,6 +85,30 @@ test('validateFlowGraph accepts required object tool args supplied by exact data
     toolCatalog: [{ id: 'c1', tools: [{ name: 'upsert', inputSchema: { type: 'object', required: ['record'] } }] }],
   })
   assert.equal(result.ok, true)
+})
+
+test('validateFlowGraph checks HTTP request configuration', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'bad-url', type: 'http', data: { method: 'POST', url: 'ftp://example.com', headers: '[]', query: '"bad"', bodyMode: 'json', body: '{broken' } },
+      { id: 'insecure-url', type: 'http', data: { method: 'POST', url: 'http://api.example.com' } },
+      { id: 'get-body', type: 'http', data: { method: 'GET', url: 'https://api.example.com', body: '{"ignored":true}' } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'bad-url' },
+      { id: 'e2', source: 'bad-url', target: 'insecure-url' },
+      { id: 'e3', source: 'insecure-url', target: 'get-body' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_HTTP_URL'))
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_HTTP_URL' && issue.message.includes('https://') && issue.nodeId === 'insecure-url'))
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON_OBJECT' && issue.message.includes('headers')))
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON_OBJECT' && issue.message.includes('query')))
+  assert.ok(result.errors.some((issue) => issue.code === 'INVALID_JSON' && issue.message.includes('body')))
+  assert.ok(result.warnings.some((issue) => issue.code === 'HTTP_BODY_IGNORED'))
 })
 
 test('validateFlowGraph checks loop bodies and switch defaults', () => {

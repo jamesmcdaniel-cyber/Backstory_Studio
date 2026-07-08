@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildDataTree, inferFields } from '../datatree'
+import { httpOutputFields } from '../schema-fields'
 
 test('inferFields walks objects and arrays into dot-path tokens', () => {
   const fields = inferFields({ score: 91, owner: { name: 'Ada' }, tags: ['a'] }, 'step.n1.output')
@@ -51,6 +52,16 @@ test('buildDataTree exposes declared trigger input fields before a sample run', 
   assert.equal(trigger?.children?.find((field) => field.label === 'account')?.token, '{{trigger.input.account}}')
   assert.equal(trigger?.children?.find((field) => field.label === 'account')?.description, 'Customer account name.')
   assert.equal(trigger?.children?.find((field) => field.label === 'priority')?.token, '{{trigger.input.priority}}')
+})
+
+test('buildDataTree exposes HTTP response fields before a sample run', () => {
+  const tree = buildDataTree({
+    upstream: [{ id: 'api', label: 'Fetch account', outputFields: httpOutputFields() }],
+  })
+  const api = tree.find((root) => root.label === 'Fetch account')
+  assert.equal(api?.children?.find((field) => field.label === 'status')?.token, '{{step.api.output.status}}')
+  assert.equal(api?.children?.find((field) => field.label === 'body')?.token, '{{step.api.output.body}}')
+  assert.equal(api?.children?.find((field) => field.label === 'bodyText')?.type, 'string')
 })
 
 test('buildDataTree does not duplicate declared trigger fields inferred from a sample', () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { insertAgentAfter, insertNodeAfter, appendToBranch, duplicateNode, deleteNode, updateNode } from '../mutate'
+import { insertAgentAfter, insertNodeAfter, appendToBranch, duplicateNode, deleteNode, updateNode, addContainerStep } from '../mutate'
 import { emptyGraph, type FlowGraph } from '../graph'
 
 test('insertAgentAfter appends a node and links the trigger to it', () => {
@@ -45,6 +45,26 @@ test('appendToBranch wires the first node of an empty false branch', () => {
   // appending again goes to the tail, not a second branch head
   const res2 = appendToBranch(g, condId, 'false', 'stop')
   assert.ok(res2.graph.edges.some((e) => e.source === res.nodeId && e.target === res2.nodeId))
+})
+
+test('addContainerStep creates typed loop body steps', () => {
+  const base = insertNodeAfter(emptyGraph(), 'trigger', 'loop').graph
+  const loop = base.nodes.find((node) => node.type === 'loop')!
+  const { graph, nodeId } = addContainerStep(base, loop.id, 'tool')
+  const added = graph.nodes.find((node) => node.id === nodeId)
+  const updatedLoop = graph.nodes.find((node) => node.id === loop.id)
+  assert.equal(added?.type, 'tool')
+  assert.ok(updatedLoop?.type === 'loop' && updatedLoop.data.body.includes(nodeId))
+})
+
+test('addContainerStep creates typed parallel branches', () => {
+  const base = insertNodeAfter(emptyGraph(), 'trigger', 'parallel').graph
+  const parallel = base.nodes.find((node) => node.type === 'parallel')!
+  const { graph, nodeId } = addContainerStep(base, parallel.id, 'http')
+  const added = graph.nodes.find((node) => node.id === nodeId)
+  const updatedParallel = graph.nodes.find((node) => node.id === parallel.id)
+  assert.equal(added?.type, 'http')
+  assert.ok(updatedParallel?.type === 'parallel' && updatedParallel.data.branches.some((branch) => branch[0] === nodeId))
 })
 
 test('deleteNode preserves the branch flag when healing a branch head', () => {

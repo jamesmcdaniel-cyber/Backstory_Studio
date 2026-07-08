@@ -81,6 +81,15 @@ function loopItems(value: unknown): unknown[] {
   return [trimmed]
 }
 
+function resolveConfigValue(value: string | undefined, ctx: FlowContext): unknown {
+  if (!value?.trim()) return undefined
+  try {
+    return resolveTemplateValue(JSON.parse(value), ctx)
+  } catch {
+    return resolveTemplateValue(value, ctx)
+  }
+}
+
 /**
  * Deterministically interpret a flow graph. Pure: agent execution is delegated
  * to `opts.runAgent`. Supports nested control flow (loops/parallels containing
@@ -196,12 +205,20 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
               connectionId: node.data.connectionId,
               toolName: node.data.toolName,
               args: resolvedArgs,
+              retries: node.data.retries,
+              timeoutMs: node.data.timeoutMs,
             }
           : {
               method: node.data.method,
               url: resolveTemplate(node.data.url, ctx),
-              headers: node.data.headers ? resolveTemplate(node.data.headers, ctx) : undefined,
-              body: node.data.body ? resolveTemplate(node.data.body, ctx) : undefined,
+              query: resolveConfigValue(node.data.query, ctx),
+              headers: resolveConfigValue(node.data.headers, ctx),
+              body: resolveConfigValue(node.data.body, ctx),
+              bodyMode: node.data.bodyMode,
+              responseType: node.data.responseType,
+              failOnHttpError: node.data.failOnHttpError,
+              retries: node.data.retries,
+              timeoutMs: node.data.timeoutMs,
             }
       const res: RunAgentResult = opts.runAction
         ? await opts.runAction({ id: node.id, kind: node.type, config })

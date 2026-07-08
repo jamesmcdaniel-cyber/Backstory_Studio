@@ -8,6 +8,11 @@ import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
+import { flowActionRetries, flowActionTimeoutMs, runWithRetries } from './action-reliability'
+import { prepareHttpRequest, responseOutput } from './http'
+import { shouldPersistInterpreterStep } from './run-step-persistence'
+import { prepareToolArgs } from './tool-args'
+import { flowToolOutput } from './tool-output'
 
 export type FlowExecutionJob = {
   flowId: string
@@ -24,8 +29,7 @@ export type FlowExecutionJob = {
   trigger?: { type: 'manual' | 'schedule' | 'webhook'; [key: string]: unknown }
 }
 
-// Bounds for http steps: response size kept promptable, one attempt ≤ 30s.
-const HTTP_TIMEOUT_MS = 30_000
+// Bound HTTP responses so downstream prompts/logs stay manageable.
 const HTTP_MAX_RESPONSE_CHARS = 50_000
 
 function jsonValue(value: unknown) {
@@ -98,10 +102,11 @@ export async function runFlowExecution(
   const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
   let order = 0
   // Container (condition/loop/parallel/stop) outcomes are reported via onStep;
-  // persist them so runs are fully inspectable, not just their agent steps.
+  // persist them so runs are fully inspectable. Agent/tool/http steps are
+  // persisted by their adapters because they need started/running rows.
   const pending: Promise<unknown>[] = []
   const onStep = (outcome: { nodeId: string; status: string; output?: unknown; error?: string }) => {
-    if (nodeTypeById.get(outcome.nodeId) === 'agent') return // agent rows handled by the adapter below
+    if (!shouldPersistInterpreterStep(nodeTypeById.get(outcome.nodeId))) return
     pending.push(
       prisma.flowRunStep
         .create({
@@ -197,52 +202,46 @@ export async function runFlowExecution(
         if (!conn) throw new Error('The selected connection no longer exists — pick another in the step config.')
         const fresh = await ensureFreshConnectionToken(conn)
         const client = new McpClient(mcpConfigFromConnection(fresh))
-        let args: Record<string, unknown> = {}
-        if (node.config.args && typeof node.config.args === 'object' && !Array.isArray(node.config.args)) {
-          args = node.config.args as Record<string, unknown>
-        } else {
-          try {
-            const parsed = JSON.parse(String(node.config.args || '{}'))
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed
-          } catch {
-            throw new Error('Tool arguments are not valid JSON after template substitution.')
-          }
-        }
-        const result = await client.executeTool(fresh.serverUrl, String(node.config.toolName), args)
-        const output = typeof result === 'string' ? result : JSON.stringify(result ?? null)
+        const args = prepareToolArgs(node.config.args)
+        const toolName = String(node.config.toolName)
+        const retries = flowActionRetries(node.config.retries)
+        const timeoutMs = flowActionTimeoutMs(node.config.timeoutMs)
+        const output = await runWithRetries(
+          async () => flowToolOutput(await client.executeTool(fresh.serverUrl, toolName, args)),
+          {
+            retries,
+            timeoutMs,
+            timeoutMessage: timeoutMs ? `Tool ${toolName} timed out after ${timeoutMs}ms` : undefined,
+          },
+        )
         await finish({ status: 'succeeded', output })
         return { output }
       }
       // http
-      const url = String(node.config.url || '')
-      await assertPublicUrl(url) // SSRF guard: no internal/private targets
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS)
-      try {
-        let headers: Record<string, string> = { 'content-type': 'application/json' }
-        if (node.config.headers) {
-          try {
-            const parsed = JSON.parse(String(node.config.headers))
-            if (parsed && typeof parsed === 'object') headers = { ...headers, ...parsed }
-          } catch {
-            throw new Error('Headers are not valid JSON after template substitution.')
-          }
+      const request = prepareHttpRequest(node.config)
+      const retries = flowActionRetries(node.config.retries)
+      const output = await runWithRetries(async () => {
+        await assertPublicUrl(request.url) // SSRF guard: re-check before every attempt
+        const controller = new AbortController()
+        let timedOut = false
+        const timer = setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, request.timeoutMs)
+        try {
+          const response = await fetch(request.url, { ...request.init, signal: controller.signal })
+          const nextOutput = await responseOutput(response, request.responseType, HTTP_MAX_RESPONSE_CHARS)
+          if (request.failOnHttpError && !nextOutput.ok) throw new Error(`HTTP ${nextOutput.status}: ${nextOutput.bodyText.slice(0, 200)}`)
+          return nextOutput
+        } catch (error) {
+          if (timedOut) throw new Error(`HTTP request timed out after ${request.timeoutMs}ms`)
+          throw error
+        } finally {
+          clearTimeout(timer)
         }
-        const method = String(node.config.method || 'POST').toUpperCase()
-        const response = await fetch(url, {
-          method,
-          headers,
-          body: method === 'GET' ? undefined : (node.config.body as string | undefined),
-          signal: controller.signal,
-          redirect: 'error', // a redirect could bypass the SSRF check
-        })
-        const text = (await response.text()).slice(0, HTTP_MAX_RESPONSE_CHARS)
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 200)}`)
-        await finish({ status: 'succeeded', output: text })
-        return { output: text }
-      } finally {
-        clearTimeout(timer)
-      }
+      }, { retries })
+      await finish({ status: 'succeeded', output })
+      return { output }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await finish({ status: 'failed', error: message })

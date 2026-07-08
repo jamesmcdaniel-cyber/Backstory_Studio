@@ -383,7 +383,7 @@ export class McpClient {
 
   async getServerTools(
     serverUrl: string,
-  ): Promise<{ name: string; description?: string; inputSchema?: any }[]> {
+  ): Promise<{ name: string; description?: string; inputSchema?: any; outputSchema?: any }[]> {
     await this.initialize(serverUrl)
     const response = await this.rpc(serverUrl, 'tools/list')
     if (response.error) {
@@ -396,6 +396,10 @@ export class McpClient {
       inputSchema: tool.inputSchema ||
         tool.input_schema ||
         tool.parameters || { type: 'object', properties: {} },
+      outputSchema: tool.outputSchema ||
+        tool.output_schema ||
+        tool.resultSchema ||
+        tool.result_schema,
     }))
   }
 

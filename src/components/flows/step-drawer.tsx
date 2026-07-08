@@ -23,7 +23,7 @@ const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'stop', label: 'Stop' },
 ]
 
-export type ToolCatalog = { id: string; name: string; tools: { name: string; description: string; inputSchema?: unknown }[] }[]
+export type ToolCatalog = { id: string; name: string; tools: { name: string; description: string; inputSchema?: unknown; outputSchema?: unknown }[] }[]
 
 /** Frequencies the schedule editor offers (matches AgentSchedule types). */
 const FREQUENCIES = [
@@ -56,6 +56,176 @@ function clausesOf(data: { clauses?: ConditionClause[]; left?: string; op?: Cond
   return [{ left: '', op: 'contains', right: '' }]
 }
 
+type KeyValueRow = { key: string; value: string }
+
+function parseKeyValueRows(value: string | undefined): { rows: KeyValueRow[]; invalid: boolean } {
+  if (!value?.trim()) return { rows: [{ key: '', value: '' }], invalid: false }
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { rows: [{ key: '', value }], invalid: true }
+    const rows = Object.entries(parsed).map(([key, item]) => ({
+      key,
+      value: typeof item === 'string' ? item : JSON.stringify(item),
+    }))
+    return { rows: rows.length ? rows : [{ key: '', value: '' }], invalid: false }
+  } catch {
+    return { rows: [{ key: '', value }], invalid: true }
+  }
+}
+
+function parseTypedValue(value: string): unknown {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (!/^(?:true|false|null|-?\d|\{|\[|")/.test(trimmed)) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}
+
+function serializeKeyValueRows(rows: KeyValueRow[]): string | undefined {
+  const out: Record<string, unknown> = {}
+  for (const row of rows) {
+    const key = row.key.trim()
+    if (!key) continue
+    out[key] = parseTypedValue(row.value)
+  }
+  return Object.keys(out).length ? JSON.stringify(out, null, 2) : undefined
+}
+
+function KeyValueJsonEditor({
+  label,
+  value,
+  onChange,
+  keyPlaceholder,
+  valuePlaceholder,
+  helper,
+  onFocusRaw,
+  onFocusValue,
+  onFocusKey,
+}: {
+  label: string
+  value: string | undefined
+  onChange: (value: string | undefined) => void
+  keyPlaceholder: string
+  valuePlaceholder: string
+  helper: string
+  onFocusRaw: (event: React.FocusEvent<HTMLTextAreaElement>) => void
+  onFocusValue: (index: number) => (event: React.FocusEvent<HTMLInputElement>) => void
+  onFocusKey: (event: React.FocusEvent<HTMLInputElement>) => void
+}) {
+  const parsed = parseKeyValueRows(value)
+
+  if (parsed.invalid) {
+    return (
+      <div>
+        <label className={labelClass}>{label}</label>
+        <textarea
+          rows={3}
+          className={`${areaClass} font-mono text-xs`}
+          value={value ?? ''}
+          placeholder={'{"name": "value"}'}
+          onFocus={onFocusRaw}
+          onChange={(e) => onChange(e.target.value || undefined)}
+        />
+        <p className="mt-1 text-[11px] text-amber-600">This saved value is not a JSON object. Fix it here, or clear it to return to key/value rows.</p>
+      </div>
+    )
+  }
+
+  const savedRows = parsed.rows.filter((row) => row.key || row.value)
+  const displayRows = [...savedRows, { key: '', value: '' }]
+  const setRow = (index: number, patch: Partial<KeyValueRow>) => {
+    const next = [...savedRows]
+    const current = next[index] ?? { key: '', value: '' }
+    next[index] = {
+      key: patch.key ?? current.key,
+      value: patch.value ?? current.value,
+    }
+    onChange(serializeKeyValueRows(next))
+  }
+  const removeRow = (index: number) => {
+    onChange(serializeKeyValueRows(savedRows.filter((_row, rowIndex) => rowIndex !== index)))
+  }
+
+  return (
+    <div>
+      <label className={labelClass}>{label}</label>
+      <div className="space-y-2 rounded-xl border border-border bg-background/40 p-2">
+        {displayRows.map((row, index) => {
+          const saved = index < savedRows.length
+          return (
+            <div key={index} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)_auto] gap-2">
+              <input
+                className={smallField}
+                value={row.key}
+                placeholder={keyPlaceholder}
+                onFocus={onFocusKey}
+                onChange={(e) => setRow(index, { key: e.target.value })}
+              />
+              <input
+                className={smallField}
+                value={row.value}
+                placeholder={valuePlaceholder}
+                onFocus={onFocusValue(index)}
+                onChange={(e) => setRow(index, { value: e.target.value })}
+              />
+              <button
+                type="button"
+                aria-label={`Remove ${label.toLowerCase()} row`}
+                disabled={!saved}
+                onClick={() => removeRow(index)}
+                className="rounded-lg border border-border px-2 text-muted-foreground hover:bg-muted disabled:pointer-events-none disabled:opacity-30"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">{helper}</p>
+    </div>
+  )
+}
+
+function AddNestedStepMenu({
+  label,
+  onPick,
+}: {
+  label: string
+  onPick: (type: EditableType) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <Button variant="outline" size="sm" className="w-full" onClick={() => setOpen((value) => !value)}>
+        <Plus className="mr-1.5 h-4 w-4" /> {label}
+      </Button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-lg border border-border bg-card p-1 shadow-popover">
+            {NODE_TYPES.map((type) => (
+              <button
+                key={type.value}
+                type="button"
+                onClick={() => {
+                  setOpen(false)
+                  onPick(type.value)
+                }}
+                className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted"
+              >
+                {type.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export function StepDrawer({
   node,
   flowId,
@@ -76,7 +246,7 @@ export function StepDrawer({
   dataFields: DataField[]
   onChange: (node: FlowNode) => void
   onChangeType: (type: EditableType) => void
-  onAddStep?: () => void
+  onAddStep?: (type: EditableType) => void
   onDuplicate?: () => void
   onDelete: () => void
   onClose: () => void
@@ -100,7 +270,21 @@ export function StepDrawer({
     if (node.type === 'loop') return { get: () => node.data.over ?? '', set: (v) => onChange({ ...node, data: { ...node.data, over: v } }) }
     if (node.type === 'tool') return { get: () => node.data.args ?? '', set: (v) => onChange({ ...node, data: { ...node.data, args: v } }) }
     if (node.type === 'http') {
-      const field = activeField === 'http.url' ? 'url' : activeField === 'http.headers' ? 'headers' : 'body'
+      const kv = activeField.match(/^http\.(query|headers)\.(\d+)\.value$/)
+      if (kv) {
+        const field = kv[1] as 'query' | 'headers'
+        const index = Number(kv[2])
+        const rows = parseKeyValueRows(node.data[field]).rows
+        return {
+          get: () => rows[index]?.value ?? '',
+          set: (v) => {
+            const next = [...rows]
+            next[index] = { key: next[index]?.key ?? '', value: v }
+            onChange({ ...node, data: { ...node.data, [field]: serializeKeyValueRows(next) } })
+          },
+        }
+      }
+      const field = activeField === 'http.url' ? 'url' : activeField === 'http.headers.raw' ? 'headers' : activeField === 'http.query.raw' ? 'query' : 'body'
       return {
         get: () => (node.data as unknown as Record<string, string | undefined>)[field] ?? '',
         set: (v) => onChange({ ...node, data: { ...node.data, [field]: v } }),
@@ -369,9 +553,7 @@ export function StepDrawer({
               />
             </div>
             {onAddStep && (
-              <Button variant="outline" size="sm" className="w-full" onClick={onAddStep}>
-                <Plus className="mr-1.5 h-4 w-4" /> Add step to loop
-              </Button>
+              <AddNestedStepMenu label="Add step to loop" onPick={onAddStep} />
             )}
           </div>
         )}
@@ -382,9 +564,7 @@ export function StepDrawer({
               Runs {node.data.branches.length} branch{node.data.branches.length === 1 ? '' : 'es'} at once and merges their outputs. Click an indented card to edit a branch step.
             </p>
             {onAddStep && (
-              <Button variant="outline" size="sm" className="w-full" onClick={onAddStep}>
-                <Plus className="mr-1.5 h-4 w-4" /> Add parallel branch
-              </Button>
+              <AddNestedStepMenu label="Add parallel branch" onPick={onAddStep} />
             )}
           </div>
         )}
@@ -434,18 +614,46 @@ export function StepDrawer({
             ) : (
               <p className="text-xs text-muted-foreground">Pick a tool to configure its inputs.</p>
             )}
-            <div>
-              <label className={labelClass}>On error</label>
-              <select
-                className={fieldClass}
-                value={node.data.onError ?? 'stop'}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
-              >
-                <option value="stop">Stop flow</option>
-                <option value="continue">Continue</option>
-              </select>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={labelClass}>On error</label>
+                <select
+                  className={fieldClass}
+                  value={node.data.onError ?? 'stop'}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
+                >
+                  <option value="stop">Stop flow</option>
+                  <option value="continue">Continue</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Retries</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={5}
+                  className={fieldClass}
+                  value={node.data.retries ?? 0}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, retries: Math.max(0, Math.min(5, Number(e.target.value) || 0)) } })}
+                />
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">Runs this exact tool with these arguments — deterministic, no agent in the loop.</p>
+            <div>
+              <label className={labelClass}>Timeout (seconds, optional)</label>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                className={fieldClass}
+                value={node.data.timeoutMs ? Math.round(node.data.timeoutMs / 1000) : ''}
+                placeholder="30"
+                onChange={(e) => {
+                  const secs = Number(e.target.value)
+                  onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? Math.max(1, Math.min(120, secs)) * 1000 : undefined } })
+                }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">Runs this exact tool with these arguments — deterministic, retryable, and no agent in the loop.</p>
           </div>
         )}
 
@@ -471,16 +679,65 @@ export function StepDrawer({
                 onChange={(e) => onChange({ ...node, data: { ...node.data, url: e.target.value } })}
               />
             </div>
-            <div>
-              <label className={labelClass}>Headers (JSON, optional)</label>
-              <textarea
-                rows={2}
-                className={`${areaClass} font-mono text-xs`}
-                value={node.data.headers ?? ''}
-                placeholder={'{"authorization": "Bearer …"}'}
-                onFocus={focusField('http.headers')}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, headers: e.target.value || undefined } })}
-              />
+            <KeyValueJsonEditor
+              label="Query params"
+              value={node.data.query}
+              keyPlaceholder="account_id"
+              valuePlaceholder="{{trigger.input.accountId}}"
+              helper="Added to the URL after ?. Arrays send repeated params; booleans and numbers are preserved."
+              onChange={(query) => onChange({ ...node, data: { ...node.data, query } })}
+              onFocusRaw={focusField('http.query.raw')}
+              onFocusKey={() => {
+                activeElRef.current = null
+                setActiveField('')
+              }}
+              onFocusValue={(index) => (e) => {
+                activeElRef.current = e.currentTarget
+                setActiveField(`http.query.${index}.value`)
+              }}
+            />
+            <KeyValueJsonEditor
+              label="Headers"
+              value={node.data.headers}
+              keyPlaceholder="authorization"
+              valuePlaceholder="Bearer token"
+              helper="Sent as request headers. Do not place secrets here unless this flow is allowed to use them."
+              onChange={(headers) => onChange({ ...node, data: { ...node.data, headers } })}
+              onFocusRaw={focusField('http.headers.raw')}
+              onFocusKey={() => {
+                activeElRef.current = null
+                setActiveField('')
+              }}
+              onFocusValue={(index) => (e) => {
+                activeElRef.current = e.currentTarget
+                setActiveField(`http.headers.${index}.value`)
+              }}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={labelClass}>Body type</label>
+                <select
+                  className={fieldClass}
+                  value={node.data.bodyMode ?? 'json'}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, bodyMode: e.target.value as typeof node.data.bodyMode } })}
+                >
+                  <option value="json">JSON</option>
+                  <option value="text">Text</option>
+                  <option value="none">No body</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Parse response as</label>
+                <select
+                  className={fieldClass}
+                  value={node.data.responseType ?? 'auto'}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, responseType: e.target.value as typeof node.data.responseType } })}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="json">JSON</option>
+                  <option value="text">Text</option>
+                </select>
+              </div>
             </div>
             <div>
               <label className={labelClass}>Body</label>
@@ -488,7 +745,8 @@ export function StepDrawer({
                 rows={4}
                 className={`${areaClass} font-mono text-xs`}
                 value={node.data.body ?? ''}
-                placeholder={'{"text": "Use a value from Available data"}'}
+                disabled={(node.data.bodyMode ?? 'json') === 'none'}
+                placeholder={(node.data.bodyMode ?? 'json') === 'text' ? 'Plain text body, values allowed: {{trigger.input.message}}' : '{"text": "Use a value from Available data"}'}
                 onFocus={focusField('http.body')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, body: e.target.value || undefined } })}
               />
@@ -496,18 +754,59 @@ export function StepDrawer({
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
             </div>
-            <div>
-              <label className={labelClass}>On error</label>
-              <select
-                className={fieldClass}
-                value={node.data.onError ?? 'stop'}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
-              >
-                <option value="stop">Stop flow</option>
-                <option value="continue">Continue</option>
-              </select>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={labelClass}>Fail on HTTP error</label>
+                <select
+                  className={fieldClass}
+                  value={node.data.failOnHttpError === false ? 'false' : 'true'}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, failOnHttpError: e.target.value !== 'false' } })}
+                >
+                  <option value="true">Yes, fail on 4xx/5xx</option>
+                  <option value="false">No, return the response</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Timeout (seconds)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={120}
+                  className={fieldClass}
+                  value={node.data.timeoutMs ? Math.round(node.data.timeoutMs / 1000) : ''}
+                  placeholder="30"
+                  onChange={(e) => {
+                    const secs = Number(e.target.value)
+                    onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? Math.max(1, Math.min(120, secs)) * 1000 : undefined } })
+                  }}
+                />
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">Calls an external URL (public hosts only). The response body becomes this step&apos;s output.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className={labelClass}>On error</label>
+                <select
+                  className={fieldClass}
+                  value={node.data.onError ?? 'stop'}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
+                >
+                  <option value="stop">Stop flow</option>
+                  <option value="continue">Continue</option>
+                </select>
+              </div>
+              <div>
+                <label className={labelClass}>Retries</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={5}
+                  className={fieldClass}
+                  value={node.data.retries ?? 0}
+                  onChange={(e) => onChange({ ...node, data: { ...node.data, retries: Math.max(0, Math.min(5, Number(e.target.value) || 0)) } })}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">Calls a public HTTPS URL. Output includes status, headers, parsed body, and raw bodyText. Retries re-send the request.</p>
           </div>
         )}
 

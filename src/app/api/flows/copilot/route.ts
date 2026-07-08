@@ -4,11 +4,11 @@ import { withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { generateStructured } from '@/lib/llm/model-runner'
 import { flowGraphSchema, emptyGraph } from '@/lib/flows/graph'
-import { repairGeneratedFlowGraph, validationIssuesForModel } from '@/lib/flows/copilot'
+import { normalizeGeneratedFlowGraphInput, repairGeneratedFlowGraph, validationIssuesForModel } from '@/lib/flows/copilot'
 import { validateFlowGraph } from '@/lib/flows/validate'
 import { readAgentMetadata } from '@/lib/agents/metadata'
-import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
-import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
+import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
+import { outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 
 // JSON-schema the model must fill: a graph of nodes + edges. Kept loose here
 // (objects) and tightened by flowGraphSchema.parse afterwards.
@@ -22,36 +22,6 @@ const GRAPH_JSON_SCHEMA = {
   additionalProperties: false,
 }
 
-type ToolSummary = { name: string; description: string; inputSchema?: unknown }
-type ConnectionSummary = { id: string; name: string; tools: ToolSummary[] }
-
-async function loadToolCatalog(organizationId: string): Promise<ConnectionSummary[]> {
-  const connections = await prisma.mcpConnection.findMany({
-    where: { organizationId, isActive: true },
-    take: 12,
-  })
-  return Promise.all(
-    connections.map(async (conn) => {
-      try {
-        const fresh = await ensureFreshConnectionToken(conn)
-        const client = new McpClient(mcpConfigFromConnection(fresh))
-        const tools = await client.getServerTools(fresh.serverUrl)
-        return {
-          id: conn.id,
-          name: conn.name,
-          tools: tools.slice(0, 30).map((tool) => ({
-            name: tool.name,
-            description: tool.description ?? '',
-            inputSchema: tool.inputSchema ?? null,
-          })),
-        }
-      } catch {
-        return { id: conn.id, name: conn.name, tools: [] }
-      }
-    }),
-  )
-}
-
 function toolInputHint(schema: unknown): string {
   if (!schema || typeof schema !== 'object') return ''
   const shape = schema as { properties?: Record<string, { type?: string; description?: string }>; required?: string[] }
@@ -59,6 +29,11 @@ function toolInputHint(schema: unknown): string {
   if (!props.length) return ''
   const required = new Set(shape.required ?? [])
   return props.map(([name, prop]) => `${name}${required.has(name) ? '*' : ''}:${prop.type ?? 'any'}`).join(', ')
+}
+
+function toolOutputHint(schema: unknown): string {
+  const fields = outputFieldsFromJsonSchema(schema, 8)
+  return fields.map((field) => `${field.name}:${field.type}`).join(', ')
 }
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
@@ -69,7 +44,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       select: { id: true, description: true, metadata: true },
       take: 100,
     }),
-    loadToolCatalog(auth.organizationId),
+    loadFlowToolCatalog(auth.organizationId, { takeConnections: 25, takeTools: 100 }),
   ])
   const roster = agents
     .map((agent) => ({ id: agent.id, name: readAgentMetadata(agent.metadata).title || agent.description }))
@@ -81,6 +56,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       name: tool.name,
       description: tool.description,
       inputHint: toolInputHint(tool.inputSchema),
+      outputHint: toolOutputHint(tool.outputSchema),
     })),
   )
 
@@ -90,7 +66,10 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     'Allowed node types: agent, tool, http, transform, filter, condition, switch, loop, parallel, stop. ' +
     'If the flow expects named input fields, put them on the trigger as data.trigger.inputFields: [{name,type,description}]. ' +
     'Agent data: {agentId, label, input}; agentId MUST be from the agent roster. ' +
-    'Tool data: {connectionId, toolName, label, args}; connectionId/toolName MUST be from available tools and args MUST be a JSON object string. ' +
+    'Tool data: {connectionId, toolName, label, args, retries, timeoutMs}; connectionId/toolName MUST be from available tools and args MUST be a JSON object string. Use retries for flaky external actions and timeoutMs for slow tools. ' +
+    'For required tool args that should come from the run form, declare trigger inputFields and map args to {{trigger.input.fieldName}}. ' +
+    'HTTP data: {method,url,query,headers,bodyMode,responseType,failOnHttpError,retries,timeoutMs,body}; method is GET/POST/PUT/PATCH/DELETE, query/headers/body are JSON strings, bodyMode is json/text/none, responseType is auto/json/text. ' +
+    'HTTP output is an object with ok, status, statusText, url, headers, body, and bodyText; use {{step.<httpNodeId>.output.body}} for parsed API response data and {{step.<httpNodeId>.output.status}} for status checks. ' +
     'Use data references only when needed: {{trigger.input}}, {{step.<nodeId>.output}}, {{step.<nodeId>.output.field}}, {{item}}, {{item.field}}, {{loop.index}}. ' +
     'For loops, data.over should point at a list and data.body should contain nested node ids. For condition/filter, use data.clauses with left/op/right. ' +
     'Edges connect node ids; condition edges use branch "true"/"false"; switch edges use case ids or "default".'
@@ -99,7 +78,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     '',
     `Agents:\n${roster.map((entry) => `- ${entry.name} (id: ${entry.id})`).join('\n') || '- None available'}`,
     '',
-    `Tools:\n${tools.map((tool) => `- ${tool.connectionName}: ${tool.name} (connectionId: ${tool.connectionId})${tool.inputHint ? ` args: ${tool.inputHint}` : ''}${tool.description ? ` — ${tool.description}` : ''}`).join('\n') || '- None available'}`,
+    `Tools:\n${tools.map((tool) => `- ${tool.connectionName}: ${tool.name} (connectionId: ${tool.connectionId})${tool.inputHint ? ` args: ${tool.inputHint}` : ''}${tool.outputHint ? ` outputs: ${tool.outputHint}` : ''}${tool.description ? ` — ${tool.description}` : ''}`).join('\n') || '- None available'}`,
   ].join('\n')
 
   try {
@@ -108,7 +87,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       toolCatalog,
     }
     const raw = await generateStructured({ system, user, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph', maxTokens: 3500 })
-    let graph = repairGeneratedFlowGraph(flowGraphSchema.parse(JSON.parse(raw)), { agents: roster, toolCatalog })
+    let graph = repairGeneratedFlowGraph(flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(JSON.parse(raw))), { agents: roster, toolCatalog })
     let validation = validateFlowGraph(graph, { ...validationContext, requireRunnable: graph.nodes.length > 1 })
 
     if (!validation.ok) {
@@ -122,7 +101,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         `Broken graph:\n${JSON.stringify(graph)}`,
       ].join('\n')
       const repairedRaw = await generateStructured({ system, user: repairUser, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph_repair', maxTokens: 3500 })
-      graph = repairGeneratedFlowGraph(flowGraphSchema.parse(JSON.parse(repairedRaw)), { agents: roster, toolCatalog })
+      graph = repairGeneratedFlowGraph(flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(JSON.parse(repairedRaw))), { agents: roster, toolCatalog })
       validation = validateFlowGraph(graph, { ...validationContext, requireRunnable: graph.nodes.length > 1 })
     }
 
