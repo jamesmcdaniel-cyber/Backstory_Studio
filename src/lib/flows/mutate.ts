@@ -19,7 +19,7 @@ function edgeId(source: string, target: string, branch?: string): string {
 function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?: string }): FlowNode['data'] {
   switch (type) {
     case 'agent':
-      return { agentId: extra?.agentId ?? '', input: '{{trigger.input}}' }
+      return { agentId: extra?.agentId ?? '', input: 'Use this flow input:\n{{trigger.input}}' }
     case 'condition':
       return { match: 'all', clauses: [{ left: '', op: 'contains', right: '' }] }
     case 'loop':
@@ -31,7 +31,7 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
     case 'tool':
       return { connectionId: '', toolName: '', args: '{}' }
     case 'http':
-      return { method: 'POST', url: '', body: '{{trigger.input}}' }
+      return { method: 'POST', url: '', body: '{\n  "input": "{{trigger.input}}"\n}' }
     case 'transform':
       return { fields: [{ name: '', value: '' }] }
     case 'filter':
@@ -48,7 +48,14 @@ function makeNode(graph: FlowGraph, type: StepType, agentId?: string): { node: F
   // Containers are born with one agent body step so they are runnable.
   if (type === 'loop' || type === 'parallel') {
     const bodyId = `${id}b1`
-    const body = { id: bodyId, type: 'agent', data: { agentId: agentId ?? '', input: type === 'loop' ? '{{item}}' : '{{trigger.input}}' } } as FlowNode
+    const body = {
+      id: bodyId,
+      type: 'agent',
+      data: {
+        agentId: agentId ?? '',
+        input: type === 'loop' ? 'Process this item:\n{{item}}' : 'Use this flow input:\n{{trigger.input}}',
+      },
+    } as FlowNode
     return { node: { id, type, data: defaultData(type, { bodyId }) } as FlowNode, extraNodes: [body] }
   }
   return { node: { id, type, data: defaultData(type, { agentId }) } as FlowNode, extraNodes: [] }
@@ -111,7 +118,14 @@ export function updateNode(graph: FlowGraph, updated: FlowNode): FlowGraph {
 export function changeNodeType(graph: FlowGraph, id: string, type: StepType): FlowGraph {
   if (type === 'loop' || type === 'parallel') {
     const bodyId = newNodeId(graph, 'b')
-    const bodyNode = { id: bodyId, type: 'agent', data: { agentId: '', input: type === 'loop' ? '{{item}}' : '{{trigger.input}}' } } as FlowNode
+    const bodyNode = {
+      id: bodyId,
+      type: 'agent',
+      data: {
+        agentId: '',
+        input: type === 'loop' ? 'Process this item:\n{{item}}' : 'Use this flow input:\n{{trigger.input}}',
+      },
+    } as FlowNode
     const nodes = graph.nodes.map((node) => (node.id === id ? ({ id, type, data: defaultData(type, { bodyId }) } as FlowNode) : node))
     return { ...graph, nodes: [...nodes, bodyNode] }
   }
@@ -123,7 +137,11 @@ export function addContainerStep(graph: FlowGraph, containerId: string): { graph
   const bodyId = newNodeId(graph, 'b')
   const container = graph.nodes.find((n) => n.id === containerId)
   const isLoop = container?.type === 'loop'
-  const bodyNode = { id: bodyId, type: 'agent', data: { agentId: '', input: isLoop ? '{{item}}' : '{{trigger.input}}' } } as FlowNode
+  const bodyNode = {
+    id: bodyId,
+    type: 'agent',
+    data: { agentId: '', input: isLoop ? 'Process this item:\n{{item}}' : 'Use this flow input:\n{{trigger.input}}' },
+  } as FlowNode
   const nodes = graph.nodes.map((node) => {
     if (node.id !== containerId) return node
     if (node.type === 'loop') return { ...node, data: { ...node.data, body: [...node.data.body, bodyId] } }

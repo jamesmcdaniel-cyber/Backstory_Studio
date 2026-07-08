@@ -4,6 +4,7 @@ import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { flowGraphSchema, emptyGraph } from '@/lib/flows/graph'
 import { serializeFlow } from '@/lib/flows/serialize'
+import { normalizeFlowTrigger, preserveWebhookSecretHash, triggerFromGraph } from '@/lib/flows/trigger'
 
 // Strip undefined + narrow to plain JSON so Prisma's InputJsonValue accepts the
 // zod-inferred shapes (passthrough trigger / discriminated-union graph).
@@ -17,8 +18,8 @@ const flowSchema = z.object({
   description: z.string().default(''),
   status: z.enum(['DRAFT', 'ACTIVE', 'DISABLED']).default('DRAFT'),
   visibility: z.enum(['shared', 'private']).default('shared'),
-  trigger: triggerSchema.default({ type: 'manual' }),
-  graph: flowGraphSchema.default(emptyGraph()),
+  trigger: triggerSchema.optional(),
+  graph: flowGraphSchema.optional(),
 })
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
@@ -32,14 +33,16 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const data = flowSchema.parse(await request.json())
+  const graph = data.graph ?? emptyGraph()
+  const trigger = data.trigger ? normalizeFlowTrigger(data.trigger) : triggerFromGraph(graph)
   const flow = await prisma.flow.create({
     data: {
       name: data.name,
       description: data.description,
       status: data.status,
       visibility: data.visibility,
-      trigger: jsonValue(data.trigger),
-      graph: jsonValue(data.graph),
+      trigger: jsonValue(trigger),
+      graph: jsonValue(graph),
       organizationId: auth.organizationId,
       userId: auth.dbUser.id,
     },
@@ -53,6 +56,12 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
     where: { id: body.id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
   if (!existing) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  const nextTrigger =
+    body.trigger !== undefined
+      ? normalizeFlowTrigger(body.trigger)
+      : body.graph !== undefined
+        ? triggerFromGraph(body.graph, existing.trigger)
+        : undefined
   const flow = await prisma.flow.update({
     where: { id: body.id },
     data: {
@@ -62,14 +71,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       ...(body.visibility !== undefined && { visibility: body.visibility }),
       // Preserve the webhook secret hash across trigger edits — the client
       // never sees it, so a plain PUT would silently wipe it.
-      ...(body.trigger !== undefined && {
-        trigger: jsonValue({
-          ...body.trigger,
-          ...((existing.trigger as Record<string, unknown> | null)?.webhookSecretHash
-            ? { webhookSecretHash: (existing.trigger as Record<string, unknown>).webhookSecretHash }
-            : {}),
-        }),
-      }),
+      ...(nextTrigger !== undefined && { trigger: jsonValue(preserveWebhookSecretHash(nextTrigger, existing.trigger)) }),
       ...(body.graph !== undefined && { graph: jsonValue(body.graph) }),
     },
   })

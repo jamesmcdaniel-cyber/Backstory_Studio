@@ -4,7 +4,11 @@ import { withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { generateStructured } from '@/lib/llm/model-runner'
 import { flowGraphSchema, emptyGraph } from '@/lib/flows/graph'
+import { repairGeneratedFlowGraph, validationIssuesForModel } from '@/lib/flows/copilot'
+import { validateFlowGraph } from '@/lib/flows/validate'
 import { readAgentMetadata } from '@/lib/agents/metadata'
+import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
+import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 
 // JSON-schema the model must fill: a graph of nodes + edges. Kept loose here
 // (objects) and tightened by flowGraphSchema.parse afterwards.
@@ -18,35 +22,116 @@ const GRAPH_JSON_SCHEMA = {
   additionalProperties: false,
 }
 
+type ToolSummary = { name: string; description: string; inputSchema?: unknown }
+type ConnectionSummary = { id: string; name: string; tools: ToolSummary[] }
+
+async function loadToolCatalog(organizationId: string): Promise<ConnectionSummary[]> {
+  const connections = await prisma.mcpConnection.findMany({
+    where: { organizationId, isActive: true },
+    take: 12,
+  })
+  return Promise.all(
+    connections.map(async (conn) => {
+      try {
+        const fresh = await ensureFreshConnectionToken(conn)
+        const client = new McpClient(mcpConfigFromConnection(fresh))
+        const tools = await client.getServerTools(fresh.serverUrl)
+        return {
+          id: conn.id,
+          name: conn.name,
+          tools: tools.slice(0, 30).map((tool) => ({
+            name: tool.name,
+            description: tool.description ?? '',
+            inputSchema: tool.inputSchema ?? null,
+          })),
+        }
+      } catch {
+        return { id: conn.id, name: conn.name, tools: [] }
+      }
+    }),
+  )
+}
+
+function toolInputHint(schema: unknown): string {
+  if (!schema || typeof schema !== 'object') return ''
+  const shape = schema as { properties?: Record<string, { type?: string; description?: string }>; required?: string[] }
+  const props = Object.entries(shape.properties ?? {}).slice(0, 8)
+  if (!props.length) return ''
+  const required = new Set(shape.required ?? [])
+  return props.map(([name, prop]) => `${name}${required.has(name) ? '*' : ''}:${prop.type ?? 'any'}`).join(', ')
+}
+
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const { description } = z.object({ description: z.string().min(1) }).parse(await request.json())
-  const agents = await prisma.agentTask.findMany({
-    where: { organizationId: auth.organizationId, status: 'ACTIVE', ...agentVisibilityScope(auth.dbUser.id) },
-    select: { id: true, description: true, metadata: true },
-    take: 100,
-  })
+  const [agents, toolCatalog] = await Promise.all([
+    prisma.agentTask.findMany({
+      where: { organizationId: auth.organizationId, status: 'ACTIVE', ...agentVisibilityScope(auth.dbUser.id) },
+      select: { id: true, description: true, metadata: true },
+      take: 100,
+    }),
+    loadToolCatalog(auth.organizationId),
+  ])
   const roster = agents
     .map((agent) => ({ id: agent.id, name: readAgentMetadata(agent.metadata).title || agent.description }))
     .filter((entry) => entry.name)
+  const tools = toolCatalog.flatMap((connection) =>
+    connection.tools.map((tool) => ({
+      connectionId: connection.id,
+      connectionName: connection.name,
+      name: tool.name,
+      description: tool.description,
+      inputHint: toolInputHint(tool.inputSchema),
+    })),
+  )
 
   const system =
-    'You design agent pipelines as a JSON graph. Nodes: trigger (exactly one, id "trigger"); agent ' +
-    '(data.agentId MUST be an id from the roster; data.input may reference {{trigger.input}}, {{step.<nodeId>.output}}, {{item}}); ' +
-    'condition (data: left, op in [eq,neq,gt,gte,lt,lte,contains,matches], right); loop (data: over, concurrency, body=[nodeIds]); ' +
-    'parallel (data: branches=[[nodeIds]]). Edges connect node ids; a condition edge has branch "true"/"false". ' +
-    'Only use agents from the roster. Return ONLY the graph object.'
-  const user = `Roster:\n${roster.map((entry) => `- ${entry.name} (id: ${entry.id})`).join('\n')}\n\nBuild a flow that: ${description}`
+    'You design runnable workflow graphs for Backstory Studio. Return ONLY JSON matching the graph schema. ' +
+    'Always include one trigger node with id "trigger". Prefer deterministic tool nodes for concrete integration actions and agent nodes for reasoning/writing decisions. ' +
+    'Allowed node types: agent, tool, http, transform, filter, condition, switch, loop, parallel, stop. ' +
+    'If the flow expects named input fields, put them on the trigger as data.trigger.inputFields: [{name,type,description}]. ' +
+    'Agent data: {agentId, label, input}; agentId MUST be from the agent roster. ' +
+    'Tool data: {connectionId, toolName, label, args}; connectionId/toolName MUST be from available tools and args MUST be a JSON object string. ' +
+    'Use data references only when needed: {{trigger.input}}, {{step.<nodeId>.output}}, {{step.<nodeId>.output.field}}, {{item}}, {{item.field}}, {{loop.index}}. ' +
+    'For loops, data.over should point at a list and data.body should contain nested node ids. For condition/filter, use data.clauses with left/op/right. ' +
+    'Edges connect node ids; condition edges use branch "true"/"false"; switch edges use case ids or "default".'
+  const user = [
+    `Build a flow that: ${description}`,
+    '',
+    `Agents:\n${roster.map((entry) => `- ${entry.name} (id: ${entry.id})`).join('\n') || '- None available'}`,
+    '',
+    `Tools:\n${tools.map((tool) => `- ${tool.connectionName}: ${tool.name} (connectionId: ${tool.connectionId})${tool.inputHint ? ` args: ${tool.inputHint}` : ''}${tool.description ? ` — ${tool.description}` : ''}`).join('\n') || '- None available'}`,
+  ].join('\n')
 
   try {
-    const raw = await generateStructured({ system, user, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph', maxTokens: 2000 })
-    const candidate = flowGraphSchema.parse(JSON.parse(raw))
-    // Drop agent nodes that reference an unknown agent id, then prune dangling edges.
-    const ids = new Set(roster.map((entry) => entry.id))
-    const nodes = candidate.nodes.filter((node) => node.type !== 'agent' || ids.has(node.data.agentId))
-    const keep = new Set(nodes.map((node) => node.id))
-    const edges = candidate.edges.filter((edge) => keep.has(edge.source) && keep.has(edge.target))
-    return { success: true, graph: { nodes, edges } }
-  } catch {
-    return { success: true, graph: emptyGraph() }
+    const validationContext = {
+      agents: roster.map((agent) => ({ id: agent.id, title: agent.name })),
+      toolCatalog,
+    }
+    const raw = await generateStructured({ system, user, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph', maxTokens: 3500 })
+    let graph = repairGeneratedFlowGraph(flowGraphSchema.parse(JSON.parse(raw)), { agents: roster, toolCatalog })
+    let validation = validateFlowGraph(graph, { ...validationContext, requireRunnable: graph.nodes.length > 1 })
+
+    if (!validation.ok) {
+      const repairUser = [
+        user,
+        '',
+        'The graph below did not pass validation. Return a corrected full graph object that fixes every error while preserving the user request.',
+        '',
+        `Validation errors:\n${validationIssuesForModel(validation)}`,
+        '',
+        `Broken graph:\n${JSON.stringify(graph)}`,
+      ].join('\n')
+      const repairedRaw = await generateStructured({ system, user: repairUser, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph_repair', maxTokens: 3500 })
+      graph = repairGeneratedFlowGraph(flowGraphSchema.parse(JSON.parse(repairedRaw)), { agents: roster, toolCatalog })
+      validation = validateFlowGraph(graph, { ...validationContext, requireRunnable: graph.nodes.length > 1 })
+    }
+
+    return { success: true, graph, validation }
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Could not generate a runnable flow.',
+      graph: emptyGraph(),
+    }
   }
 })

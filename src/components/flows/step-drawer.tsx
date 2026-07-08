@@ -38,6 +38,7 @@ type TriggerData = {
   type?: 'manual' | 'schedule' | 'webhook'
   schedule?: { type?: string; time?: string; cron?: string; timezone?: string; runAt?: string; isActive?: boolean }
   input?: string
+  inputFields?: OutputField[]
 }
 
 const fieldClass =
@@ -220,17 +221,18 @@ export function StepDrawer({
               {agents.length === 0 && <p className="mt-1.5 text-xs text-amber-600">No agents yet — create one first.</p>}
             </div>
             <div>
-              <label className={labelClass}>Input</label>
+              <label className={labelClass}>Message to agent</label>
               <textarea
                 rows={6}
                 className={areaClass}
                 value={node.data.input ?? ''}
-                placeholder="{{trigger.input}}"
+                placeholder="Tell the agent what to do. Add flow data from the picker below when needed."
                 onFocus={focusField('agent.input')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, input: e.target.value } })}
               />
-              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
-              <DataTree fields={dataFields} onInsert={insertToken} />
+              <div className="mt-2">
+                <DataTree fields={dataFields} onInsert={insertToken} />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -298,7 +300,7 @@ export function StepDrawer({
                   <input
                     className={`${smallField} w-full`}
                     value={clause.left}
-                    placeholder="{{step.n1.output.score}}"
+                    placeholder="Choose data from below"
                     onFocus={focusField(`cond.${i}.left`)}
                     onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))}
                   />
@@ -334,7 +336,6 @@ export function StepDrawer({
               <Plus className="h-3.5 w-3.5" /> Add condition
             </button>
             <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
               <DataTree fields={dataFields} onInsert={insertToken} />
             </div>
           </div>
@@ -343,12 +344,18 @@ export function StepDrawer({
         {node.type === 'loop' && (
           <div className="space-y-3">
             <div>
-              <label className={labelClass}>Over (a list)</label>
-              <input className={fieldClass} value={node.data.over} placeholder="{{step.n1.output}}" onFocus={focusField('loop.over')} onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })} />
+              <label className={labelClass}>Items to process</label>
+              <input
+                className={fieldClass}
+                value={node.data.over}
+                placeholder="Choose a list from the available data below"
+                onFocus={focusField('loop.over')}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })}
+              />
               <div className="mt-2">
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">Runs the nested steps once per item. Click an indented card to edit it.</p>
+              <p className="mt-1.5 text-xs text-muted-foreground">Accepts a JSON list, a newline list, or a comma-separated list. Nested steps run once for each item.</p>
             </div>
             <div>
               <label className={labelClass}>At a time</label>
@@ -481,12 +488,13 @@ export function StepDrawer({
                 rows={4}
                 className={`${areaClass} font-mono text-xs`}
                 value={node.data.body ?? ''}
-                placeholder={'{"text": "{{step.n1.output}}"}'}
+                placeholder={'{"text": "Use a value from Available data"}'}
                 onFocus={focusField('http.body')}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, body: e.target.value || undefined } })}
               />
-              <p className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
-              <DataTree fields={dataFields} onInsert={insertToken} />
+              <div className="mt-2">
+                <DataTree fields={dataFields} onInsert={insertToken} />
+              </div>
             </div>
             <div>
               <label className={labelClass}>On error</label>
@@ -505,7 +513,7 @@ export function StepDrawer({
 
         {node.type === 'transform' && (
           <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">Build an object from templated fields. Later steps map its output like any step.</p>
+            <p className="text-xs text-muted-foreground">Create named fields for later steps to use.</p>
             {node.data.fields.map((field, i) => (
               <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
                 <div className="flex gap-1.5">
@@ -522,7 +530,7 @@ export function StepDrawer({
                 <input
                   className={`${smallField} w-full`}
                   value={field.value}
-                  placeholder="value or {{step.n1.output.field}}"
+                  placeholder="Value for this field"
                   onFocus={focusField(`xf.${i}`)}
                   onChange={(e) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, value: e.target.value } : f)) } })}
                 />
@@ -532,7 +540,6 @@ export function StepDrawer({
               <Plus className="h-3.5 w-3.5" /> Add field
             </button>
             <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p>
               <DataTree fields={dataFields} onInsert={insertToken} />
             </div>
           </div>
@@ -550,7 +557,7 @@ export function StepDrawer({
               const update = (next: ConditionClause[]) => onChange({ ...node, data: { ...node.data, clauses: next } })
               return (
                 <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
-                  <input className={`${smallField} w-full`} value={clause.left} placeholder="{{item.score}}" onFocus={focusField(`filt.${i}.left`)} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))} />
+                  <input className={`${smallField} w-full`} value={clause.left} placeholder="Choose data from below" onFocus={focusField(`filt.${i}.left`)} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))} />
                   <div className="flex gap-1.5">
                     <select className={smallField} value={clause.op} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}>
                       {CONDITION_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
@@ -566,7 +573,7 @@ export function StepDrawer({
             <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, clauses: [...clausesOf(node.data), { left: '', op: 'contains', right: '' }] } })} className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
               <Plus className="h-3.5 w-3.5" /> Add condition
             </button>
-            <div><p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p><DataTree fields={dataFields} onInsert={insertToken} /></div>
+            <div><DataTree fields={dataFields} onInsert={insertToken} /></div>
           </div>
         )}
 
@@ -581,7 +588,7 @@ export function StepDrawer({
                     <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, cases: node.data.cases.filter((_, j) => j !== i) } })} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove case"><Trash2 className="h-4 w-4" /></button>
                   )}
                 </div>
-                <input className={`${smallField} w-full`} value={c.left} placeholder="{{step.n1.output.tier}}" onFocus={focusField(`sw.${i}.left`)} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, left: e.target.value } : x)) } })} />
+                <input className={`${smallField} w-full`} value={c.left} placeholder="Choose data from below" onFocus={focusField(`sw.${i}.left`)} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, left: e.target.value } : x)) } })} />
                 <div className="flex gap-1.5">
                   <select className={smallField} value={c.op} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, op: e.target.value as ConditionOp } : x)) } })}>
                     {CONDITION_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
@@ -593,7 +600,7 @@ export function StepDrawer({
             <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, cases: [...node.data.cases, { id: `case${node.data.cases.length + 1}-${Math.random().toString(36).slice(2, 6)}`, left: '', op: 'contains', right: '' }] } })} className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
               <Plus className="h-3.5 w-3.5" /> Add case
             </button>
-            <div><p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data</p><DataTree fields={dataFields} onInsert={insertToken} /></div>
+            <div><DataTree fields={dataFields} onInsert={insertToken} /></div>
           </div>
         )}
 
@@ -657,6 +664,51 @@ function OutputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onCha
   )
 }
 
+/** Declare the payload fields a manual/scheduled/webhook trigger expects. */
+function InputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onChange: (fields: OutputField[]) => void }) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/30 p-3">
+      <label className={labelClass}>Expected input fields</label>
+      <p className="-mt-1 mb-2 text-[11px] text-muted-foreground">
+        Name the values this flow expects. Downstream steps can pick them as Run input fields instead of typing template paths.
+      </p>
+      <div className="space-y-2">
+        {fields.map((field, i) => (
+          <div key={i} className="space-y-1.5 rounded-lg border border-border bg-background p-2">
+            <div className="flex gap-1.5">
+              <input
+                className={`${smallField} min-w-0 flex-1`}
+                value={field.name}
+                placeholder="account"
+                onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, name: e.target.value } : f)))}
+              />
+              <select className={smallField} value={field.type} onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, type: e.target.value as OutputField['type'] } : f)))}>
+                {FIELD_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => onChange(fields.filter((_, j) => j !== i))} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove input field">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+            <input
+              className={`${smallField} w-full`}
+              value={field.description ?? ''}
+              placeholder="What should the user or webhook send here?"
+              onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, description: e.target.value || undefined } : f)))}
+            />
+          </div>
+        ))}
+      </div>
+      <button type="button" onClick={() => onChange([...fields, { name: '', type: 'string' }])} className="mt-2 flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
+        <Plus className="h-3.5 w-3.5" /> Add input field
+      </button>
+    </div>
+  )
+}
+
 /** The trigger node's editor: manual, a real schedule, or an inbound webhook. */
 function TriggerEditor({
   flowId,
@@ -671,9 +723,23 @@ function TriggerEditor({
   const [minting, setMinting] = useState(false)
   const type = trigger.type ?? 'manual'
   const schedule = trigger.schedule ?? { type: 'daily', time: '09:00', timezone: 'UTC', isActive: true }
+  const sampleWebhookBody = JSON.stringify({ input: { account: 'Acme', priority: 'high' } }, null, 2)
+  const webhookHeader = webhook?.secret ? `x-trigger-secret: ${webhook.secret}` : 'x-trigger-secret: <secret>'
+  const curlExample = webhook
+    ? `curl -X POST '${webhook.url}' \\\n  -H 'content-type: application/json' \\\n  -H '${webhookHeader}' \\\n  --data '${JSON.stringify({ input: { account: 'Acme', priority: 'high' } })}'`
+    : ''
 
   const setSchedule = (patch: Partial<NonNullable<TriggerData['schedule']>>) =>
     onChange({ ...trigger, type: 'schedule', schedule: { ...schedule, ...patch, isActive: true } })
+
+  const copyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      toast.success(`${label} copied.`)
+    } catch {
+      toast.error(`Could not copy ${label.toLowerCase()}.`)
+    }
+  }
 
   const mintWebhook = async (rotate: boolean) => {
     setMinting(true)
@@ -713,6 +779,11 @@ function TriggerEditor({
         </select>
       </div>
 
+      <InputFieldsEditor
+        fields={trigger.inputFields ?? []}
+        onChange={(inputFields) => onChange({ ...trigger, inputFields: inputFields.length ? inputFields : undefined })}
+      />
+
       {type === 'schedule' && (
         <div className="space-y-3">
           <div>
@@ -748,8 +819,8 @@ function TriggerEditor({
             <input className={fieldClass} value={schedule.timezone ?? 'UTC'} placeholder="America/Denver" onChange={(e) => setSchedule({ timezone: e.target.value })} />
           </div>
           <div>
-            <label className={labelClass}>Input for scheduled runs (optional)</label>
-            <textarea rows={2} className={fieldClass} value={trigger.input ?? ''} placeholder="Passed as {{trigger.input}} on each scheduled run" onChange={(e) => onChange({ ...trigger, input: e.target.value || undefined })} />
+            <label className={labelClass}>Run input for scheduled runs (optional)</label>
+            <textarea rows={2} className={fieldClass} value={trigger.input ?? ''} placeholder="Text or JSON passed to the flow each time it runs" onChange={(e) => onChange({ ...trigger, input: e.target.value || undefined })} />
           </div>
           <p className="text-xs text-muted-foreground">Scheduled runs execute the <strong>published</strong> version — publish the flow to arm the schedule.</p>
         </div>
@@ -766,17 +837,48 @@ function TriggerEditor({
             </Button>
           </div>
           {webhook && (
-            <div className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-2.5">
-              <p className="break-all font-mono text-[11px]">{webhook.url}</p>
-              {webhook.secret ? (
-                <p className="break-all font-mono text-[11px] text-amber-700 dark:text-amber-400">x-trigger-secret: {webhook.secret}</p>
-              ) : (
-                <p className="text-[11px] text-muted-foreground">A secret already exists — rotate to mint a new one.</p>
-              )}
+            <div className="space-y-3 rounded-lg border border-border bg-muted/40 p-2.5">
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Webhook URL</p>
+                  <button type="button" className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700" onClick={() => copyText(webhook.url, 'Webhook URL')}>
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                </div>
+                <p className="break-all rounded bg-background px-2 py-1.5 font-mono text-[11px]">{webhook.url}</p>
+              </div>
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Auth header</p>
+                  <button type="button" className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700" onClick={() => copyText(webhookHeader, 'Auth header')}>
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                </div>
+                <p className="break-all rounded bg-background px-2 py-1.5 font-mono text-[11px] text-amber-700 dark:text-amber-400">{webhookHeader}</p>
+                {!webhook.secret && <p className="mt-1 text-[11px] text-muted-foreground">A secret already exists. Rotate to mint and display a new one.</p>}
+              </div>
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Example JSON body</p>
+                  <button type="button" className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700" onClick={() => copyText(sampleWebhookBody, 'Example JSON body')}>
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                </div>
+                <pre className="max-h-32 overflow-auto rounded bg-background px-2 py-1.5 text-[11px]">{sampleWebhookBody}</pre>
+              </div>
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">cURL</p>
+                  <button type="button" className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700" onClick={() => copyText(curlExample, 'cURL example')}>
+                    <Copy className="h-3 w-3" /> Copy
+                  </button>
+                </div>
+                <pre className="max-h-36 overflow-auto rounded bg-background px-2 py-1.5 text-[11px]">{curlExample}</pre>
+              </div>
             </div>
           )}
           <p className="text-xs text-muted-foreground">
-            POST to the URL with the <code className="font-mono">x-trigger-secret</code> header; the JSON body (or its <code className="font-mono">input</code> field) becomes {'{{trigger.input}}'}. Runs the <strong>published</strong> version.
+            POST to the URL with the <code className="font-mono">x-trigger-secret</code> header; the JSON body, or its <code className="font-mono">input</code> field, becomes the flow input. Runs the <strong>published</strong> version.
           </p>
         </div>
       )}

@@ -3,13 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, Undo2, Redo2 } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, Undo2, Redo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { emptyGraph, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/lib/flows/graph'
 import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
 import { buildDataTree } from '@/lib/flows/datatree'
+import { parseFlowInput } from '@/lib/flows/input'
+import { validateFlowGraph } from '@/lib/flows/validate'
 import { FlowCanvas } from '@/components/flows/flow-canvas'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
@@ -36,6 +39,101 @@ function spineIds(graph: FlowGraph): string[] {
     current = next ? byId.get(next) : undefined
   }
   return ids
+}
+
+function parentLoop(graph: FlowGraph, nodeId: string | null): { loop: Extract<FlowNode, { type: 'loop' }>; index: number } | null {
+  if (!nodeId) return null
+  for (const node of graph.nodes) {
+    if (node.type !== 'loop') continue
+    const index = node.data.body.indexOf(nodeId)
+    if (index >= 0) return { loop: node, index }
+  }
+  return null
+}
+
+function parentParallelBranch(graph: FlowGraph, nodeId: string | null): { parallelId: string; branch: string[]; index: number } | null {
+  if (!nodeId) return null
+  for (const node of graph.nodes) {
+    if (node.type !== 'parallel') continue
+    for (const branch of node.data.branches) {
+      const index = branch.indexOf(nodeId)
+      if (index >= 0) return { parallelId: node.id, branch, index }
+    }
+  }
+  return null
+}
+
+function parseFlowValue(value: unknown) {
+  if (typeof value !== 'string') return value
+  const trimmed = value.trim()
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return value
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return value
+  }
+}
+
+function storedRunInput(input: unknown): unknown {
+  if (input && typeof input === 'object' && !Array.isArray(input) && Object.prototype.hasOwnProperty.call(input, 'prompt')) {
+    return (input as Record<string, unknown>).prompt
+  }
+  return input
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function triggerInputFields(graph: FlowGraph): OutputField[] {
+  const triggerNode = graph.nodes.find((node): node is Extract<FlowNode, { type: 'trigger' }> => node.type === 'trigger')
+  const trigger = triggerNode?.data.trigger
+  if (!isRecord(trigger) || !Array.isArray(trigger.inputFields)) return []
+  return trigger.inputFields.filter(isRecord).map((field) => ({
+    name: typeof field.name === 'string' ? field.name : '',
+    type: ['string', 'number', 'boolean', 'object', 'array', 'any'].includes(String(field.type)) ? field.type as OutputField['type'] : 'any',
+    description: typeof field.description === 'string' ? field.description : undefined,
+  }))
+}
+
+function previewLoopItems(value: unknown): unknown[] {
+  const parsed = parseFlowValue(value)
+  if (Array.isArray(parsed)) return parsed
+  if (parsed && typeof parsed === 'object') {
+    for (const key of ['items', 'records', 'results', 'data']) {
+      const candidate = (parsed as Record<string, unknown>)[key]
+      if (Array.isArray(candidate)) return candidate
+    }
+    return []
+  }
+  if (typeof parsed !== 'string') return []
+  const trimmed = parsed.trim()
+  if (!trimmed) return []
+  const lines = trimmed.split(/\r?\n/).map((part) => part.trim()).filter(Boolean)
+  if (lines.length > 1) return lines
+  const commaParts = trimmed.split(',').map((part) => part.trim()).filter(Boolean)
+  return commaParts.length > 1 ? commaParts : [trimmed]
+}
+
+function sampleLoopItem(loop: Extract<FlowNode, { type: 'loop' }>, lastOutputs: Record<string, unknown>, testInput: string): unknown {
+  const token = loop.data.over.trim().match(/^\{\{\s*([^{}]+?)\s*\}\}$/)?.[1]
+  let value: unknown = loop.data.over
+  if (token === 'trigger.input') {
+    value = testInput
+  } else if (token?.startsWith('step.')) {
+    const [, nodeId, outputKey, ...rest] = token.split('.')
+    if (outputKey === 'output') {
+      value = lastOutputs[nodeId]
+      for (const part of rest) {
+        if (value == null || typeof value !== 'object') {
+          value = undefined
+          break
+        }
+        value = (value as Record<string, unknown>)[part]
+      }
+    }
+  }
+  return previewLoopItems(value)[0]
 }
 
 export default function FlowBuilder() {
@@ -157,33 +255,42 @@ export default function FlowBuilder() {
   }, [undo, redo])
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
+  const inputFields = useMemo(() => triggerInputFields(graph), [graph])
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
-  const insideLoop = useMemo(
-    () => graph.nodes.some((n) => n.type === 'loop' && n.data.body.includes(selectedId ?? '')),
-    [graph, selectedId],
-  )
+  const loopContext = useMemo(() => parentLoop(graph, selectedId), [graph, selectedId])
+  const parallelContext = useMemo(() => parentParallelBranch(graph, selectedId), [graph, selectedId])
+  const insideLoop = Boolean(loopContext)
   const upstreamIds = useMemo(() => {
     const ids = spineIds(graph)
+    if (loopContext) {
+      const loopIdx = ids.indexOf(loopContext.loop.id)
+      return [
+        ...(loopIdx > 0 ? ids.slice(1, loopIdx) : []),
+        ...loopContext.loop.data.body.slice(0, loopContext.index),
+      ].filter((x) => x !== selectedId)
+    }
+    if (parallelContext) {
+      const parallelIdx = ids.indexOf(parallelContext.parallelId)
+      return [
+        ...(parallelIdx > 0 ? ids.slice(1, parallelIdx) : []),
+        ...parallelContext.branch.slice(0, parallelContext.index),
+      ].filter((x) => x !== selectedId)
+    }
     const idx = ids.indexOf(selectedId ?? '')
     return (idx > 0 ? ids.slice(1, idx) : ids.slice(1)).filter((x) => x !== selectedId)
-  }, [graph, selectedId])
+  }, [graph, selectedId, loopContext, parallelContext])
 
   // The datatree of mappable upstream data — declared output fields plus fields
   // inferred from the latest run's actual output.
   const dataFields = useMemo(() => {
     if (!selectedNode || selectedNode.type === 'trigger') return []
-    const tryParse = (value: unknown) => {
-      if (typeof value !== 'string') return value
-      const t = value.trim()
-      if (!t || (t[0] !== '{' && t[0] !== '[')) return value
-      try {
-        return JSON.parse(t)
-      } catch {
-        return value
-      }
-    }
     const lastOutputs: Record<string, unknown> = {}
-    for (const step of selectedRun?.steps ?? []) lastOutputs[step.nodeId] = tryParse(step.output)
+    for (const step of selectedRun?.steps ?? []) lastOutputs[step.nodeId] = parseFlowValue(step.output)
+    const triggerInput = testInput.trim() ? parseFlowInput(testInput) : storedRunInput(selectedRun?.input)
+    if (loopContext) {
+      const sampleInput = typeof triggerInput === 'string' ? triggerInput : triggerInput == null ? '' : JSON.stringify(triggerInput)
+      lastOutputs.__item = sampleLoopItem(loopContext.loop, lastOutputs, sampleInput)
+    }
     const upstream = upstreamIds.map((uid) => {
       const n = graph.nodes.find((x) => x.id === uid)
       const label =
@@ -200,8 +307,13 @@ export default function FlowBuilder() {
         n?.type === 'agent' || n?.type === 'tool' || n?.type === 'http' ? n.data.outputFields : undefined
       return { id: uid, label, outputFields }
     })
-    return buildDataTree({ upstream, insideLoop, lastOutputs })
-  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById])
+    return buildDataTree({ upstream, insideLoop, lastOutputs, triggerInput, inputFields })
+  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById, loopContext, testInput, inputFields])
+
+  const validation = useMemo(
+    () => validateFlowGraph(graph, { agents, toolCatalog }),
+    [graph, agents, toolCatalog],
+  )
 
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true)
@@ -227,6 +339,10 @@ export default function FlowBuilder() {
     async (revert = false) => {
       setPublishing(true)
       try {
+        if (!revert && !validation.ok) {
+          toast.error(validation.errors[0]?.message || 'Fix the flow before publishing.')
+          return
+        }
         if (!revert && !(await save())) return
         const response = await fetch(`/api/flows/${id}/publish`, {
           method: 'POST',
@@ -246,7 +362,7 @@ export default function FlowBuilder() {
         setPublishing(false)
       }
     },
-    [id, save, version],
+    [id, save, validation, version],
   )
 
   const pollRuns = useCallback(() => {
@@ -279,6 +395,11 @@ export default function FlowBuilder() {
   )
 
   const run = useCallback(async () => {
+    if (!validation.ok) {
+      toast.error(validation.errors[0]?.message || 'Fix the flow before running.')
+      setMode('build')
+      return
+    }
     setRunning(true)
     setMode('test')
     setShowRuns(true)
@@ -300,7 +421,7 @@ export default function FlowBuilder() {
     } finally {
       setRunning(false)
     }
-  }, [id, save, pollRuns, testInput])
+  }, [id, save, pollRuns, testInput, validation])
 
   if (loading) {
     return (
@@ -357,8 +478,8 @@ export default function FlowBuilder() {
         <input
           value={testInput}
           onChange={(e) => setTestInput(e.target.value)}
-          placeholder="Test input…"
-          title="Value passed to {{trigger.input}} on Run"
+          placeholder="Run input..."
+          title="Value passed to the flow when you click Run. Lists can be JSON or comma-separated."
           className="w-40 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:border-indigo-400"
         />
         <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
@@ -383,6 +504,27 @@ export default function FlowBuilder() {
           {running ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />} Run
         </Button>
       </div>
+
+      {(validation.errors.length > 0 || validation.warnings.length > 0) && (
+        <div className="border-b border-border bg-amber-50 px-4 py-2 text-amber-950">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs font-semibold">Flow checks</p>
+                {validation.errors.length > 0 && <Badge variant="risk">{validation.errors.length} error{validation.errors.length === 1 ? '' : 's'}</Badge>}
+                {validation.warnings.length > 0 && <Badge variant="warn">{validation.warnings.length} warning{validation.warnings.length === 1 ? '' : 's'}</Badge>}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-amber-900">
+                {[...validation.errors, ...validation.warnings].slice(0, 4).map((issue) => (
+                  <span key={`${issue.code}-${issue.nodeId ?? 'flow'}-${issue.message}`}>{issue.message}</span>
+                ))}
+                {validation.issues.length > 4 && <span>{validation.issues.length - 4} more checks need attention.</span>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Body: canvas + optional drawer + optional copilot */}
       <div className="flex min-h-0 flex-1">

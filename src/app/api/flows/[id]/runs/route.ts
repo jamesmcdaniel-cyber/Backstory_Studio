@@ -30,6 +30,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     status: run.status,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
+    input: run.input,
     output: run.output,
     error: run.error,
     steps: run.steps,

@@ -23,13 +23,29 @@ export function readPath(ctx: FlowContext, path: string): unknown {
   return cursor
 }
 
-/** Replace `{{path}}` tokens with values from the context. Objects → JSON; missing → ''. */
+/** Replace `{{path}}` tokens with values from the context. Objects -> JSON; missing -> ''. */
 export function resolveTemplate(template: string, ctx: FlowContext): string {
-  return template.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path: string) => {
+  return template.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, path: string) => {
     const value = readPath(ctx, path)
     if (value == null) return ''
     return typeof value === 'object' ? JSON.stringify(value) : String(value)
   })
+}
+
+/** Resolve templates inside structured values while preserving exact-token objects/arrays. */
+export function resolveTemplateValue(value: unknown, ctx: FlowContext): unknown {
+  if (typeof value === 'string') {
+    const exact = value.trim().match(/^\{\{\s*([^{}]+?)\s*\}\}$/)
+    if (exact) return readPath(ctx, exact[1]) ?? ''
+    return resolveTemplate(value, ctx)
+  }
+  if (Array.isArray(value)) return value.map((item) => resolveTemplateValue(item, ctx))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, resolveTemplateValue(item, ctx)]),
+    )
+  }
+  return value
 }
 
 /** A step's text output that parses as a JSON object/array is exposed structured. */

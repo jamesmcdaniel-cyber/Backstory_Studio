@@ -26,6 +26,19 @@ test('linear flow threads output between two agent steps', async () => {
   assert.equal(result.steps.filter((s) => s.status === 'succeeded').length, 2)
 })
 
+test('structured trigger input fields are addressable', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'Account {{trigger.input.account.name}} has {{trigger.input.items.0}}' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: node.input })
+  const result = await interpretFlow(graph, { account: { name: 'Acme' }, items: ['A'] }, { runAgent })
+  assert.equal(result.output, 'Account Acme has A')
+})
+
 test('condition routes to the true branch', async () => {
   const graph: FlowGraph = {
     nodes: [
@@ -147,6 +160,34 @@ test('loop exposes {{loop.index}}', async () => {
   assert.deepEqual(result.output, ['0:a', '1:b', '2:c'])
 })
 
+test('loop accepts comma-separated and newline-separated text input', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['e'] } },
+      { id: 'e', type: 'agent', data: { agentId: 'e', input: '{{item}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  assert.deepEqual((await interpretFlow(graph, 'Acme, Globex', { runAgent })).output, ['Acme', 'Globex'])
+  assert.deepEqual((await interpretFlow(graph, 'Acme\nGlobex', { runAgent })).output, ['Acme', 'Globex'])
+})
+
+test('loop accepts common object payload lists', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['e'] } },
+      { id: 'e', type: 'agent', data: { agentId: 'e', input: '{{item.name}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, JSON.stringify({ items: [{ name: 'Acme' }, { name: 'Globex' }] }), { runAgent })
+  assert.deepEqual(result.output, ['Acme', 'Globex'])
+})
+
 test('an error inside a loop item propagates and fails the flow', async () => {
   const graph: FlowGraph = {
     nodes: [
@@ -243,8 +284,29 @@ test('tool and http steps resolve templates and thread output', async () => {
   const runAgent: RunAgentFn = async () => ({ output: 'unused' })
   const result = await interpretFlow(graph, 'Acme', { runAgent, runAction })
   assert.equal(result.status, 'succeeded')
-  assert.equal(calls[0].args, '{"account":"Acme"}') // template resolved into tool args
+  assert.deepEqual(calls[0].args, { account: 'Acme' }) // template resolved into tool args
   assert.equal(result.output, 'sent:got 88') // http body saw the tool's structured output
+})
+
+test('tool args preserve object values from loop items', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['tool'] } },
+      { id: 'tool', type: 'tool', data: { connectionId: 'c1', toolName: 'send', args: '{"account": "{{item}}", "name": "{{item.name}}"}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push(node.config)
+    return { output: 'ok' }
+  }
+  const runAgent: RunAgentFn = async () => ({ output: 'unused' })
+  const input = JSON.stringify([{ name: 'Acme', score: 91 }])
+  const result = await interpretFlow(graph, input, { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(calls[0].args, { account: { name: 'Acme', score: 91 }, name: 'Acme' })
 })
 
 test('a failing tool step honors onError', async () => {

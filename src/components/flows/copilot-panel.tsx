@@ -20,10 +20,15 @@ export function CopilotPanel({ onGraph }: { onGraph: (graph: FlowGraph) => void 
         body: JSON.stringify({ description }),
       })
       const data = await response.json()
-      if (response.ok && data.graph) {
-        const steps = (data.graph.nodes || []).filter((n: { type: string }) => n.type === 'agent').length
+      if (response.ok && data.success && data.graph) {
+        const steps = (data.graph.nodes || []).filter((n: { type: string }) => n.type !== 'trigger').length
         onGraph(data.graph)
-        toast.success(steps ? `Drafted ${steps} step${steps === 1 ? '' : 's'} — review before running.` : 'No matching agents found for that description.')
+        const errors = data.validation?.errors?.length ?? 0
+        if (errors) {
+          toast.warning(`Drafted ${steps} step${steps === 1 ? '' : 's'}, but ${errors} check${errors === 1 ? '' : 's'} need attention.`)
+        } else {
+          toast.success(steps ? `Drafted ${steps} step${steps === 1 ? '' : 's'} — review before running.` : 'No matching steps found for that description.')
+        }
       } else {
         toast.error(data.error || 'Could not generate a flow.')
       }
@@ -40,7 +45,7 @@ export function CopilotPanel({ onGraph }: { onGraph: (graph: FlowGraph) => void 
       </div>
       <div className="flex flex-1 flex-col gap-3 p-4">
         <p className="text-xs text-muted-foreground">
-          Describe what the flow should do and I&apos;ll draft the steps from your agents. Editing them stays up to you.
+          Describe what the flow should do and I&apos;ll draft runnable steps from your agents and connected tools.
         </p>
         <textarea
           rows={5}

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { runFlowExecution } from '@/features/flows/execute-flow'
+import { parseFlowInput } from '@/lib/flows/input'
 
 // POST /api/flows/[id]/execute — run a flow manually. id is the path segment
 // before "execute".
@@ -16,12 +17,12 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   })
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
   const body = await request.json().catch(() => ({}))
-  const parsed = z.object({ input: z.string().optional(), flowRunId: z.string().optional(), reply: z.string().optional() }).parse(body)
+  const parsed = z.object({ input: z.unknown().optional(), flowRunId: z.string().optional(), reply: z.string().optional() }).parse(body)
   const run = await runFlowExecution({
     flowId: id,
     organizationId: auth.organizationId,
     userId: auth.dbUser.id,
-    input: parsed.input ?? '',
+    input: parseFlowInput(parsed.input),
     flowRunId: parsed.flowRunId,
     reply: parsed.reply,
   })

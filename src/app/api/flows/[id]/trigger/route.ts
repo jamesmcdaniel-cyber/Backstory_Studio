@@ -4,6 +4,8 @@ import { apiLogger } from '@/lib/logger'
 import { runFlowExecution } from '@/features/flows/execute-flow'
 import { hashToken, timingSafeEqualHex } from '@/lib/crypto/secrets'
 import { rateLimit } from '@/lib/ratelimit'
+import { flowInputFromWebhookBody } from '@/lib/flows/input'
+import { ApiError } from '@/lib/server/api-handler'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -29,6 +31,9 @@ export async function POST(request: NextRequest) {
     if (!flow || !hash || !timingSafeEqualHex(hashToken(provided), hash)) {
       return NextResponse.json({ success: false, error: 'Invalid trigger secret' }, { status: 401 })
     }
+    if (trigger.type !== 'webhook') {
+      return NextResponse.json({ success: false, error: 'This flow is not configured for webhook triggering.' }, { status: 409 })
+    }
     if (flow.publishedGraph == null) {
       return NextResponse.json({ success: false, error: 'Publish the flow before triggering it externally.' }, { status: 409 })
     }
@@ -39,8 +44,11 @@ export async function POST(request: NextRequest) {
       : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })
     if (!owner) return NextResponse.json({ success: false, error: 'No active user to attribute the run to' }, { status: 409 })
 
-    const body = await request.json().catch(() => ({}))
-    const input = typeof body?.input === 'string' ? body.input : JSON.stringify(body ?? {})
+    const contentType = request.headers.get('content-type') || ''
+    const body = contentType.toLowerCase().includes('application/json')
+      ? await request.json().catch(() => ({}))
+      : await request.text().catch(() => '')
+    const input = flowInputFromWebhookBody(body)
     const run = await runFlowExecution({
       flowId: flow.id,
       organizationId: flow.organizationId,
@@ -51,6 +59,9 @@ export async function POST(request: NextRequest) {
     })
     return NextResponse.json({ success: true, run })
   } catch (error) {
+    if (error instanceof ApiError) {
+      return NextResponse.json({ success: false, error: error.message, code: error.code }, { status: error.status })
+    }
     apiLogger.error('flow trigger failed', { error: error instanceof Error ? error.message : String(error) })
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 })
   }

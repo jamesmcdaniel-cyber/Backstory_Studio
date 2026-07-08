@@ -28,6 +28,42 @@ test('buildDataTree offers trigger, declared fields, and inferred fields', () =>
   assert.equal(n1?.children?.filter((c) => c.label === 'count').length, 1)
 })
 
+test('buildDataTree infers fields from trigger input samples', () => {
+  const tree = buildDataTree({
+    upstream: [],
+    triggerInput: { account: { name: 'Acme' }, items: ['A'] },
+  })
+  const trigger = tree.find((r) => r.token === '{{trigger.input}}')
+  assert.equal(trigger?.type, 'object')
+  assert.equal(trigger?.children?.find((field) => field.label === 'account')?.children?.[0]?.token, '{{trigger.input.account.name}}')
+  assert.equal(trigger?.children?.find((field) => field.label === 'items')?.children?.[0]?.token, '{{trigger.input.items.0}}')
+})
+
+test('buildDataTree exposes declared trigger input fields before a sample run', () => {
+  const tree = buildDataTree({
+    upstream: [],
+    inputFields: [
+      { name: 'account', type: 'string', description: 'Customer account name.' },
+      { name: 'priority', type: 'string' },
+    ],
+  })
+  const trigger = tree.find((r) => r.token === '{{trigger.input}}')
+  assert.equal(trigger?.children?.find((field) => field.label === 'account')?.token, '{{trigger.input.account}}')
+  assert.equal(trigger?.children?.find((field) => field.label === 'account')?.description, 'Customer account name.')
+  assert.equal(trigger?.children?.find((field) => field.label === 'priority')?.token, '{{trigger.input.priority}}')
+})
+
+test('buildDataTree does not duplicate declared trigger fields inferred from a sample', () => {
+  const tree = buildDataTree({
+    upstream: [],
+    inputFields: [{ name: 'account', type: 'string' }],
+    triggerInput: { account: 'Acme', region: 'EMEA' },
+  })
+  const trigger = tree.find((r) => r.token === '{{trigger.input}}')
+  assert.equal(trigger?.children?.filter((field) => field.label === 'account').length, 1)
+  assert.ok(trigger?.children?.some((field) => field.label === 'region'))
+})
+
 test('buildDataTree exposes {{item}}/{{loop.index}} inside a loop', () => {
   const tree = buildDataTree({ upstream: [], insideLoop: true, lastOutputs: { __item: { name: 'Acme' } } })
   const item = tree.find((r) => r.token === '{{item}}')

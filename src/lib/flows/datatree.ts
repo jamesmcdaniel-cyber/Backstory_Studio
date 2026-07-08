@@ -5,10 +5,12 @@ export type DataField = {
   label: string
   token: string
   type: string
+  description?: string
   children?: DataField[]
 }
 
 function typeOf(value: unknown): string {
+  if (value === undefined) return 'any'
   if (value === null) return 'null'
   if (Array.isArray(value)) return 'array'
   return typeof value
@@ -29,6 +31,7 @@ export function inferFields(value: unknown, basePath: string, depth = 0): DataFi
         label: '[0]',
         token: `{{${basePath}.0}}`,
         type: typeOf(sample),
+        description: 'First item in the list.',
         children: inferFields(sample, `${basePath}.0`, depth + 1),
       },
     ]
@@ -37,6 +40,7 @@ export function inferFields(value: unknown, basePath: string, depth = 0): DataFi
     label: key,
     token: `{{${basePath}.${key}}}`,
     type: typeOf(val),
+    description: `Field from ${basePath}.`,
     children: inferFields(val, `${basePath}.${key}`, depth + 1),
   }))
 }
@@ -46,6 +50,10 @@ export type DataTreeSource = {
   upstream: { id: string; label: string; outputFields?: OutputField[] }[]
   /** Include the trigger input root (default true). */
   trigger?: boolean
+  /** User-declared fields expected on trigger.input. */
+  inputFields?: OutputField[]
+  /** Sample trigger input from test input or the latest run, used to expose fields. */
+  triggerInput?: unknown
   /** Inside a loop body: expose {{item}} and {{loop.index}}. */
   insideLoop?: boolean
   /** Parsed last-run outputs keyed by node id — fields are inferred from them. */
@@ -55,17 +63,54 @@ export type DataTreeSource = {
 /** Build the datatree roots for the field picker. */
 export function buildDataTree(source: DataTreeSource): DataField[] {
   const roots: DataField[] = []
-  if (source.trigger !== false) roots.push({ label: 'Trigger input', token: '{{trigger.input}}', type: 'string' })
+  if (source.trigger !== false) {
+    const children: DataField[] = []
+    for (const field of source.inputFields ?? []) {
+      if (!field.name.trim()) continue
+      children.push({
+        label: field.name,
+        token: `{{trigger.input.${field.name}}}`,
+        type: field.type,
+        description: field.description || 'Expected field on the run input.',
+      })
+    }
+    for (const inferred of inferFields(source.triggerInput, 'trigger.input')) {
+      if (!children.some((child) => child.label === inferred.label)) children.push(inferred)
+    }
+    roots.push({
+      label: 'Run input',
+      token: '{{trigger.input}}',
+      type: typeOf(source.triggerInput) === 'any' ? 'string' : typeOf(source.triggerInput),
+      description: 'The text, JSON, or webhook payload passed when this flow starts.',
+      children,
+    })
+  }
   if (source.insideLoop) {
     const item = source.lastOutputs?.__item
-    roots.push({ label: 'item (current)', token: '{{item}}', type: typeOf(item), children: inferFields(item, 'item') })
-    roots.push({ label: 'loop.index', token: '{{loop.index}}', type: 'number' })
+    roots.push({
+      label: 'Current item',
+      token: '{{item}}',
+      type: typeOf(item),
+      description: 'The single item this For each step is processing right now.',
+      children: inferFields(item, 'item'),
+    })
+    roots.push({
+      label: 'Item number',
+      token: '{{loop.index}}',
+      type: 'number',
+      description: 'Zero-based position of the current item in the list.',
+    })
   }
   for (const step of source.upstream) {
     const basePath = `step.${step.id}.output`
     const children: DataField[] = []
     for (const field of step.outputFields ?? []) {
-      children.push({ label: field.name, token: `{{${basePath}.${field.name}}}`, type: field.type })
+      children.push({
+        label: field.name,
+        token: `{{${basePath}.${field.name}}}`,
+        type: field.type,
+        description: `Declared output field from ${step.label}.`,
+      })
     }
     const observed = source.lastOutputs?.[step.id]
     if (observed && typeof observed === 'object') {
@@ -73,7 +118,13 @@ export function buildDataTree(source: DataTreeSource): DataField[] {
         if (!children.some((c) => c.label === inferred.label)) children.push(inferred)
       }
     }
-    roots.push({ label: step.label, token: `{{${basePath}}}`, type: 'object', children: children.length ? children : undefined })
+    roots.push({
+      label: step.label,
+      token: `{{${basePath}}}`,
+      type: 'object',
+      description: `Full output from ${step.label}.`,
+      children: children.length ? children : undefined,
+    })
   }
   return roots
 }

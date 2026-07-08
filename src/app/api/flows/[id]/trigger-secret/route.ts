@@ -24,15 +24,21 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const base = {
     success: true as const,
     url: `${baseUrl}/api/flows/${flow.id}/trigger`,
-    usage: 'POST with header "x-trigger-secret: <secret>" and optional JSON body {"input": "..."}',
+    usage: 'POST with header "x-trigger-secret: <secret>". Send {"input": ...} or any JSON body as the flow input.',
   }
 
-  if (hasSecret && !rotate) return { ...base, hasSecret: true, secret: null }
+  if (hasSecret && !rotate) {
+    await prisma.flow.update({
+      where: { id: flow.id },
+      data: { trigger: { ...trigger, type: 'webhook' } },
+    }).catch(() => undefined)
+    return { ...base, hasSecret: true, secret: null }
+  }
 
   const secret = randomBytes(24).toString('base64url')
   await prisma.flow.update({
     where: { id: flow.id },
-    data: { trigger: { ...trigger, webhookSecretHash: hashToken(secret) } },
+    data: { trigger: { ...trigger, type: 'webhook', webhookSecretHash: hashToken(secret) } },
   })
   return { ...base, hasSecret: true, secret }
 })

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Code2, ListTree } from 'lucide-react'
 import { DataTree } from '@/components/flows/data-tree'
 import type { DataField } from '@/lib/flows/datatree'
@@ -87,12 +87,34 @@ export function ToolArgsEditor({
   const [raw, setRaw] = useState(fields.length === 0)
   // Which arg the datatree inserts into (append at end of that field's value).
   const [activeArg, setActiveArg] = useState<string | null>(fields[0]?.name ?? null)
+  const activeElRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  const rawElRef = useRef<HTMLTextAreaElement | null>(null)
 
   const values = parseArgs(args)
   const setValue = (name: string, value: string) => onChange(serializeArgs({ ...values, [name]: value }, fields))
+  const insertAtCaret = (value: string, token: string, el: HTMLInputElement | HTMLTextAreaElement | null) => {
+    if (!el || typeof el.selectionStart !== 'number') return value + token
+    const start = el.selectionStart
+    const end = el.selectionEnd ?? start
+    const next = value.slice(0, start) + token + value.slice(end)
+    const pos = start + token.length
+    requestAnimationFrame(() => {
+      try {
+        el.focus()
+        el.setSelectionRange(pos, pos)
+      } catch {
+        /* element unmounted */
+      }
+    })
+    return next
+  }
   const insert = (token: string) => {
-    if (raw || !activeArg) return
-    setValue(activeArg, `${values[activeArg] ?? ''}${token}`)
+    if (raw) {
+      onChange(insertAtCaret(args ?? '{}', token, rawElRef.current))
+      return
+    }
+    if (!activeArg) return
+    setValue(activeArg, insertAtCaret(values[activeArg] ?? '', token, activeElRef.current))
   }
 
   return (
@@ -112,13 +134,20 @@ export function ToolArgsEditor({
       </div>
 
       {raw || fields.length === 0 ? (
-        <textarea
-          rows={5}
-          className={`${fieldClass} min-h-[120px] resize-y font-mono text-xs`}
-          value={args ?? '{}'}
-          placeholder={'{"query": "{{trigger.input}}"}'}
-          onChange={(e) => onChange(e.target.value)}
-        />
+        <div className="space-y-2">
+          <textarea
+            ref={rawElRef}
+            rows={5}
+            className={`${fieldClass} min-h-[120px] resize-y font-mono text-xs`}
+            value={args ?? '{}'}
+            placeholder={'{"query": "Use a value from Available data"}'}
+            onFocus={() => {
+              activeElRef.current = rawElRef.current
+            }}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          <DataTree fields={dataFields} onInsert={insert} />
+        </div>
       ) : (
         <div className="space-y-3">
           {fields.map((field) => (
@@ -129,7 +158,15 @@ export function ToolArgsEditor({
                 <span className="text-[10px] uppercase text-muted-foreground">{field.type}</span>
               </label>
               {field.enumValues ? (
-                <select className={fieldClass} value={values[field.name] ?? ''} onFocus={() => setActiveArg(field.name)} onChange={(e) => setValue(field.name, e.target.value)}>
+                <select
+                  className={fieldClass}
+                  value={values[field.name] ?? ''}
+                  onFocus={() => {
+                    setActiveArg(field.name)
+                    activeElRef.current = null
+                  }}
+                  onChange={(e) => setValue(field.name, e.target.value)}
+                >
                   <option value="">—</option>
                   {field.enumValues.map((v) => (
                     <option key={v} value={v}>
@@ -138,7 +175,15 @@ export function ToolArgsEditor({
                   ))}
                 </select>
               ) : field.type === 'boolean' ? (
-                <select className={fieldClass} value={values[field.name] ?? ''} onFocus={() => setActiveArg(field.name)} onChange={(e) => setValue(field.name, e.target.value)}>
+                <select
+                  className={fieldClass}
+                  value={values[field.name] ?? ''}
+                  onFocus={() => {
+                    setActiveArg(field.name)
+                    activeElRef.current = null
+                  }}
+                  onChange={(e) => setValue(field.name, e.target.value)}
+                >
                   <option value="">—</option>
                   <option value="true">true</option>
                   <option value="false">false</option>
@@ -147,8 +192,11 @@ export function ToolArgsEditor({
                 <input
                   className={fieldClass}
                   value={values[field.name] ?? ''}
-                  placeholder={field.description || `{{trigger.input}}`}
-                  onFocus={() => setActiveArg(field.name)}
+                  placeholder={field.description || 'Add a value or choose one below'}
+                  onFocus={(e) => {
+                    setActiveArg(field.name)
+                    activeElRef.current = e.currentTarget
+                  }}
                   onChange={(e) => setValue(field.name, e.target.value)}
                 />
               )}
@@ -156,7 +204,6 @@ export function ToolArgsEditor({
             </div>
           ))}
           <div>
-            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Insert data into “{activeArg ?? '…'}”</p>
             <DataTree fields={dataFields} onInsert={insert} />
           </div>
         </div>

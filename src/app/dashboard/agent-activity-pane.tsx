@@ -531,7 +531,7 @@ export function AgentActivityPane({
         <EmptyState
           icon={Play}
           title="No runs yet"
-          description={`Run ${agent.title} to see its activity here.`}
+          description="Create agent and logs will show here"
         />
       </div>
     )

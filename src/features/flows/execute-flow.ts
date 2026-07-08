@@ -1,16 +1,18 @@
 import { prisma } from '@/lib/prisma'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { flowGraphSchema } from '@/lib/flows/graph'
+import { validateFlowGraph, validationErrorMessage } from '@/lib/flows/validate'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 import { assertPublicUrl } from '@/lib/net/ssrf'
+import { ApiError } from '@/lib/server/api-handler'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 
 export type FlowExecutionJob = {
   flowId: string
   organizationId: string
   userId: string
-  input?: string
+  input?: unknown
   flowRunId?: string
   // Resume a paused run: the user's reply to the ask-user step that paused it.
   reply?: string
@@ -42,6 +44,25 @@ export async function runFlowExecution(
   const source = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
   const graph = flowGraphSchema.parse(source)
   const input = job.input ?? ''
+  const [agents, connections] = await Promise.all([
+    prisma.agentTask.findMany({
+      where: { organizationId: job.organizationId, status: 'ACTIVE' },
+      select: { id: true, description: true },
+      take: 500,
+    }),
+    prisma.mcpConnection.findMany({
+      where: { organizationId: job.organizationId, isActive: true },
+      select: { id: true, name: true },
+      take: 100,
+    }),
+  ])
+  const validation = validateFlowGraph(graph, {
+    agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
+    toolCatalog: connections.map((connection) => ({ id: connection.id, name: connection.name })),
+  })
+  if (!validation.ok) {
+    throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
+  }
 
   const resuming = Boolean(job.flowRunId && job.reply !== undefined)
   const run = job.flowRunId
@@ -177,11 +198,15 @@ export async function runFlowExecution(
         const fresh = await ensureFreshConnectionToken(conn)
         const client = new McpClient(mcpConfigFromConnection(fresh))
         let args: Record<string, unknown> = {}
-        try {
-          const parsed = JSON.parse(String(node.config.args || '{}'))
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed
-        } catch {
-          throw new Error('Tool arguments are not valid JSON after template substitution.')
+        if (node.config.args && typeof node.config.args === 'object' && !Array.isArray(node.config.args)) {
+          args = node.config.args as Record<string, unknown>
+        } else {
+          try {
+            const parsed = JSON.parse(String(node.config.args || '{}'))
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed
+          } catch {
+            throw new Error('Tool arguments are not valid JSON after template substitution.')
+          }
         }
         const result = await client.executeTool(fresh.serverUrl, String(node.config.toolName), args)
         const output = typeof result === 'string' ? result : JSON.stringify(result ?? null)

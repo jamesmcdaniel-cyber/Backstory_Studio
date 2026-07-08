@@ -1,5 +1,5 @@
 import type { FlowGraph, FlowNode, FlowEdge } from '@/lib/flows/graph'
-import { resolveTemplate, asStructured, evalCondition, evalClause, type FlowContext } from './context'
+import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from './context'
 
 export type StepOutcome = {
   nodeId: string
@@ -58,6 +58,27 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: nu
   })
   await Promise.all(workers)
   return results
+}
+
+/** Convert common run-input shapes into a loopable list. */
+function loopItems(value: unknown): unknown[] {
+  const structured = asStructured(value)
+  if (Array.isArray(structured)) return structured
+  if (structured && typeof structured === 'object') {
+    for (const key of ['items', 'records', 'results', 'data']) {
+      const candidate = (structured as Record<string, unknown>)[key]
+      if (Array.isArray(candidate)) return candidate
+    }
+    return []
+  }
+  if (typeof structured !== 'string') return []
+  const trimmed = structured.trim()
+  if (!trimmed) return []
+  const lines = trimmed.split(/\r?\n/).map((part) => part.trim()).filter(Boolean)
+  if (lines.length > 1) return lines
+  const commaParts = trimmed.split(',').map((part) => part.trim()).filter(Boolean)
+  if (commaParts.length > 1) return commaParts
+  return [trimmed]
 }
 
 /**
@@ -161,12 +182,20 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
     if (node.type === 'tool' || node.type === 'http') {
       // Resolve every template in the node config, then delegate to runAction.
+      let resolvedArgs: unknown = resolveTemplate(node.type === 'tool' ? node.data.args ?? '{}' : '{}', ctx)
+      if (node.type === 'tool') {
+        try {
+          resolvedArgs = resolveTemplateValue(JSON.parse(node.data.args ?? '{}'), ctx)
+        } catch {
+          resolvedArgs = resolveTemplate(node.data.args ?? '{}', ctx)
+        }
+      }
       const config: Record<string, unknown> =
         node.type === 'tool'
           ? {
               connectionId: node.data.connectionId,
               toolName: node.data.toolName,
-              args: resolveTemplate(node.data.args ?? '{}', ctx),
+              args: resolvedArgs,
             }
           : {
               method: node.data.method,
@@ -207,8 +236,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     if (node.type === 'loop') {
-      const list = asStructured(resolveTemplate(node.data.over, ctx))
-      const items = Array.isArray(list) ? list.slice(0, maxLoop) : []
+      const items = loopItems(resolveTemplate(node.data.over, ctx)).slice(0, maxLoop)
       const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item, index) => {
         const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length } }
         return execBody(node.data.body, itemCtx)

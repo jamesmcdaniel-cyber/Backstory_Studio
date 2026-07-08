@@ -7,7 +7,7 @@ export type ConditionOp = (typeof CONDITION_OPS)[number]
 /** Field types a step's output schema can declare (for the datatree picker). */
 export const FIELD_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'any'] as const
 export type FieldType = (typeof FIELD_TYPES)[number]
-export const outputFieldSchema = z.object({ name: z.string(), type: z.enum(FIELD_TYPES).default('any') })
+export const outputFieldSchema = z.object({ name: z.string(), type: z.enum(FIELD_TYPES).default('any'), description: z.string().optional() })
 export type OutputField = z.infer<typeof outputFieldSchema>
 
 const triggerNode = z.object({

@@ -21,6 +21,7 @@ export type FlowRunDetail = {
   status: string
   startedAt?: string
   finishedAt?: string | null
+  input?: unknown
   output?: unknown
   error?: string | null
   steps: RunStep[]

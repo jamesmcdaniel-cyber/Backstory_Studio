@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readPath, resolveTemplate, asStructured, evalCondition, evalClause, type FlowContext } from '../context'
+import { readPath, resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from '../context'
 
 const ctx: FlowContext = {
   trigger: { input: 'Acme, Globex' },
@@ -19,6 +19,26 @@ test('resolveTemplate substitutes tokens; missing → empty; objects → JSON', 
   assert.equal(resolveTemplate('Score {{item}}', ctx), 'Score Acme')
   assert.equal(resolveTemplate('{{step.n3.output}}', ctx), '{"score":91}')
   assert.equal(resolveTemplate('x{{step.missing.output}}y', ctx), 'xy')
+})
+
+test('resolveTemplate supports field names with spaces and dashes', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { n1: { output: { 'account-name': 'Acme', 'in segment': true } } },
+  }
+  assert.equal(resolveTemplate('{{step.n1.output.account-name}}', c), 'Acme')
+  assert.equal(resolveTemplate('{{step.n1.output.in segment}}', c), 'true')
+})
+
+test('resolveTemplateValue preserves exact-token structured values', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { n1: { output: { name: 'Acme', score: 91 } } },
+  }
+  assert.deepEqual(resolveTemplateValue({ account: '{{step.n1.output}}', label: 'Account {{step.n1.output.name}}' }, c), {
+    account: { name: 'Acme', score: 91 },
+    label: 'Account Acme',
+  })
 })
 
 test('asStructured parses JSON strings, passes through non-JSON', () => {

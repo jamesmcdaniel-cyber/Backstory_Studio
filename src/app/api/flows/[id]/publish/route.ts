@@ -3,7 +3,14 @@ import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { serializeFlow } from '@/lib/flows/serialize'
+import { flowGraphSchema } from '@/lib/flows/graph'
+import { validateFlowGraph, validationErrorMessage } from '@/lib/flows/validate'
+import { preserveWebhookSecretHash, triggerFromGraph } from '@/lib/flows/trigger'
 import { recordAudit } from '@/lib/audit'
+
+function jsonValue(value: unknown) {
+  return JSON.parse(JSON.stringify(value ?? null))
+}
 
 // POST /api/flows/[id]/publish — publish the draft (graph → publishedGraph,
 // version++), or revert the draft to the published version ({ revert: true }).
@@ -23,9 +30,34 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     return { success: true, flow: serializeFlow(flow) }
   }
 
+  const graph = flowGraphSchema.parse(existing.graph)
+  const [agents, connections] = await Promise.all([
+    prisma.agentTask.findMany({
+      where: { organizationId: auth.organizationId, status: 'ACTIVE', ...agentVisibilityScope(auth.dbUser.id) },
+      select: { id: true, description: true },
+      take: 500,
+    }),
+    prisma.mcpConnection.findMany({
+      where: { organizationId: auth.organizationId, isActive: true },
+      select: { id: true, name: true },
+      take: 100,
+    }),
+  ])
+  const validation = validateFlowGraph(graph, {
+    agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
+    toolCatalog: connections.map((connection) => ({ id: connection.id, name: connection.name })),
+  })
+  if (!validation.ok) {
+    throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
+  }
+
   const flow = await prisma.flow.update({
     where: { id },
-    data: { publishedGraph: existing.graph ?? {}, version: { increment: 1 } },
+    data: {
+      trigger: jsonValue(preserveWebhookSecretHash(triggerFromGraph(graph, existing.trigger), existing.trigger)),
+      publishedGraph: existing.graph ?? {},
+      version: { increment: 1 },
+    },
   })
   await recordAudit({
     organizationId: auth.organizationId,

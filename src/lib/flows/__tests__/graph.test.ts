@@ -12,13 +12,15 @@ test('emptyGraph has a single manual trigger node and no edges', () => {
 test('flowGraphSchema accepts a valid agent+condition graph', () => {
   const parsed = flowGraphSchema.parse({
     nodes: [
-      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'trigger', type: 'trigger', data: { trigger: { inputFields: [{ name: 'account', type: 'string', description: 'Customer name.' }] } } },
       { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}' } },
       { id: 'n2', type: 'condition', data: { left: '{{step.n1.output}}', op: 'contains', right: 'yes' } },
     ],
     edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
   })
   assert.equal(parsed.nodes.length, 3)
+  const trigger = parsed.nodes.find((node) => node.type === 'trigger')
+  assert.deepEqual(trigger?.data.trigger.inputFields[0], { name: 'account', type: 'string', description: 'Customer name.' })
 })
 
 test('flowGraphSchema rejects an unknown node type', () => {

@@ -18,6 +18,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { runFlowExecution } from '@/features/flows/execute-flow'
+import { parseFlowInput } from '@/lib/flows/input'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
 import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
@@ -235,7 +236,7 @@ export async function GET(request: Request) {
           flowId: flow.id,
           organizationId: flow.organizationId,
           userId: owner.id,
-          input: trigger.input ?? '',
+          input: parseFlowInput(trigger.input ?? ''),
           usePublished: true,
           trigger: { type: 'schedule' },
         })

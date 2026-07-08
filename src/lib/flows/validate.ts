@@ -1,0 +1,296 @@
+import { FIELD_TYPES, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { FLOW_TRIGGER_TYPES } from '@/lib/flows/trigger'
+
+export type FlowValidationIssue = {
+  level: 'error' | 'warning'
+  code: string
+  message: string
+  nodeId?: string
+}
+
+export type FlowValidationContext = {
+  agents?: { id: string; title?: string }[]
+  toolCatalog?: { id: string; name?: string; tools?: { name: string }[] }[]
+  requireRunnable?: boolean
+}
+
+export type FlowValidationResult = {
+  ok: boolean
+  errors: FlowValidationIssue[]
+  warnings: FlowValidationIssue[]
+  issues: FlowValidationIssue[]
+}
+
+function nodeLabel(node: FlowNode | undefined) {
+  if (!node) return 'Unknown step'
+  const label = 'label' in node.data && typeof node.data.label === 'string' ? node.data.label.trim() : ''
+  if (label) return label
+  switch (node.type) {
+    case 'trigger':
+      return 'Trigger'
+    case 'agent':
+      return 'Run agent'
+    case 'tool':
+      return 'Tool call'
+    case 'http':
+      return 'HTTP request'
+    case 'loop':
+      return 'For each'
+    case 'parallel':
+      return 'Parallel'
+    case 'condition':
+      return 'If / else'
+    case 'switch':
+      return 'Switch'
+    case 'transform':
+      return 'Set fields'
+    case 'filter':
+      return 'Filter'
+    case 'stop':
+      return 'Stop'
+  }
+}
+
+function unique<T>(items: T[]): T[] {
+  return Array.from(new Set(items))
+}
+
+function add(
+  issues: FlowValidationIssue[],
+  level: FlowValidationIssue['level'],
+  code: string,
+  message: string,
+  nodeId?: string,
+) {
+  issues.push({ level, code, message, ...(nodeId ? { nodeId } : {}) })
+}
+
+function validateJsonField(issues: FlowValidationIssue[], value: string | undefined, message: string, nodeId: string) {
+  if (!value?.trim()) return
+  try {
+    JSON.parse(value)
+  } catch {
+    add(issues, 'error', 'INVALID_JSON', message, nodeId)
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function validateTriggerConfig(issues: FlowValidationIssue[], trigger: unknown) {
+  if (trigger === undefined) return
+  if (!isRecord(trigger)) {
+    add(issues, 'error', 'INVALID_TRIGGER_CONFIG', 'The Trigger configuration is invalid.', 'trigger')
+    return
+  }
+  const type = trigger.type
+  if (type !== undefined && (typeof type !== 'string' || !(FLOW_TRIGGER_TYPES as readonly string[]).includes(type))) {
+    add(issues, 'error', 'INVALID_TRIGGER_TYPE', 'The Trigger type is not supported.', 'trigger')
+    return
+  }
+  if (trigger.inputFields !== undefined) {
+    if (!Array.isArray(trigger.inputFields)) {
+      add(issues, 'error', 'INVALID_INPUT_FIELDS', 'Trigger input fields are invalid.', 'trigger')
+    } else {
+      const names = trigger.inputFields
+        .filter(isRecord)
+        .map((field) => (typeof field.name === 'string' ? field.name.trim() : ''))
+      names.forEach((name, index) => {
+        if (!name) add(issues, 'error', 'MISSING_INPUT_FIELD_NAME', `Trigger input field ${index + 1} needs a name.`, 'trigger')
+      })
+      for (const name of unique(names.filter(Boolean))) {
+        if (names.filter((entry) => entry === name).length > 1) {
+          add(issues, 'error', 'DUPLICATE_INPUT_FIELD', `Trigger has duplicate input field "${name}".`, 'trigger')
+        }
+      }
+      trigger.inputFields.filter(isRecord).forEach((field, index) => {
+        if (field.type !== undefined && (typeof field.type !== 'string' || !(FIELD_TYPES as readonly string[]).includes(field.type))) {
+          add(issues, 'error', 'INVALID_INPUT_FIELD_TYPE', `Trigger input field ${index + 1} has an invalid type.`, 'trigger')
+        }
+      })
+    }
+  }
+  if (type !== 'schedule') return
+  const schedule = trigger.schedule
+  if (!isRecord(schedule)) {
+    add(issues, 'error', 'MISSING_SCHEDULE', 'Scheduled triggers need a schedule.', 'trigger')
+    return
+  }
+  const scheduleType = typeof schedule.type === 'string' ? schedule.type : 'daily'
+  if (['daily', 'weekly', 'once'].includes(scheduleType) && !String(schedule.time ?? '').trim()) {
+    add(issues, 'error', 'MISSING_SCHEDULE_TIME', 'Scheduled triggers need a run time.', 'trigger')
+  }
+  if (scheduleType === 'once' && !String(schedule.runAt ?? '').trim()) {
+    add(issues, 'error', 'MISSING_SCHEDULE_DATE', 'One-time scheduled triggers need a date.', 'trigger')
+  }
+  if (scheduleType === 'cron' && !String(schedule.cron ?? '').trim()) {
+    add(issues, 'error', 'MISSING_CRON', 'Cron scheduled triggers need a cron expression.', 'trigger')
+  }
+}
+
+function conditionClauses(node: Extract<FlowNode, { type: 'condition' | 'filter' }>) {
+  if (node.data.clauses?.length) return node.data.clauses
+  if (node.type === 'condition' && (node.data.left !== undefined || node.data.right !== undefined)) {
+    return [{ left: node.data.left ?? '', op: node.data.op ?? 'contains', right: node.data.right ?? '' }]
+  }
+  return []
+}
+
+function reachableNodeIds(graph: FlowGraph): Set<string> {
+  const byId = new Map(graph.nodes.map((node) => [node.id, node]))
+  const seen = new Set<string>()
+  const visit = (id: string) => {
+    if (seen.has(id)) return
+    const node = byId.get(id)
+    if (!node) return
+    seen.add(id)
+    if (node.type === 'loop') node.data.body.forEach(visit)
+    if (node.type === 'parallel') node.data.branches.flat().forEach(visit)
+    graph.edges.filter((edge) => edge.source === id).forEach((edge) => visit(edge.target))
+  }
+  visit('trigger')
+  return seen
+}
+
+export function validateFlowGraph(graph: FlowGraph, context: FlowValidationContext = {}): FlowValidationResult {
+  const issues: FlowValidationIssue[] = []
+  const agentIds = new Set((context.agents ?? []).map((agent) => agent.id))
+  const connectionIds = new Set((context.toolCatalog ?? []).map((connection) => connection.id))
+  const toolNamesByConnection = new Map((context.toolCatalog ?? []).map((connection) => [
+    connection.id,
+    new Set((connection.tools ?? []).map((tool) => tool.name)),
+  ]))
+  const byId = new Map<string, FlowNode>()
+  const triggerIds = graph.nodes.filter((node) => node.type === 'trigger').map((node) => node.id)
+
+  for (const node of graph.nodes) {
+    if (byId.has(node.id)) add(issues, 'error', 'DUPLICATE_NODE_ID', `Multiple steps use the id "${node.id}".`, node.id)
+    byId.set(node.id, node)
+  }
+
+  if (triggerIds.length !== 1 || triggerIds[0] !== 'trigger') {
+    add(issues, 'error', 'INVALID_TRIGGER', 'The flow needs exactly one Trigger step with id "trigger".')
+  }
+  const triggerNode = graph.nodes.find((node): node is Extract<FlowNode, { type: 'trigger' }> => node.type === 'trigger')
+  validateTriggerConfig(issues, triggerNode?.data.trigger)
+
+  const actionable = graph.nodes.filter((node) => node.type !== 'trigger')
+  if (context.requireRunnable !== false && actionable.length === 0) {
+    add(issues, 'error', 'NO_STEPS', 'Add at least one step before running or publishing this flow.')
+  }
+
+  for (const edge of graph.edges) {
+    if (!byId.has(edge.source)) add(issues, 'error', 'DANGLING_EDGE', `An edge starts from missing step "${edge.source}".`)
+    if (!byId.has(edge.target)) add(issues, 'error', 'DANGLING_EDGE', `An edge points to missing step "${edge.target}".`)
+  }
+
+  for (const node of graph.nodes) {
+    if (node.type === 'agent') {
+      if (!node.data.agentId) {
+        add(issues, 'error', 'MISSING_AGENT', `${nodeLabel(node)} needs an agent.`, node.id)
+      } else if (context.agents && !agentIds.has(node.data.agentId)) {
+        add(issues, 'error', 'UNKNOWN_AGENT', `${nodeLabel(node)} uses an agent that is not available.`, node.id)
+      }
+      if (!node.data.input?.trim()) {
+        add(issues, 'warning', 'EMPTY_AGENT_INPUT', `${nodeLabel(node)} has an empty message.`, node.id)
+      }
+    }
+
+    if (node.type === 'tool') {
+      if (!node.data.connectionId) {
+        add(issues, 'error', 'MISSING_TOOL_CONNECTION', `${nodeLabel(node)} needs a connection.`, node.id)
+      } else if (context.toolCatalog && !connectionIds.has(node.data.connectionId)) {
+        add(issues, 'error', 'UNKNOWN_TOOL_CONNECTION', `${nodeLabel(node)} uses a connection that is not available.`, node.id)
+      }
+      if (!node.data.toolName) {
+        add(issues, 'error', 'MISSING_TOOL', `${nodeLabel(node)} needs a tool.`, node.id)
+      } else if (context.toolCatalog && toolNamesByConnection.get(node.data.connectionId)?.size) {
+        const knownTools = toolNamesByConnection.get(node.data.connectionId)
+        if (knownTools && !knownTools.has(node.data.toolName)) {
+          add(issues, 'error', 'UNKNOWN_TOOL', `${nodeLabel(node)} uses a tool that is not available on the selected connection.`, node.id)
+        }
+      }
+      validateJsonField(issues, node.data.args, `${nodeLabel(node)} arguments must be valid JSON.`, node.id)
+    }
+
+    if (node.type === 'http') {
+      if (!node.data.url.trim()) add(issues, 'error', 'MISSING_HTTP_URL', `${nodeLabel(node)} needs a URL.`, node.id)
+      validateJsonField(issues, node.data.headers, `${nodeLabel(node)} headers must be valid JSON.`, node.id)
+    }
+
+    if (node.type === 'loop') {
+      if (!node.data.over.trim()) add(issues, 'error', 'MISSING_LOOP_SOURCE', `${nodeLabel(node)} needs a list to process.`, node.id)
+      if (node.data.body.length === 0) add(issues, 'error', 'EMPTY_LOOP_BODY', `${nodeLabel(node)} needs at least one nested step.`, node.id)
+      for (const bodyId of node.data.body) {
+        if (!byId.has(bodyId)) add(issues, 'error', 'MISSING_CONTAINER_STEP', `${nodeLabel(node)} references missing nested step "${bodyId}".`, node.id)
+      }
+    }
+
+    if (node.type === 'parallel') {
+      if (node.data.branches.length === 0) add(issues, 'error', 'EMPTY_PARALLEL', `${nodeLabel(node)} needs at least one branch.`, node.id)
+      node.data.branches.forEach((branch, index) => {
+        if (branch.length === 0) add(issues, 'error', 'EMPTY_PARALLEL_BRANCH', `${nodeLabel(node)} branch ${index + 1} is empty.`, node.id)
+        for (const branchNodeId of branch) {
+          if (!byId.has(branchNodeId)) add(issues, 'error', 'MISSING_CONTAINER_STEP', `${nodeLabel(node)} references missing branch step "${branchNodeId}".`, node.id)
+        }
+      })
+    }
+
+    if (node.type === 'condition' || node.type === 'filter') {
+      const clauses = conditionClauses(node)
+      if (clauses.length === 0) add(issues, 'error', 'EMPTY_CONDITION', `${nodeLabel(node)} needs at least one condition.`, node.id)
+      clauses.forEach((clause, index) => {
+        if (!clause.left.trim()) add(issues, 'error', 'MISSING_CONDITION_LEFT', `${nodeLabel(node)} condition ${index + 1} needs data to check.`, node.id)
+      })
+    }
+
+    if (node.type === 'switch') {
+      if (node.data.cases.length === 0) add(issues, 'error', 'EMPTY_SWITCH', `${nodeLabel(node)} needs at least one case.`, node.id)
+      const caseIds = node.data.cases.map((entry) => entry.id).filter(Boolean)
+      for (const caseId of unique(caseIds)) {
+        if (caseIds.filter((entry) => entry === caseId).length > 1) {
+          add(issues, 'error', 'DUPLICATE_SWITCH_CASE', `${nodeLabel(node)} has duplicate case id "${caseId}".`, node.id)
+        }
+      }
+      node.data.cases.forEach((entry, index) => {
+        if (!entry.id.trim()) add(issues, 'error', 'MISSING_SWITCH_CASE_ID', `${nodeLabel(node)} case ${index + 1} needs an id.`, node.id)
+        if (!entry.left.trim()) add(issues, 'error', 'MISSING_SWITCH_LEFT', `${nodeLabel(node)} case ${index + 1} needs data to check.`, node.id)
+      })
+      if (!graph.edges.some((edge) => edge.source === node.id && edge.branch === 'default')) {
+        add(issues, 'warning', 'MISSING_SWITCH_DEFAULT', `${nodeLabel(node)} has no default branch.`, node.id)
+      }
+    }
+
+    if (node.type === 'transform') {
+      if (node.data.fields.length === 0) add(issues, 'error', 'EMPTY_TRANSFORM', `${nodeLabel(node)} needs at least one field.`, node.id)
+      const names = node.data.fields.map((field) => field.name.trim()).filter(Boolean)
+      node.data.fields.forEach((field, index) => {
+        if (!field.name.trim()) add(issues, 'error', 'MISSING_TRANSFORM_FIELD', `${nodeLabel(node)} field ${index + 1} needs a name.`, node.id)
+      })
+      for (const name of unique(names)) {
+        if (names.filter((entry) => entry === name).length > 1) {
+          add(issues, 'error', 'DUPLICATE_TRANSFORM_FIELD', `${nodeLabel(node)} has duplicate field "${name}".`, node.id)
+        }
+      }
+    }
+  }
+
+  const reachable = reachableNodeIds(graph)
+  for (const node of graph.nodes) {
+    if (node.type !== 'trigger' && !reachable.has(node.id)) {
+      add(issues, 'warning', 'UNREACHABLE_STEP', `${nodeLabel(node)} is not connected to the trigger.`, node.id)
+    }
+  }
+
+  const errors = issues.filter((issue) => issue.level === 'error')
+  const warnings = issues.filter((issue) => issue.level === 'warning')
+  return { ok: errors.length === 0, errors, warnings, issues }
+}
+
+export function validationErrorMessage(result: FlowValidationResult): string {
+  if (result.ok) return ''
+  const first = result.errors[0]
+  const extra = result.errors.length > 1 ? ` (+${result.errors.length - 1} more)` : ''
+  return `${first.message}${extra}`
+}
