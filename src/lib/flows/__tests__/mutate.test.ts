@@ -1,7 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { insertAgentAfter, insertNodeAfter, appendToBranch, duplicateNode, deleteNode, updateNode, addContainerStep } from '../mutate'
-import { emptyGraph, type FlowGraph } from '../graph'
+import {
+  insertAgentAfter,
+  insertNodeAfter,
+  appendToBranch,
+  duplicateNode,
+  deleteNode,
+  updateNode,
+  addContainerStep,
+  moveNodeAfter,
+  moveContainerStep,
+  sanitizeCopiedNode,
+  pasteNodeAfter,
+} from '../mutate'
+import { emptyGraph, type FlowGraph, type FlowNode } from '../graph'
 
 test('insertAgentAfter appends a node and links the trigger to it', () => {
   const { graph, nodeId } = insertAgentAfter(emptyGraph(), 'trigger', 'a1')
@@ -94,4 +106,71 @@ test('updateNode replaces the matching node', () => {
   const updated = updateNode(base, { ...target, data: { agentId: 'CHANGED', input: 'x' } } as typeof target)
   const found = updated.nodes.find((n) => n.id === target.id)
   assert.equal(found?.type === 'agent' ? found.data.agentId : '', 'CHANGED')
+})
+
+test('moveNodeAfter relocates a middle node to the chain tail', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'http').graph        // n2? ids depend on builder — capture them
+  const a = g.nodes.find((n) => n.type === 'http')!.id
+  g = insertNodeAfter(g, a, 'transform').graph
+  const b = g.nodes.find((n) => n.type === 'transform')!.id
+  g = insertNodeAfter(g, b, 'stop').graph
+  const c = g.nodes.find((n) => n.type === 'stop')!.id
+  const moved = moveNodeAfter(g, a, c)
+  // chain is trigger -> b -> c -> a
+  const next = (id: string) => moved.edges.find((e) => e.source === id && !e.branch)?.target
+  assert.equal(next('trigger'), b)
+  assert.equal(next(b), c)
+  assert.equal(next(c), a)
+  assert.equal(next(a), undefined)
+  assert.equal(moved.nodes.length, g.nodes.length)
+})
+
+test('moveNodeAfter no-ops for trigger, same id, missing ids, and own-subtree drops', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'loop').graph
+  const loop = g.nodes.find((n) => n.type === 'loop')!
+  const bodyId = (loop.data as { body: string[] }).body[0]
+  assert.equal(moveNodeAfter(g, 'trigger', bodyId), g)
+  assert.equal(moveNodeAfter(g, loop.id, loop.id), g)
+  assert.equal(moveNodeAfter(g, 'nope', loop.id), g)
+  assert.equal(moveNodeAfter(g, loop.id, bodyId), g) // can't drop a container into itself
+  assert.equal(moveNodeAfter(g, bodyId, 'trigger'), g) // body steps use the array variant
+})
+
+test('moveContainerStep reorders a loop body', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'loop').graph
+  const loop = () => g.nodes.find((n) => n.type === 'loop')! as Extract<FlowNode, { type: 'loop' }>
+  g = addContainerStep(g, loop().id, 'transform').graph
+  g = addContainerStep(g, loop().id, 'stop').graph
+  const before = loop().data.body
+  const after = moveContainerStep(g, loop().id, 0, 2)
+  const reordered = (after.nodes.find((n) => n.type === 'loop') as Extract<FlowNode, { type: 'loop' }>).data.body
+  assert.deepEqual(reordered, [before[1], before[2], before[0]])
+  assert.equal(moveContainerStep(g, loop().id, 0, 99), g)
+})
+
+test('sanitizeCopiedNode accepts steps, rejects triggers and garbage, empties containers', () => {
+  const http = { id: 'x1', type: 'http', data: { method: 'GET', url: 'https://a.test' } }
+  const ok = sanitizeCopiedNode(http)
+  assert.equal(ok?.type, 'http')
+  assert.equal(sanitizeCopiedNode({ id: 't', type: 'trigger', data: {} }), null)
+  assert.equal(sanitizeCopiedNode('garbage'), null)
+  const loop = sanitizeCopiedNode({ id: 'l', type: 'loop', data: { over: '{{trigger.input}}', body: ['zombie'] } })
+  assert.deepEqual((loop as Extract<FlowNode, { type: 'loop' }>).data.body, [])
+})
+
+test('pasteNodeAfter splices a fresh-id copy into the chain', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'http').graph
+  const a = g.nodes.find((n) => n.type === 'http')!.id
+  const copied = sanitizeCopiedNode({ id: 'zzz', type: 'stop', data: { reason: 'done' } })!
+  const { graph: pasted, nodeId } = pasteNodeAfter(g, a, copied)
+  assert.notEqual(nodeId, 'zzz')
+  const next = (id: string) => pasted.edges.find((e) => e.source === id && !e.branch)?.target
+  assert.equal(next(a), nodeId)
+  const node = pasted.nodes.find((n) => n.id === nodeId)!
+  assert.equal(node.type, 'stop')
+  assert.equal((node.data as { reason?: string }).reason, 'done')
 })

@@ -1,4 +1,4 @@
-import type { FlowGraph, FlowNode } from '@/lib/flows/graph'
+import { flowNodeSchema, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
 
 /** Node types a user can create as a step (everything but the trigger). */
 export type StepType = Exclude<FlowNode['type'], 'trigger'>
@@ -192,4 +192,104 @@ export function deleteNode(graph: FlowGraph, id: string): FlowGraph {
       return node
     })
   return { nodes, edges }
+}
+
+/** Ids living inside a container node's own subtree (its body/branch steps). */
+function containedIdsOf(node: FlowNode): string[] {
+  if (node.type === 'loop') return node.data.body
+  if (node.type === 'parallel') return node.data.branches.flat()
+  return []
+}
+
+/**
+ * Move an existing step so it sits immediately after `afterId`, healing both
+ * the old and new positions. Container bodies are NOT movable this way — use
+ * moveContainerStep. No-op on any invalid move.
+ */
+export function moveNodeAfter(graph: FlowGraph, nodeId: string, afterId: string): FlowGraph {
+  if (nodeId === afterId || nodeId === 'trigger') return graph
+  const node = graph.nodes.find((n) => n.id === nodeId)
+  const target = graph.nodes.find((n) => n.id === afterId)
+  if (!node || !target) return graph
+  if (containedIdsOf(node).includes(afterId)) return graph
+  // A step referenced by any container's body/branches moves via the array API.
+  const contained = new Set(graph.nodes.flatMap(containedIdsOf))
+  if (contained.has(nodeId)) return graph
+
+  // 1) Detach: heal the chain around the node (deleteNode's edge logic, node kept).
+  const incoming = graph.edges.find((edge) => edge.target === nodeId)
+  const outgoing = graph.edges.find((edge) => edge.source === nodeId && !edge.branch)
+  let edges = graph.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId)
+  // Branch edges leaving a condition/switch node being moved stay with it —
+  // conditions/switches carry their branch heads, so keep those edges intact.
+  const branchEdges = graph.edges.filter((edge) => edge.source === nodeId && edge.branch)
+  edges = [...edges, ...branchEdges]
+  if (incoming && outgoing) {
+    edges.push({
+      id: edgeId(incoming.source, outgoing.target, incoming.branch),
+      source: incoming.source,
+      target: outgoing.target,
+      ...(incoming.branch ? { branch: incoming.branch } : {}),
+    })
+  }
+
+  // 2) Splice after the target (insertNodeAfter's edge logic, existing node).
+  const idx = edges.findIndex((edge) => edge.source === afterId && !edge.branch)
+  if (idx >= 0) {
+    const old = edges[idx]
+    edges[idx] = { id: edgeId(nodeId, old.target), source: nodeId, target: old.target }
+  }
+  edges.push({ id: edgeId(afterId, nodeId), source: afterId, target: nodeId })
+  return { ...graph, edges }
+}
+
+/** Reorder a loop body (or one parallel branch) by index. Out-of-range no-ops. */
+export function moveContainerStep(graph: FlowGraph, containerId: string, from: number, to: number, branchIndex?: number): FlowGraph {
+  const container = graph.nodes.find((n) => n.id === containerId)
+  if (!container) return graph
+  const reorder = (list: string[]): string[] | null => {
+    if (from < 0 || to < 0 || from >= list.length || to >= list.length || from === to) return null
+    const next = [...list]
+    const [item] = next.splice(from, 1)
+    next.splice(to, 0, item)
+    return next
+  }
+  if (container.type === 'loop') {
+    const next = reorder(container.data.body)
+    if (!next) return graph
+    return updateNode(graph, { ...container, data: { ...container.data, body: next } })
+  }
+  if (container.type === 'parallel' && branchIndex !== undefined) {
+    const branch = container.data.branches[branchIndex]
+    if (!branch) return graph
+    const next = reorder(branch)
+    if (!next) return graph
+    const branches = container.data.branches.map((b, i) => (i === branchIndex ? next : b))
+    return updateNode(graph, { ...container, data: { ...container.data, branches } })
+  }
+  return graph
+}
+
+/** Validate clipboard content into a paste-safe step (never a trigger; containers emptied). */
+export function sanitizeCopiedNode(raw: unknown): FlowNode | null {
+  const parsed = flowNodeSchema.safeParse(raw)
+  if (!parsed.success || parsed.data.type === 'trigger') return null
+  const node = parsed.data
+  if (node.type === 'loop') return { ...node, data: { ...node.data, body: [] } }
+  if (node.type === 'parallel') return { ...node, data: { ...node.data, branches: [] } }
+  return node
+}
+
+/** Paste a sanitized copied step immediately after `afterId` with a fresh id. */
+export function pasteNodeAfter(graph: FlowGraph, afterId: string, copied: FlowNode): { graph: FlowGraph; nodeId: string } {
+  const copyId = newNodeId(graph)
+  const copy = { id: copyId, type: copied.type, data: JSON.parse(JSON.stringify(copied.data)) } as FlowNode
+  const edges = [...graph.edges]
+  const idx = edges.findIndex((edge) => edge.source === afterId && !edge.branch)
+  if (idx >= 0) {
+    const old = edges[idx]
+    edges[idx] = { id: edgeId(copyId, old.target), source: copyId, target: old.target }
+  }
+  edges.push({ id: edgeId(afterId, copyId), source: afterId, target: copyId })
+  return { graph: { nodes: [...graph.nodes, copy], edges }, nodeId: copyId }
 }
