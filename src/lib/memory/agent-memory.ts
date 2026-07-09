@@ -92,6 +92,17 @@ export async function saveAgentMemory(params: {
       }
     }
 
+    void import('@/lib/rag/indexer')
+      .then((indexer) => indexer.indexAgentMemory({
+        memoryId: created.id,
+        organizationId: params.organizationId,
+        agentId: params.agentId,
+        kind: params.kind,
+        title: params.title,
+        content: params.content,
+      }))
+      .catch(() => undefined)
+
     return { id: created.id, deduped: false }
   } catch (error) {
     apiLogger.warn('saveAgentMemory failed', { error: error instanceof Error ? error.message : String(error) })

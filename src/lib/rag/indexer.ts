@@ -292,6 +292,39 @@ export async function indexCustomSignalResult(params: {
 }
 
 /**
+ * Index an agent memory (a learned fact, user answer, or suggestion the agent
+ * accumulated) as a shared insight node linked to its agent, so retrieval can
+ * surface it alongside runs and signals for that agent. Best-effort; gated on
+ * embeddings.
+ */
+export async function indexAgentMemory(params: {
+  memoryId: string
+  organizationId: string
+  agentId: string
+  kind: string
+  title: string
+  content: string
+  ownerUserId?: string | null
+}): Promise<void> {
+  if (!ragEnabled()) return
+  try {
+    const nodeId = `insight:mem:${params.memoryId}`
+    const text = `Agent memory (${params.kind}): ${params.title}. ${params.content}`.slice(0, 1500)
+    const nodes: PendingNode[] = [{
+      id: nodeId, type: 'insight', text,
+      props: { kind: params.kind, agentId: params.agentId },
+      ownerUserId: params.ownerUserId ?? null, visibility: 'shared',
+    }]
+    const edges: GraphEdge[] = [
+      { organizationId: params.organizationId, from: nodeId, to: nid.agent(params.agentId), rel: 'belongs_to' },
+    ]
+    await commitGraph(params.organizationId, nodes, edges)
+  } catch (error) {
+    warn('indexAgentMemory', error)
+  }
+}
+
+/**
  * Remove an agent and its run nodes from the graph when the agent is deleted,
  * so its (possibly stale) content can't resurface in retrieval or LLM context.
  * Best-effort; only meaningful for the persistent (Neo4j) store.
