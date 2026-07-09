@@ -6,7 +6,13 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import type { FlowGraph } from '@/lib/flows/graph'
 
-export function CopilotPanel({ onGraph }: { onGraph: (graph: FlowGraph) => void }) {
+export function CopilotPanel({
+  onGraph,
+  onNeedsAttention,
+}: {
+  onGraph: (graph: FlowGraph) => void
+  onNeedsAttention?: (issues: { nodeId?: string; message: string }[]) => void
+}) {
   const [description, setDescription] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -23,6 +29,7 @@ export function CopilotPanel({ onGraph }: { onGraph: (graph: FlowGraph) => void 
       if (response.ok && data.success && data.graph) {
         const steps = (data.graph.nodes || []).filter((n: { type: string }) => n.type !== 'trigger').length
         onGraph(data.graph)
+        onNeedsAttention?.(data.needsAttention ?? [])
         const errors = data.validation?.errors?.length ?? 0
         if (errors) {
           toast.warning(`Drafted ${steps} step${steps === 1 ? '' : 's'}, but ${errors} check${errors === 1 ? '' : 's'} need attention.`)

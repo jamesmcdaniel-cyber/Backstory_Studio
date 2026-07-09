@@ -960,6 +960,9 @@ export default function FlowBuilder() {
                 setSelectedId(null)
                 // Keep Copilot open so the user can keep iterating on the draft.
               }}
+              onNeedsAttention={(issues) => {
+                if (issues.length) setShowChecker(true)
+              }}
             />
           </ResizablePanel>
         )}
