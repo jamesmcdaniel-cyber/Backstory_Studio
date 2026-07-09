@@ -377,7 +377,7 @@ function ExplorePage() {
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         <PageHeader eyebrow="Library" title="Explore" />
 
-        <div className="flex max-w-md items-center gap-2">
+        <div className="flex w-full items-center gap-2">
           <Input
             value={search}
             onChange={(event) => onSearch(event.target.value)}
