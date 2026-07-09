@@ -10,7 +10,8 @@ import { Badge } from '@/components/ui/badge'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/lib/flows/graph'
-import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep, moveNodeAfter, moveContainerStep } from '@/lib/flows/mutate'
+import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep, moveNodeAfter, moveContainerStep, pasteNodeAfter } from '@/lib/flows/mutate'
+import { writeFlowClipboard, readFlowClipboard } from '@/lib/flows/clipboard'
 import { buildDataTree } from '@/lib/flows/datatree'
 import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
@@ -280,20 +281,6 @@ export default function FlowBuilder() {
     setGraph(next)
     setSelectedId(null)
   }, [graph])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null
-      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) redo()
-        else undo()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo])
-
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
   const labelForNode = useCallback(
     (nodeId: string) => {
@@ -307,6 +294,50 @@ export default function FlowBuilder() {
   const inputFields = useMemo(() => triggerInputFields(graph), [graph])
   const hasInputFields = inputFields.some((field) => field.name.trim())
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+        return
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (selectedId && selectedId !== 'trigger') {
+          e.preventDefault()
+          commitGraph(deleteNode(graph, selectedId))
+          setSelectedId(null)
+          toast.success('Step deleted — ⌘Z to undo.')
+        }
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
+        if (selectedNode && selectedNode.type !== 'trigger') {
+          e.preventDefault()
+          writeFlowClipboard(selectedNode)
+          toast.success('Step copied.')
+        }
+        return
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
+        const copied = readFlowClipboard()
+        if (!copied) return
+        e.preventDefault()
+        const ids = spineIds(graph)
+        const afterId = selectedId && selectedId !== 'trigger' ? selectedId : ids[ids.length - 1] ?? 'trigger'
+        const { graph: next, nodeId } = pasteNodeAfter(graph, afterId, copied)
+        commitGraph(next)
+        setSelectedId(nodeId)
+        toast.success('Step pasted.')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [undo, redo, selectedId, selectedNode, graph, commitGraph])
+
   const loopContext = useMemo(() => parentLoop(graph, selectedId), [graph, selectedId])
   const parallelContext = useMemo(() => parentParallelBranch(graph, selectedId), [graph, selectedId])
   const insideLoop = Boolean(loopContext)
