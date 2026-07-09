@@ -747,10 +747,10 @@ export default function FlowBuilder() {
       )}
 
       {/* Body: canvas + optional drawer + optional copilot */}
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
         <div
           ref={canvasScrollRef}
-          className="relative min-w-0 flex-1 overflow-y-auto bg-white p-8"
+          className="min-w-0 flex-1 overflow-y-auto bg-white p-8"
           onClick={() => setSelectedId(null)}
           style={{
             backgroundImage: 'radial-gradient(circle, rgba(15, 23, 42, 0.22) 1px, transparent 1px)',
@@ -800,20 +800,21 @@ export default function FlowBuilder() {
               }}
             />
           </div>
-          <CanvasRail
-            zoom={zoom}
-            onZoom={setZoom}
-            onFit={() => {
-              setZoom(1)
-              canvasScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
-            }}
-            nodes={graph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
-            onJump={(nodeId) => {
-              setSelectedId(nodeId)
-              document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-            }}
-          />
         </div>
+
+        <CanvasRail
+          zoom={zoom}
+          onZoom={setZoom}
+          onFit={() => {
+            setZoom(1)
+            canvasScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+          }}
+          nodes={graph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
+          onJump={(nodeId) => {
+            setSelectedId(nodeId)
+            document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }}
+        />
 
         {selectedNode && (
           <ResizablePanel storageKey="flow.drawerWidth">
