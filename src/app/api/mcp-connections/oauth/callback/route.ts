@@ -21,6 +21,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { decryptSecret, encryptSecret } from '@/lib/crypto/secrets'
 import { exchangeCode } from '@/lib/mcp/oauth-authcode'
+import { bustBackstoryReadyCache } from '@/lib/mcp/backstory-connection'
 import { OAUTH_COOKIE } from '../start/route'
 
 interface OAuthCookiePayload {
@@ -32,6 +33,9 @@ interface OAuthCookiePayload {
   serverUrl: string
   name: string
   organizationId: string
+  connectionId?: string
+  returnTo?: string
+  userId?: string
 }
 
 function redirect(request: NextRequest, query: string, clearCookie = false) {
@@ -90,23 +94,47 @@ export async function GET(request: NextRequest) {
       expiresAt: Date.now() + expiresInS * 1000,
     }
 
-    await prisma.mcpConnection.create({
-      data: {
-        organizationId: payload.organizationId,
-        name: payload.name,
-        serverUrl: payload.serverUrl,
-        authType: 'oauth2',
-        authConfig: authConfig as Prisma.InputJsonValue,
-        isActive: true,
-      },
-    })
+    if (payload.connectionId) {
+      await prisma.mcpConnection.update({
+        where: { id: payload.connectionId },
+        data: {
+          authType: 'oauth2',
+          authConfig: authConfig as Prisma.InputJsonValue,
+          isActive: true,
+          lastVerifiedAt: new Date(),
+        },
+      })
+      if (payload.userId) bustBackstoryReadyCache(payload.organizationId, payload.userId)
+    } else {
+      await prisma.mcpConnection.create({
+        data: {
+          organizationId: payload.organizationId,
+          name: payload.name,
+          serverUrl: payload.serverUrl,
+          authType: 'oauth2',
+          authConfig: authConfig as Prisma.InputJsonValue,
+          isActive: true,
+        },
+      })
+    }
 
-    return redirect(request, 'connected=1', true)
+    const successPath = payload.returnTo && payload.returnTo.startsWith('/') && !payload.returnTo.startsWith('//')
+      ? `${payload.returnTo}${payload.returnTo.includes('?') ? '&' : '?'}connected=1`
+      : '/connections?connected=1'
+    const response = NextResponse.redirect(new URL(successPath, request.nextUrl.origin))
+    response.cookies.set(OAUTH_COOKIE, '', { path: '/', maxAge: 0 })
+    return response
   } catch (error) {
     // Never log tokens/secrets — only a scrubbed message.
     apiLogger.error('OAuth callback failed', {
       error: error instanceof Error ? error.message : String(error),
     })
+    if (payload?.returnTo && payload.returnTo.startsWith('/') && !payload.returnTo.startsWith('//')) {
+      const errorPath = `${payload.returnTo}${payload.returnTo.includes('?') ? '&' : '?'}error=oauth`
+      const response = NextResponse.redirect(new URL(errorPath, request.nextUrl.origin))
+      response.cookies.set(OAUTH_COOKIE, '', { path: '/', maxAge: 0 })
+      return response
+    }
     return redirect(request, 'error=oauth', true)
   }
 }

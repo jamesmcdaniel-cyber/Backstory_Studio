@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server'
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
 import { encryptSecret } from '@/lib/crypto/secrets'
+import { prisma } from '@/lib/prisma'
 import {
   buildAuthorizeUrl,
   discoverAuthServer,
@@ -30,8 +31,28 @@ const COOKIE_MAX_AGE_S = 600 // 10 minutes to complete the login
 export const GET = withAuthenticatedApi(async (request, auth) => {
   const serverUrl = request.nextUrl.searchParams.get('serverUrl')?.trim()
   const name = request.nextUrl.searchParams.get('name')?.trim()
+  const connectionId = request.nextUrl.searchParams.get('connectionId')?.trim() || undefined
+  const returnToRaw = request.nextUrl.searchParams.get('returnTo')?.trim() || undefined
+  // Same-origin paths only — never an absolute URL.
+  const returnTo = returnToRaw && returnToRaw.startsWith('/') && !returnToRaw.startsWith('//') ? returnToRaw : undefined
+  const scope = request.nextUrl.searchParams.get('scope')?.trim() || 'claudeai'
 
-  if (!serverUrl || !name) {
+  let effectiveServerUrl = serverUrl
+  let effectiveName = name
+  if (connectionId) {
+    const row = await prisma.mcpConnection.findFirst({
+      where: { id: connectionId, organizationId: auth.organizationId },
+      select: { id: true, serverUrl: true, name: true, userId: true },
+    })
+    // Personal rows may only be re-authorized by their owner.
+    if (!row || (row.userId && row.userId !== auth.dbUser.id)) {
+      return NextResponse.redirect(new URL('/connections?error=oauth_params', request.nextUrl.origin))
+    }
+    effectiveServerUrl = row.serverUrl
+    effectiveName = row.name
+  }
+
+  if (!effectiveServerUrl || !effectiveName) {
     return NextResponse.redirect(
       new URL('/connections?error=oauth_params', request.nextUrl.origin),
     )
@@ -39,7 +60,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
 
   // Validate the URL up front so a bad value can't blow up discovery.
   try {
-    void new URL(serverUrl)
+    void new URL(effectiveServerUrl)
   } catch {
     return NextResponse.redirect(
       new URL('/connections?error=oauth_params', request.nextUrl.origin),
@@ -49,7 +70,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   const redirectUri = `${request.nextUrl.origin}/api/mcp-connections/oauth/callback`
 
   try {
-    const meta = await discoverAuthServer(serverUrl)
+    const meta = await discoverAuthServer(effectiveServerUrl)
     if (!meta.registration_endpoint) {
       throw new Error('OAuth server does not advertise a registration_endpoint')
     }
@@ -67,7 +88,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
       redirectUri,
       state,
       codeChallenge: challenge,
-      scope: 'claudeai',
+      scope,
     })
 
     // Everything the callback needs, sealed in an encrypted cookie.
@@ -78,9 +99,12 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
         clientId: client_id,
         clientSecret: client_secret,
         tokenEndpoint: meta.token_endpoint,
-        serverUrl,
-        name,
+        serverUrl: effectiveServerUrl,
+        name: effectiveName,
         organizationId: auth.organizationId,
+        connectionId,
+        returnTo,
+        userId: auth.dbUser.id,
       }),
     )
 
