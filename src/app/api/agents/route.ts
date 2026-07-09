@@ -48,6 +48,12 @@ const agentSchema = z.object({
   allowSubagents: z.boolean().optional(),
   // Restrict which agents it may run. Empty/omitted = any visible agent.
   subagentIds: z.array(z.string()).optional(),
+  // The outcome this agent ultimately serves — steers every run + self-evaluation.
+  goal: z.string().max(2000).nullable().optional(),
+  // When true, a question closely matching a past answer is auto-answered from memory.
+  autoAnswerFromMemory: z.boolean().optional(),
+  // When true, every run starts with an explicit numbered plan before any tool call.
+  alwaysStrategize: z.boolean().optional(),
   schedule: scheduleSchema.default({ type: 'manual', timezone: 'UTC', isActive: false }),
 })
 
@@ -94,6 +100,8 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         icon: data.icon || '',
         allowSubagents: data.allowSubagents === true,
         subagentIds: data.subagentIds ?? [],
+        autoAnswerFromMemory: data.autoAnswerFromMemory === true,
+        alwaysStrategize: data.alwaysStrategize === true,
       },
     },
   })
@@ -120,6 +128,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       ...(body.schedule !== undefined && { schedule: body.schedule }),
       ...(body.folder !== undefined && { folder: body.folder || null }),
       ...(body.visibility !== undefined && { visibility: body.visibility }),
+      ...(body.goal !== undefined && { goal: body.goal?.trim() ? body.goal.trim() : null }),
       metadata: {
         ...metadata,
         ...(body.title !== undefined && { title: body.title }),
@@ -130,6 +139,10 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ...(body.icon !== undefined && { icon: body.icon }),
         ...(body.allowSubagents !== undefined && { allowSubagents: body.allowSubagents }),
         ...(body.subagentIds !== undefined && { subagentIds: body.subagentIds }),
+        ...(body.autoAnswerFromMemory !== undefined && { autoAnswerFromMemory: body.autoAnswerFromMemory }),
+        ...(body.alwaysStrategize !== undefined && { alwaysStrategize: body.alwaysStrategize }),
+        // A saved goal supersedes any prior AI-suggested one.
+        ...(body.goal !== undefined && { suggestedGoal: undefined }),
       },
     },
   })

@@ -9,6 +9,7 @@ export function serializeAgent(agent: {
   id: string
   description: string
   objective: string
+  goal: string | null
   metadata: unknown
   folder: string | null
   visibility: string
@@ -25,12 +26,16 @@ export function serializeAgent(agent: {
     title: metadata.title || agent.description.split('\n')[0] || 'Untitled agent',
     description: metadata.description || agent.description,
     instructions: agent.objective,
+    goal: agent.goal || null,
     model: metadata.model || DEFAULT_AGENT_MODEL,
     integrations: metadata.integrations || [],
     skills: metadata.skills || [],
     icon: metadata.icon || '',
     allowSubagents: (metadata as { allowSubagents?: boolean }).allowSubagents === true,
     subagentIds: ((metadata as { subagentIds?: string[] }).subagentIds ?? []).filter((id) => typeof id === 'string'),
+    autoAnswerFromMemory: metadata.autoAnswerFromMemory === true,
+    alwaysStrategize: metadata.alwaysStrategize === true,
+    suggestedGoal: metadata.suggestedGoal || null,
     folder: agent.folder || null,
     visibility: agent.visibility || 'shared',
     status: agent.status.toLowerCase(),

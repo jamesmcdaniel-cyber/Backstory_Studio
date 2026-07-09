@@ -65,6 +65,12 @@ export type AgentDraft = {
   allowSubagents?: boolean
   /** Restrict which agents it may run. Empty = any of the user's agents. */
   subagentIds?: string[]
+  /** The outcome this agent ultimately serves — steers every run + self-evaluation. */
+  goal: string
+  /** When true, a question closely matching a past answer is auto-answered from memory. */
+  autoAnswerFromMemory?: boolean
+  /** When true, every run starts with an explicit numbered plan before any tool call. */
+  alwaysStrategize?: boolean
   schedule: {
     type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron' | 'once'
     time?: string
@@ -112,6 +118,9 @@ const emptyDraft: AgentDraft = {
   visibility: 'shared',
   allowSubagents: false,
   subagentIds: [],
+  goal: '',
+  autoAnswerFromMemory: false,
+  alwaysStrategize: false,
   schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },
 }
 
@@ -360,6 +369,9 @@ export function AgentConfigForm({
       visibility: source.visibility || 'shared',
       allowSubagents: source.allowSubagents === true,
       subagentIds: Array.isArray(source.subagentIds) ? source.subagentIds : [],
+      goal: source.goal || '',
+      autoAnswerFromMemory: source.autoAnswerFromMemory === true,
+      alwaysStrategize: source.alwaysStrategize === true,
       schedule: normalizeSchedule({ ...emptyDraft.schedule, ...(source.schedule || {}) }),
     } : {
       ...emptyDraft,
@@ -525,6 +537,10 @@ export function AgentConfigForm({
     return ''
   })()
 
+  // AI-proposed goal from a run's reflection pass, pending user confirmation —
+  // only worth surfacing while the draft has no goal of its own yet.
+  const suggestedGoal = typeof editingAgent?.suggestedGoal === 'string' ? editingAgent.suggestedGoal : ''
+
   return (
     <div className="space-y-4">
       <div>
@@ -561,6 +577,21 @@ export function AgentConfigForm({
       <div>
         <Label>Instructions</Label>
         <Textarea rows={8} value={draft.instructions} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} />
+      </div>
+      <div>
+        <Label>Larger goal (optional)</Label>
+        {suggestedGoal && !draft.goal && (
+          <div className="mb-2 flex items-start justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-2.5 text-sm text-indigo-900">
+            <p><span className="font-semibold">Suggested goal:</span> {suggestedGoal}</p>
+            <Button type="button" size="sm" variant="outline" onClick={() => setDraft({ ...draft, goal: suggestedGoal })}>
+              Use it
+            </Button>
+          </div>
+        )}
+        <Textarea rows={2} value={draft.goal} onChange={(event) => setDraft({ ...draft, goal: event.target.value })} />
+        <p className="mt-1 text-xs text-muted-foreground">
+          The outcome this agent ultimately serves — it steers every run and self-evaluation.
+        </p>
       </div>
       <div>
         <Label>Model</Label>
@@ -698,6 +729,36 @@ export function AgentConfigForm({
         ) : (
           <p className="mt-1 text-xs text-muted-foreground">Loading integrations…</p>
         )}
+      </div>
+
+      {/* ── Memory + strategy toggles ───────────────────────────────── */}
+      <div className="rounded-lg border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>Answer from memory automatically</Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              When a question closely matches one you&apos;ve answered before, the agent reuses your answer instead of pausing.
+            </p>
+          </div>
+          <Switch
+            checked={draft.autoAnswerFromMemory === true}
+            onCheckedChange={(on) => setDraft({ ...draft, autoAnswerFromMemory: on })}
+          />
+        </div>
+      </div>
+      <div className="rounded-lg border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>Always strategize</Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Every run starts with an explicit numbered plan before any tool call.
+            </p>
+          </div>
+          <Switch
+            checked={draft.alwaysStrategize === true}
+            onCheckedChange={(on) => setDraft({ ...draft, alwaysStrategize: on })}
+          />
+        </div>
       </div>
 
       {/* ── Multi-agent handoff ─────────────────────────────────────── */}

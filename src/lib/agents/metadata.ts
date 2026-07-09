@@ -16,6 +16,14 @@ export type AgentMetadata = {
   /** Legacy plaintext trigger secret (superseded by triggerSecretHash). */
   triggerSecret?: string
   pendingQuestion?: unknown
+  allowSubagents?: boolean
+  subagentIds?: string[]
+  /** When true, a question closely matching a past answer is auto-answered from memory. */
+  autoAnswerFromMemory?: boolean
+  /** When true, every run starts with an explicit numbered plan before any tool call. */
+  alwaysStrategize?: boolean
+  /** AI-proposed goal surfaced from a run's reflection pass, pending user confirmation. */
+  suggestedGoal?: string
 }
 
 /** Parse an unknown JSON value into a typed AgentMetadata (never throws). */
