@@ -500,3 +500,84 @@ test('onStep reports every node including containers', async () => {
   assert.ok(outcomes.includes('loop')) // the container itself is reported
   assert.equal(outcomes.filter((id) => id === 'e').length, 2) // one per item
 })
+
+test('structured agent steps append the JSON instruction and expose parsed fields', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'n1',
+        type: 'agent',
+        data: {
+          agentId: 'a1',
+          input: 'Score this account',
+          responseFormat: 'structured',
+          outputFields: [{ name: 'score', type: 'number' }],
+        },
+      },
+      { id: 'n2', type: 'transform', data: { fields: [{ name: 'finalScore', value: '{{step.n1.output.score}}' }] } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'n1' },
+      { id: 'e2', source: 'n1', target: 'n2' },
+    ],
+  }
+  let sentInput = ''
+  const runAgent: RunAgentFn = async (node) => {
+    sentInput = node.input
+    return { output: '{"score": 91}' }
+  }
+  const result = await interpretFlow(graph, 'acme', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.match(sentInput, /JSON object/)
+  assert.match(sentInput, /"score"/)
+  assert.deepEqual(result.output, { finalScore: 91 })
+})
+
+test('structured agent steps fail when the reply is not the required JSON', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'n1',
+        type: 'agent',
+        data: { agentId: 'a1', responseFormat: 'structured', outputFields: [{ name: 'score', type: 'number' }] },
+      },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async () => ({ output: 'no json here' })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'failed')
+  const step = result.steps.find((s) => s.nodeId === 'n1')
+  assert.equal(step?.status, 'failed')
+  assert.match(step?.error ?? '', /JSON/)
+})
+
+test('humanAssistance=false turns a waiting agent into a failed step', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', humanAssistance: false } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async () => ({ waiting: { status: 'waiting_user', question: 'Which region?' } })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'failed')
+  assert.equal(result.steps.find((s) => s.nodeId === 'n1')?.status, 'failed')
+})
+
+test('humanAssistance defaults to allowing the pause', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async () => ({ waiting: { status: 'waiting_user', question: 'Which region?' } })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'waiting')
+  assert.equal(result.waiting?.nodeId, 'n1')
+})

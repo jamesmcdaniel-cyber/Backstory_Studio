@@ -1,5 +1,6 @@
 import type { FlowGraph, FlowNode, FlowEdge } from '@/lib/flows/graph'
 import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from './context'
+import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
 
 export type StepOutcome = {
   nodeId: string
@@ -235,9 +236,18 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     if (node.type === 'agent') {
-      const resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx)
+      const outputFields = node.data.outputFields ?? []
+      const structured = node.data.responseFormat === 'structured' && outputFields.some((field) => field.name.trim())
+      let resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx)
+      if (structured) resolved = `${resolved}\n\n${structuredResponseInstruction(outputFields)}`
       const res = await runAgentWithReliability(node, resolved)
       if (res.waiting) {
+        if (node.data.humanAssistance === false) {
+          const error = 'The agent asked for help, but human assistance is turned off for this step.'
+          emit({ nodeId: node.id, status: 'failed', error })
+          if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
+          return { kind: 'fail', error }
+        }
         emit({ nodeId: node.id, status: 'waiting' })
         return { kind: 'pause', nodeId: node.id, question: res.waiting.question }
       }
@@ -246,7 +256,16 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
         return { kind: 'fail', error: res.error }
       }
-      const output = asStructured(res.output)
+      let output = asStructured(res.output)
+      if (structured) {
+        const parsed = parseStructuredAgentOutput(res.output, outputFields)
+        if (parsed.error) {
+          emit({ nodeId: node.id, status: 'failed', error: parsed.error })
+          if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
+          return { kind: 'fail', error: parsed.error }
+        }
+        output = parsed.output
+      }
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'succeeded', output })
       return { kind: 'ok', output }
