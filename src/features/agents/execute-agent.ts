@@ -38,6 +38,9 @@ import {
   type ToolResult,
 } from '@/lib/llm/model-runner'
 import { coerceToIR } from '@/lib/llm/ir'
+import { retrieveAgentMemory, renderAgentMemories, bestAnswerMatch, markMemoriesUsed, saveAgentMemory } from '@/lib/memory/agent-memory'
+import { reflectAndRemember } from './reflection'
+import { shouldStrategize, goalSection, strategizeSection, STRATEGIZE_RETRIEVAL } from './strategy'
 
 export type AgentExecutionJob = {
   executionId?: string
@@ -598,6 +601,25 @@ async function recordEvent(executionId: string, stepId: string | null, kind: str
   })
 }
 
+/** Condense the IR transcript into a short tool/step log for reflection. */
+function transcriptSummaryForReflection(transcript: unknown): string {
+  try {
+    const messages = Array.isArray(transcript) ? transcript : []
+    const lines: string[] = []
+    for (const message of messages as { role?: string; text?: string; toolCalls?: { name?: string }[] }[]) {
+      if (Array.isArray(message.toolCalls)) {
+        for (const call of message.toolCalls) if (call?.name) lines.push(`tool: ${call.name}`)
+      }
+      if (message.role === 'assistant' && typeof message.text === 'string' && message.text.trim()) {
+        lines.push(`assistant: ${message.text.slice(0, 200)}`)
+      }
+    }
+    return lines.slice(-60).join('\n')
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Resume a suspended run (ask_user reply or approval decision) — inline in dev,
  * enqueued on the worker in prod. Shared by the reply route and the approval
@@ -688,6 +710,16 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       })
     }
     await recordEvent(queuedExecution.id, pending.stepId || null, 'user.replied', { answer: reply })
+    // Input memory (WS1.9): remember the Q/A so future runs stop re-asking.
+    void saveAgentMemory({
+      organizationId,
+      agentId,
+      kind: 'user_answer',
+      title: pending.question.slice(0, 120),
+      content: reply,
+      question: pending.question,
+      sourceExecutionId: queuedExecution.id,
+    })
   } else if (resumeFromCrash && queuedExecution) {
     transcript = coerceToIR(queuedExecution.transcript as unknown[])
     startTurn = Number(metadataOf(queuedExecution.metadata).turnCursor) || 0
@@ -763,6 +795,13 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     if (strataScope.length) {
       system += `\nThrough the Klavis Strata meta-tools, use ONLY these servers: ${strataScope.join(', ')}. When calling the discovery and execute_action tools, restrict server_names to this list and do not use other Strata servers.`
     }
+
+    // Goal awareness + strategize mode (WS1.9). The goal steers every turn;
+    // complex tasks are told to plan before acting.
+    const goalBlock = goalSection((agent as { goal?: string | null }).goal)
+    if (goalBlock) system += `\n\n${goalBlock}`
+    const strategize = shouldStrategize({ objective: agent.objective, metadata: agentMetadata, toolCount: tools.length })
+    if (strategize) system += `\n\n${strategizeSection()}`
 
     // Multi-agent handoff: an opted-in agent can delegate to other agents via a
     // run_agent tool (fan-out over a set, or sequential pipeline stages). Bounded
@@ -852,6 +891,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       const execInput = (queuedExecution?.input ?? null) as { signal?: { accountId?: string; opportunityId?: string } } | null
       const signalRef = execInput?.signal
       const seedNodeIds = [
+        `agent:${agent.id}`,
         signalRef?.accountId ? `account:${signalRef.accountId}` : null,
         signalRef?.opportunityId ? `opp:${signalRef.opportunityId}` : null,
       ].filter((id): id is string => Boolean(id))
@@ -862,6 +902,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
         viewerUserId: userId,
         query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
         seedNodeIds,
+        ...(strategize ? { topK: STRATEGIZE_RETRIEVAL.topK, hops: STRATEGIZE_RETRIEVAL.hops } : {}),
       })
       const rendered = renderContext(ragContext)
       if (rendered) {
@@ -907,6 +948,32 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       })
     }
 
+    // Agent memory: remembered answers, learnings, and the latest self-critique
+    // from prior runs. Best-effort — never blocks a run.
+    try {
+      const memoryHits = await retrieveAgentMemory({
+        organizationId,
+        agentId: agent.id,
+        query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
+      })
+      const critique = typeof agentMetadata.lastCritique === 'string' ? agentMetadata.lastCritique : null
+      const memoryBlock = renderAgentMemories(memoryHits, critique)
+      if (memoryBlock) {
+        system = `${system}\n\n${memoryBlock}`
+        void markMemoriesUsed(memoryHits.map((h) => h.id))
+        await recordEvent(execution.id, null, 'memory.retrieved', {
+          source: 'agent-memory',
+          count: memoryHits.length,
+          summary: `Recalled ${memoryHits.length} memor${memoryHits.length === 1 ? 'y' : 'ies'} from previous runs${critique ? ' + a note-to-self' : ''}.`,
+        })
+      }
+    } catch (error) {
+      apiLogger.warn('execute-agent: memory retrieval skipped', {
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
     if (pendingResults) runner.appendToolResults(transcript, pendingResults)
 
     const maxTurns = Number(agentMetadata.maxTurns) || Number(process.env.AGENT_MAX_TURNS) || 16
@@ -915,6 +982,7 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     const perRunTokenCap = Number(process.env.AGENT_MAX_RUN_TOKENS) || 2_000_000
     const monthlyLimit = budget.limit
     let finalText = ''
+    let planEmitted = false
 
     for (let turn = startTurn; turn < maxTurns; turn += 1) {
       const turnResult = await runner.next(transcript, system, [...tools, ASK_USER_TOOL])
@@ -947,7 +1015,9 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       // the activity log can show the agent's reasoning as it works, interleaved
       // with the tool calls it makes.
       if (turnResult.text && turnResult.text.trim()) {
-        await recordEvent(execution.id, null, 'agent.thinking', { text: turnResult.text.trim() })
+        const thinkingKind = strategize && !planEmitted ? 'agent.plan' : 'agent.thinking'
+        if (thinkingKind === 'agent.plan') planEmitted = true
+        await recordEvent(execution.id, null, thinkingKind, { text: turnResult.text.trim() })
       }
 
       const results: ToolResult[] = []
@@ -1077,6 +1147,49 @@ export async function runAgentExecution(data: AgentExecutionJob) {
         }
       }
 
+      // Remembered-answer match (WS1.9): auto-answer when the per-agent toggle
+      // is on and confidence is high; otherwise attach the best previous
+      // answer so the UI can prefill it. Computed before the waiting step is
+      // created so an auto-answer can resolve the pause without ever
+      // persisting a waiting_for_input state.
+      let suggestedAnswer: { memoryId: string; content: string; score: number } | null = null
+      if (pendingAsk) {
+        try {
+          const remembered = await prisma.agentMemory.findMany({
+            where: { organizationId, agentId: agent.id, kind: 'user_answer', status: 'open' },
+            select: { id: true, question: true, content: true, embedding: true },
+            orderBy: { createdAt: 'desc' },
+            take: 100,
+          })
+          if (remembered.length) {
+            let questionVec: number[] | null = null
+            if (embeddingsConfigured()) {
+              questionVec = await embedQuery(pendingAsk.question.slice(0, 2000)).catch(() => null)
+            }
+            const match = bestAnswerMatch(questionVec, pendingAsk.question, remembered)
+            if (match) suggestedAnswer = { memoryId: match.id, content: match.content, score: match.score }
+          }
+        } catch {
+          /* best-effort */
+        }
+
+        if (suggestedAnswer && agentMetadata.autoAnswerFromMemory === true) {
+          await recordEvent(execution.id, null, 'agent.question.autoanswered', {
+            question: pendingAsk.question,
+            answer: suggestedAnswer.content,
+            memoryId: suggestedAnswer.memoryId,
+            score: suggestedAnswer.score,
+          })
+          void markMemoriesUsed([suggestedAnswer.memoryId])
+          // Mirror how a normal tool result is appended for this turn (pushed
+          // into `results`, not appended directly) so it rides along with any
+          // other tool calls made this same turn and the loop proceeds exactly
+          // as it would after any other resolved tool call.
+          results.push({ toolCallId: pendingAsk.toolCallId, content: suggestedAnswer.content })
+          pendingAsk = null
+        }
+      }
+
       if (pendingAsk) {
         const step = await prisma.workflowStep.create({
           data: {
@@ -1087,7 +1200,10 @@ export async function runAgentExecution(data: AgentExecutionJob) {
             startedAt: new Date(),
           },
         })
-        await recordEvent(execution.id, step.id, 'agent.question', { question: pendingAsk.question })
+        await recordEvent(execution.id, step.id, 'agent.question', {
+          question: pendingAsk.question,
+          ...(suggestedAnswer ? { suggestedAnswer: { content: suggestedAnswer.content, memoryId: suggestedAnswer.memoryId } } : {}),
+        })
         await prisma.executionMessage.create({
           data: { executionId: execution.id, role: 'agent', content: pendingAsk.question },
         })
@@ -1232,6 +1348,20 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       // its owner, matching executionVisibilityScope for row-level access.
       ownerUserId: agent.userId ?? null,
       visibility: agent.visibility === 'private' ? 'private' : 'shared',
+    }).catch(() => undefined)
+    // Post-run reflection (WS1.9): distill learnings + critique + suggestions.
+    // Chained before graph indexing enrichment is NOT needed — indexExecution
+    // already ran; reflection memories are graph-indexed via their own path in
+    // plan 2. Fire-and-forget: never blocks or fails the run.
+    void reflectAndRemember({
+      organizationId,
+      agentId: agent.id,
+      executionId: execution.id,
+      goal: (agent as { goal?: string | null }).goal ?? null,
+      objective: agent.objective,
+      summary,
+      processLog: transcriptSummaryForReflection(transcript),
+      recordSuggestionEvent: (payload) => recordEvent(execution.id, null, 'agent.suggestion', payload),
     }).catch(() => undefined)
     return { ...output, executionId: execution.id }
   } catch (error) {
