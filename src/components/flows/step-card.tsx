@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   PanelRight,
   Plus,
+  RefreshCw,
   Repeat,
   Rows3,
   SlidersHorizontal,
@@ -26,7 +27,7 @@ import {
 } from 'lucide-react'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
-import { CONDITION_OPS, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
+import { CONDITION_OPS, FIELD_TYPES, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import type { ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
@@ -182,6 +183,7 @@ export function StepCard({
   toolCatalog,
   onChange,
   onClick,
+  onRefreshAgents,
 }: {
   node: FlowNode
   index?: number
@@ -193,6 +195,7 @@ export function StepCard({
   toolCatalog: ToolCatalog
   onChange?: (node: FlowNode) => void
   onClick?: () => void
+  onRefreshAgents?: () => void
 }) {
   const Icon = NODE_ICON[node.type]
   const update = (updated: FlowNode) => onChange?.(updated)
@@ -255,7 +258,7 @@ export function StepCard({
         </button>
       </div>
       <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-        {renderNodeBody({ node, agents, toolCatalog, update })}
+        {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents })}
       </div>
     </div>
   )
@@ -266,17 +269,19 @@ function renderNodeBody({
   agents,
   toolCatalog,
   update,
+  onRefreshAgents,
 }: {
   node: FlowNode
   agents: Agent[]
   toolCatalog: ToolCatalog
   update: (node: FlowNode) => void
+  onRefreshAgents?: () => void
 }) {
   switch (node.type) {
     case 'trigger':
       return <TriggerBody node={node} update={update} />
     case 'agent':
-      return <AgentBody node={node} agents={agents} update={update} />
+      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} />
     case 'http':
       return <HttpBody node={node} update={update} />
     case 'tool':
@@ -417,24 +422,60 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
   )
 }
 
-function AgentBody({ node, agents, update }: { node: Extract<FlowNode, { type: 'agent' }>; agents: Agent[]; update: (node: FlowNode) => void }) {
+function AgentBody({
+  node,
+  agents,
+  update,
+  onRefreshAgents,
+}: {
+  node: Extract<FlowNode, { type: 'agent' }>
+  agents: Agent[]
+  update: (node: FlowNode) => void
+  onRefreshAgents?: () => void
+}) {
   const isDefaultInput = defaultAgentInput(node.data.input)
+  const responseFormat = node.data.responseFormat ?? 'text'
+  const outputFields = node.data.outputFields ?? []
+  const setOutputFields = (fields: OutputField[]) =>
+    update({ ...node, data: { ...node.data, outputFields: fields.length ? fields : undefined } })
   return (
     <div className="space-y-4">
       <div className="grid gap-2">
-        <label className={labelClass}>Agent</label>
-        <select
-          value={node.data.agentId}
-          onChange={(event) => update({ ...node, data: { ...node.data, agentId: event.target.value } })}
-          className={controlClass}
-        >
-          <option value="">Choose an agent</option>
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.title}
-            </option>
-          ))}
-        </select>
+        <label className={labelClass}>Agent <span className="text-red-500">*</span></label>
+        <div className="flex items-center gap-2">
+          <select
+            value={node.data.agentId}
+            onChange={(event) => update({ ...node, data: { ...node.data, agentId: event.target.value } })}
+            className={cn(controlClass, 'min-w-0 flex-1')}
+          >
+            <option value="">Choose an agent</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.title}
+              </option>
+            ))}
+          </select>
+          {onRefreshAgents && (
+            <button
+              type="button"
+              onClick={onRefreshAgents}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              aria-label="Refresh agent list"
+              title="Refresh agent list"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          )}
+          <a
+            href="/dashboard"
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            title="Create a new agent on the dashboard"
+          >
+            <Plus className="h-4 w-4" /> New
+          </a>
+        </div>
       </div>
       <div className="grid gap-2">
         <label className={labelClass}>Message to agent</label>
@@ -444,7 +485,89 @@ function AgentBody({ node, agents, update }: { node: Extract<FlowNode, { type: '
           className={textareaClass}
           placeholder={isDefaultInput ? 'Uses the trigger input by default. Add instructions here if needed.' : 'Tell the agent what to do at this step.'}
         />
-        <p className="text-xs text-slate-500">Use the settings panel for advanced data mapping from previous steps.</p>
+      </div>
+      <div className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 p-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">Request human assistance when unsure</p>
+          <p className="mt-0.5 text-xs text-slate-500">When the agent isn&apos;t sure how to proceed, the flow pauses and asks for input.</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={node.data.humanAssistance !== false}
+          onClick={() => update({ ...node, data: { ...node.data, humanAssistance: node.data.humanAssistance === false ? undefined : false } })}
+          className={cn(
+            'relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors',
+            node.data.humanAssistance !== false ? 'bg-blue-600' : 'bg-slate-300',
+          )}
+        >
+          <span
+            className={cn(
+              'absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all',
+              node.data.humanAssistance !== false ? 'left-[22px]' : 'left-0.5',
+            )}
+          />
+        </button>
+      </div>
+      <div className="grid gap-2">
+        <div className="flex items-center justify-between">
+          <label className={labelClass}>Agent response</label>
+          <select
+            value={responseFormat}
+            onChange={(event) =>
+              update({ ...node, data: { ...node.data, responseFormat: event.target.value === 'structured' ? 'structured' : undefined } })
+            }
+            className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs font-semibold text-slate-700 outline-none"
+          >
+            <option value="text">Text only</option>
+            <option value="structured">Structured</option>
+          </select>
+        </div>
+        <p className="text-xs text-slate-500">
+          {responseFormat === 'structured'
+            ? 'The agent must reply with JSON matching these properties; each becomes data for later steps.'
+            : 'The agent replies with plain text. Switch to Structured to map fields into later steps.'}
+        </p>
+        {responseFormat === 'structured' && (
+          <div className="space-y-2">
+            {outputFields.map((field, index) => (
+              <div key={index} className="grid gap-2 sm:grid-cols-[1fr_120px_36px]">
+                <input
+                  value={field.name}
+                  onChange={(event) => setOutputFields(outputFields.map((entry, j) => (j === index ? { ...entry, name: event.target.value } : entry)))}
+                  className={controlClass}
+                  placeholder="propertyName"
+                />
+                <select
+                  value={field.type}
+                  onChange={(event) => setOutputFields(outputFields.map((entry, j) => (j === index ? { ...entry, type: event.target.value as OutputField['type'] } : entry)))}
+                  className={controlClass}
+                >
+                  {FIELD_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setOutputFields(outputFields.filter((_, j) => j !== index))}
+                  className="flex h-10 w-10 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  aria-label="Remove property"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setOutputFields([...outputFields, { name: '', type: 'string' }])}
+              className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+            >
+              Add property
+            </button>
+          </div>
+        )}
       </div>
       <AdvancedParamsSection node={node} onChange={update} />
     </div>

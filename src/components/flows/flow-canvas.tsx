@@ -292,6 +292,7 @@ export function FlowCanvas({
   onChangeNode,
   onInsertAfter,
   onAppendBranch,
+  onRefreshAgents,
 }: {
   graph: FlowGraph
   agentName: (agentId: string) => string
@@ -303,6 +304,7 @@ export function FlowCanvas({
   onChangeNode: (node: FlowNode) => void
   onInsertAfter: (afterId: string, type: StepType, seed?: FlowInsertSeed) => void
   onAppendBranch: (conditionId: string, branch: string, type: StepType, seed?: FlowInsertSeed) => void
+  onRefreshAgents?: () => void
 }) {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const nextOf = (id: string): FlowNode | undefined => {
@@ -394,6 +396,7 @@ export function FlowCanvas({
       toolCatalog={toolCatalog}
       onChange={onChangeNode}
       onClick={() => onSelect(node.id)}
+      onRefreshAgents={onRefreshAgents}
     />
   )
 

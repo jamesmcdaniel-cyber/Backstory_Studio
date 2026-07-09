@@ -420,6 +420,31 @@ export function StepDrawer({
               </div>
             </div>
             <AdvancedParamsSection node={node} onChange={onChange} defaultOpen />
+            <div>
+              <label className={labelClass}>Human assistance</label>
+              <select
+                className={fieldClass}
+                value={node.data.humanAssistance === false ? 'off' : 'on'}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, humanAssistance: e.target.value === 'off' ? false : undefined } })}
+              >
+                <option value="on">Pause and ask when unsure</option>
+                <option value="off">Never ask — fail instead</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Agent response</label>
+              <select
+                className={fieldClass}
+                value={node.data.responseFormat ?? 'text'}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, responseFormat: e.target.value === 'structured' ? 'structured' : undefined } })}
+              >
+                <option value="text">Text only</option>
+                <option value="structured">Structured (JSON matching output fields)</option>
+              </select>
+              {node.data.responseFormat === 'structured' && !(node.data.outputFields ?? []).some((f) => f.name.trim()) && (
+                <p className="mt-1.5 text-xs text-amber-600">Add at least one output field below to define the JSON shape.</p>
+              )}
+            </div>
             <OutputFieldsEditor
               fields={node.data.outputFields ?? []}
               onChange={(outputFields) => onChange({ ...node, data: { ...node.data, outputFields: outputFields.length ? outputFields : undefined } })}

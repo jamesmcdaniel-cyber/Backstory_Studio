@@ -507,6 +507,11 @@ export default function FlowBuilder() {
     }
   }, [id, name, router])
 
+  const refreshAgents = useCallback(async () => {
+    const data = await fetch('/api/agents', { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
+    if (data?.success) setAgents(data.agents.map((a: Agent) => ({ id: a.id, title: a.title })))
+  }, [])
+
   const applyInsertSeed = useCallback((next: FlowGraph, nodeId: string, seed?: FlowInsertSeed): FlowGraph => {
     if (!seed) return next
     const node = next.nodes.find((entry) => entry.id === nodeId)
@@ -703,6 +708,7 @@ export default function FlowBuilder() {
               commitGraph(next)
               setSelectedId(nodeId)
             }}
+            onRefreshAgents={refreshAgents}
           />
         </div>
 
