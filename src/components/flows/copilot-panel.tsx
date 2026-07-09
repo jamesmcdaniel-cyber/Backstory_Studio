@@ -38,10 +38,14 @@ export function CopilotPanel({
   const [loading, setLoading] = useState(false)
   const threadRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  // The graph prop changes on every edit; a ref keeps the async send handler
-  // reading the latest canvas instead of the render it was created in.
+  // The graph prop (and the page's onOps closure over it) changes on every
+  // edit; refs keep the async send handler reading the latest canvas instead
+  // of the render it was created in — otherwise a mid-request manual edit
+  // would be clobbered when the response ops apply against the old graph.
   const graphRef = useRef(graph)
   graphRef.current = graph
+  const onOpsRef = useRef(onOps)
+  onOpsRef.current = onOps
 
   const emptyCanvas = graph.nodes.length <= 1
 
@@ -104,7 +108,7 @@ export function CopilotPanel({
       })
       const data = await response.json()
       if (response.ok && data.success) {
-        const result = onOps((data.ops ?? []) as CopilotOp[])
+        const result = onOpsRef.current((data.ops ?? []) as CopilotOp[])
         const parts: string[] = []
         if (result.applied > 0) parts.push(`Applied ${result.applied} change${result.applied === 1 ? '' : 's'}`)
         if (result.skipped.length > 0) parts.push(`${result.skipped.length} skipped`)
