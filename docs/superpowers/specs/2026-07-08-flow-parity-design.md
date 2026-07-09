@@ -95,6 +95,19 @@ Agent node config gains:
 
 ---
 
+## 1.75. Canvas UX parity (added 2026-07-08, user reference screenshots)
+
+The builder canvas must read like the Copilot Studio designer, not a form stack:
+
+- **Collapsed cards by default.** Every step card renders compact — icon, title, (subtitle), status, ⋯ menu — with NO config form. Only the **selected** card expands to show its inline body (Section 1's hybrid config), matching the reference screenshot. Special case: a card with a single primary affordance (manual trigger's "+ Add an input", Respond-style "+ Add an output") may show that affordance while collapsed, as MS does.
+- **Connector treatment.** Between cards: a vertical line with an arrowhead into the next card and a circular ⊕ insert button centered on the line (replacing the current bare plus). Same connector inside branch containers.
+- **Selection affordance.** Clicking anywhere on a collapsed card selects + expands it; clicking the canvas background deselects (collapsing all). Expand/collapse animates (the `motion` library is already a dependency).
+- **General freshness.** Card corner radius/shadow/spacing tuned to the reference; dot-grid backdrop stays. Deeper chrome parity (left zoom/fit-view rail, minimap, canvas search) belongs to Workstream 3's toolbar work — noted there, not here.
+
+The broader "not as user-friendly as MS" gap is carried by the already-planned workstreams: 2 (picker/catalog UX) and 3 (toolbar surfaces). This section covers only the canvas card/connector behavior.
+
+---
+
 ## 1.5. Backstory MCP native connection + onboarding gate
 
 *Added 2026-07-08 mid-execution at user request.*
