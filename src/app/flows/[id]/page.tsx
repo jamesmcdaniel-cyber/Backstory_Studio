@@ -864,7 +864,7 @@ export default function FlowBuilder() {
               dataFields={dataFields}
               statusByNode={viewingVersion ? {} : statusByNode}
               issuesByNode={viewingVersion ? undefined : issuesByNode}
-              highlightIds={highlightIds}
+              highlightIds={viewingVersion ? [] : highlightIds}
               selectedId={selectedId}
               onSelect={viewingVersion ? () => {} : setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}

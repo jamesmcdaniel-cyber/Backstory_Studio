@@ -92,7 +92,9 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
           ? 'I could not apply those changes — the targets may no longer exist.'
           : 'I applied the requested changes.')
     let message = totalDiscarded > 0 ? baseMessage + discardNotice(totalDiscarded) : baseMessage
-    if (applied.applied > 0 && applied.skipped.length > 0) {
+    // Fires even when nothing applied but the model supplied its own (possibly
+    // optimistic) message — the applied===0 fallback only covers the no-message case.
+    if (applied.skipped.length > 0 && (applied.applied > 0 || reply.message)) {
       message += ` (${applied.skipped.length} change${applied.skipped.length === 1 ? '' : 's'} could not be applied.)`
     }
     const validation = validateFlowGraph(applied.graph, {
