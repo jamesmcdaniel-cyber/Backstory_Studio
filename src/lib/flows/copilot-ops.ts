@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { flowGraphSchema, flowNodeSchema, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { flowNodeSchema, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
 import { deleteNode, insertNodeAfter, moveNodeAfter, updateNode, type StepType } from '@/lib/flows/mutate'
 
 /**
@@ -26,12 +26,20 @@ const updateOp = z.object({ op: z.literal('update'), id: z.string(), data: loose
 const deleteOp = z.object({ op: z.literal('delete'), id: z.string() }).passthrough()
 const moveOp = z.object({ op: z.literal('move'), id: z.string(), afterId: z.string() }).passthrough()
 const setTriggerOp = z.object({ op: z.literal('setTrigger'), trigger: looseData }).passthrough()
-// `graph` is attached server-side after sanitizing `graphJson`; the client
-// engine only ever applies the sanitized `graph` and never parses `graphJson`.
-const replaceOp = z.object({ op: z.literal('replace'), graphJson: z.string(), graph: flowGraphSchema.optional() }).passthrough()
+// The wire shape accepts ONLY `graphJson` — deliberately strip mode (no
+// `.passthrough()`), so a model-hallucinated `graph` key is dropped at parse
+// time and can never masquerade as server-sanitized. The server parses and
+// sanitizes `graphJson`, then attaches the trusted `graph` itself; the engine
+// only ever applies `op.graph` and never parses `graphJson`.
+const replaceOp = z.object({ op: z.literal('replace'), graphJson: z.string() })
 
 export const copilotOpSchema = z.discriminatedUnion('op', [addOp, updateOp, deleteOp, moveOp, setTriggerOp, replaceOp])
 
+/**
+ * Runtime op type: the wire schema's output, widened so the replace member
+ * carries the server-attached, sanitized `graph?`. Parsed model output never
+ * has `graph` — only the server sets it, post-sanitization.
+ */
 export type CopilotOp =
   | { op: 'add'; type: StepType; afterId: string; agentId?: string; data?: Record<string, unknown> }
   | { op: 'update'; id: string; data: Record<string, unknown> }
@@ -49,7 +57,16 @@ export type ApplyResult = {
 
 /** Shallow-merge `data` over a node's data and schema-validate the result. */
 function mergeNodeData(node: FlowNode, data: Record<string, unknown>): FlowNode | null {
-  const parsed = flowNodeSchema.safeParse({ ...node, data: { ...node.data, ...data } })
+  // Container reference keys (loop `body`, parallel `branches`) are structural
+  // wiring, not step config — a data merge must never repoint them (for any
+  // node type). Containers will be edited via dedicated ops later.
+  const safe = { ...data }
+  delete safe.body
+  delete safe.branches
+  // flowNodeSchema runs in zod strip mode, so unknown data keys are silently
+  // dropped: an update containing only unknown keys reports applied while
+  // changing nothing.
+  const parsed = flowNodeSchema.safeParse({ ...node, data: { ...node.data, ...safe } })
   return parsed.success ? parsed.data : null
 }
 
@@ -171,6 +188,12 @@ export function applyCopilotOps(graph: FlowGraph, ops: CopilotOp[]): ApplyResult
         }
         apply(op.graph)
         // The whole canvas changed — replace touches no individual node ids.
+        break
+      }
+      default: {
+        // Accounting invariant: ops.length === applied + skipped.length even
+        // for op kinds this engine doesn't know (e.g. newer callers).
+        skip(op, 'unknown op')
         break
       }
     }

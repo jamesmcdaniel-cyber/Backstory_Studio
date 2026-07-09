@@ -60,6 +60,28 @@ test('setTrigger merges trigger data; replace applies only server-sanitized grap
   assert.equal(sane.graph.nodes.some((n) => n.type === 'stop'), true)
 })
 
+test('wire schema strips a hallucinated graph field from replace ops', () => {
+  const parsed = copilotOpSchema.safeParse({ op: 'replace', graphJson: 'x', graph: { nodes: [], edges: [] } })
+  assert.equal(parsed.success, true)
+  assert.equal(parsed.success && 'graph' in parsed.data, false)
+  const result = applyCopilotOps(emptyGraph(), [parsed.success ? (parsed.data as CopilotOp) : ({} as CopilotOp)])
+  assert.equal(result.applied, 0)
+  assert.equal(result.skipped.length, 1)
+  assert.match(result.skipped[0].reason, /unsanitized/)
+})
+
+test('update cannot rewrite container reference keys (loop body, parallel branches)', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'loop').graph
+  const loop = g.nodes.find((n) => n.type === 'loop')!
+  const originalBody = (loop.data as { body: string[] }).body
+  const result = applyCopilotOps(g, [{ op: 'update', id: loop.id, data: { body: ['trigger'], label: 'x' } }] as CopilotOp[])
+  assert.equal(result.applied, 1)
+  const updated = result.graph.nodes.find((n) => n.id === loop.id)!
+  assert.equal((updated.data as { label?: string }).label, 'x')
+  assert.deepEqual((updated.data as { body: string[] }).body, originalBody)
+})
+
 test('copilotOpSchema parses model-shaped ops and tolerates extra keys', () => {
   const parsed = copilotOpSchema.safeParse({ op: 'add', type: 'http', afterId: 'trigger', data: { url: 'https://x.test' }, note: 'why not' })
   assert.equal(parsed.success, true)
