@@ -129,7 +129,7 @@ export async function decideApproval(input: {
       input.organizationId,
       JSON.stringify({ status: 'rejected', message: 'The approver rejected this action. Do not retry it; continue without it.' }),
     )
-    return { status: 'rejected', executed: false, resume }
+    return { status: 'rejected', executed: false, ...(resume ? { resume } : {}) }
   }
 
   // Approve: atomically claim the pending request (pending→approving) so exactly
@@ -194,7 +194,7 @@ export async function decideApproval(input: {
     input.organizationId,
     JSON.stringify({ status: 'approved', executed, result: writeResult }),
   )
-  return { status: 'approved', executed, resume }
+  return { status: 'approved', executed, ...(resume ? { resume } : {}) }
 }
 
 /** Report the settled decision for a request another caller already claimed. */
