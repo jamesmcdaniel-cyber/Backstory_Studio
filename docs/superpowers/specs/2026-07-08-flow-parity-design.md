@@ -28,6 +28,8 @@ Gaps vs. the Microsoft reference: trigger/action picker browsing UX, typed manua
 
 1. Step wiring core
 1.5. Backstory MCP native connection + onboarding gate (added 2026-07-08)
+1.75. Canvas UX parity (added 2026-07-08)
+1.9. Agent input memory (added 2026-07-08 — needs its own design pass): when an agent pauses with "needs your input" and the user answers, persist the question/answer pair (per user+agent) and store it in the knowledge graph (existing graph-RAG store / indexExecution path). On later runs the answer is retrieved as correlated context so the agent doesn't re-ask the same question, and other tasks/agents can reuse it. Open design questions: answer keying/matching (same question phrased differently), staleness/expiry, scope (user vs org), and opt-out for genuinely run-specific questions.
 2. Picker/catalog UX
 3. Toolbar surfaces (checker, test, versions)
 4. Trigger execution parity (schedule + signal)
