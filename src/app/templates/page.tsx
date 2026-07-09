@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import {
   Sparkles, TrendingUp, CalendarClock, ShieldAlert, Target,
-  Inbox, LineChart, Bell, Plus, Pencil, Trash2,
+  Inbox, LineChart, Bell, Plus, Pencil, Trash2, X, Loader2,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
@@ -126,6 +126,11 @@ function ExplorePage() {
   const [error, setError] = useState<string | null>(null)
   // One search box filters whichever tab is active (name/description/category/tags).
   const [search, setSearch] = useState('')
+  // AI template finder: same search box, but Enter/"Ask AI" asks the model to
+  // match the typed goal against the loaded catalog instead of substring-filtering.
+  const [aiResults, setAiResults] = useState<{ id: string; kind: string; reason: string }[] | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
   // Card grids cap at 9 per page; each tab pages independently.
   const [templatesPage, setTemplatesPage] = useState(1)
   const [skillsPage, setSkillsPage] = useState(1)
@@ -255,6 +260,48 @@ function ExplorePage() {
     setSkillsPage(1)
   }
 
+  // Asks the model to match the typed goal against the already-loaded catalog.
+  // Setting aiResults to [] immediately (rather than leaving it null) opens the
+  // suggestions section right away so the loading spinner has somewhere to render.
+  const runAiSearch = async () => {
+    const goal = search.trim()
+    if (goal.length < 3 || aiLoading) return
+    setAiResults([])
+    setAiError(null)
+    setAiLoading(true)
+    try {
+      const items = [
+        ...templates.map((t) => ({ id: t.id, kind: 'template' as const, name: t.name, description: t.description, category: t.category, tags: t.tags })),
+        ...skills.map((s) => ({ id: s.id, kind: 'skill' as const, name: s.name, description: s.description, category: s.category, tags: s.tags })),
+      ]
+      const res = await fetch('/api/templates/ai-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: goal, items }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setAiError(data.error || 'Could not find matches for that goal.')
+        return
+      }
+      setAiResults(data.matches || [])
+    } catch {
+      setAiError('Could not find matches for that goal.')
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const closeAiResults = () => {
+    setAiResults(null)
+    setAiError(null)
+  }
+
+  const jumpToMatch = (match: { id: string; kind: string }, name: string) => {
+    handleTabChange(match.kind === 'skill' ? 'skills' : 'templates')
+    onSearch(name)
+  }
+
   const addSkillToAgent = async (skill: SkillItem, agent: AgentItem) => {
     setOpenSkillMenu(null)
     const updatedSkills = Array.from(new Set([...(agent.skills || []), skill.id]))
@@ -326,12 +373,94 @@ function ExplorePage() {
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         <PageHeader eyebrow="Library" title="Explore" />
 
-        <Input
-          value={search}
-          onChange={(event) => onSearch(event.target.value)}
-          placeholder="Search templates and skills…"
-          className="max-w-md"
-        />
+        <div className="flex max-w-md items-center gap-2">
+          <Input
+            value={search}
+            onChange={(event) => onSearch(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') runAiSearch()
+            }}
+            placeholder="Describe what you want to accomplish — press Enter for AI matches…"
+            className="flex-1"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={search.trim().length < 3 || aiLoading}
+            onClick={runAiSearch}
+          >
+            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            Ask AI
+          </Button>
+        </div>
+
+        {aiResults !== null && (
+          <div className="space-y-3 rounded-xl border border-indigo-200/60 bg-indigo-50/40 p-4 dark:border-indigo-500/20 dark:bg-indigo-500/5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-300" />
+                <h3 className="text-sm font-semibold">AI suggestions</h3>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss AI suggestions"
+                onClick={closeAiResults}
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {aiLoading ? (
+              <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Finding templates for your goal…
+              </div>
+            ) : aiError ? (
+              <p className="text-sm text-red-600 dark:text-red-400">{aiError}</p>
+            ) : aiResults.length === 0 ? (
+              <EmptyState
+                icon={Sparkles}
+                title="No templates match that goal yet."
+                description="You can create one."
+                action={
+                  <Button size="sm" onClick={() => openCreate(activeTab === 'skills' ? 'skill' : 'template')}>
+                    <Plus className="mr-1.5 h-4 w-4" />
+                    {activeTab === 'skills' ? 'Create skill' : 'Create template'}
+                  </Button>
+                }
+              />
+            ) : (
+              <div className="space-y-2">
+                {aiResults.map((match) => {
+                  const item =
+                    match.kind === 'skill'
+                      ? skills.find((s) => s.id === match.id)
+                      : templates.find((t) => t.id === match.id)
+                  if (!item) return null
+                  return (
+                    <div
+                      key={`${match.kind}-${match.id}`}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-card p-3"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-medium">{item.name}</span>
+                          <Badge variant="outline" className="text-[11px]">{item.category}</Badge>
+                        </div>
+                        <p className="text-xs italic text-muted-foreground">{match.reason}</p>
+                      </div>
+                      <Button size="sm" variant="outline" onClick={() => jumpToMatch(match, item.name)}>
+                        View
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList>
