@@ -1,18 +1,26 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import {
   AlertCircle,
+  Brain,
   CheckCircle2,
   ChevronDown,
   CircleDashed,
   HelpCircle,
+  History,
+  Lightbulb,
+  Link as LinkIcon,
+  ListOrdered,
   Loader2,
+  MessageSquareQuote,
   Network,
   Play,
   Send,
   Sparkles,
   Wrench,
+  X,
   XCircle,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -420,6 +428,109 @@ function ContextCard({ summary, hits, related }: { summary: string; hits: Contex
   )
 }
 
+// The agent's plan for the run, announced up front so the timeline reads as
+// "here's what I'm going to do" before the tool calls that carry it out.
+function PlanCard({ text }: { text: string }) {
+  return (
+    <div className="rounded-lg border border-dashed bg-white/60 px-3 py-2">
+      <p className="mono-label mb-1 flex items-center gap-1.5 text-gray-400">
+        <ListOrdered className="h-3 w-3" /> Plan
+      </p>
+      <p className="whitespace-pre-wrap text-sm text-gray-600">{text}</p>
+    </div>
+  )
+}
+
+// A memory the agent pulled in from a prior run — kept to a single collapsed
+// summary line, matching the context card's default (unexpanded) density.
+function MemoryCard({ summary }: { summary: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-horizon-200 bg-horizon-50/40 px-3 py-2">
+      <p className="mono-label mb-1 flex items-center gap-1.5 text-horizon-700">
+        <Brain className="h-3 w-3" /> Memory
+      </p>
+      <p className="text-sm text-gray-600">{summary}</p>
+    </div>
+  )
+}
+
+// A question the agent would normally have asked the user, answered instead
+// from a remembered prior answer — surfaced so the automation stays visible.
+function AutoAnswerCard({ question, answer }: { question: string; answer: string }) {
+  return (
+    <div className="rounded-lg border border-dashed bg-white/60 px-3 py-2">
+      <p className="mono-label mb-1 flex items-center gap-1.5 text-gray-400">
+        <MessageSquareQuote className="h-3 w-3" /> Answered from memory
+      </p>
+      <p className="text-sm text-gray-500">{question}</p>
+      <p className="text-sm font-semibold text-gray-800">{answer}</p>
+    </div>
+  )
+}
+
+type SuggestionItem = { memoryId: string; title: string; rationale: string; actionType: string }
+
+// Suggestions the agent surfaced from this run (e.g. "remember this" or
+// "connect this integration"), rendered after the timeline with a per-row
+// dismiss so the user can act on or clear each one without leaving the pane.
+function SuggestionsCard({
+  suggestions,
+  agentId,
+  onChanged,
+}: {
+  suggestions: SuggestionItem[]
+  agentId: string
+  onChanged: () => void
+}) {
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
+  const visible = suggestions.filter((suggestion) => !dismissedIds.has(suggestion.memoryId))
+  if (!visible.length) return null
+
+  const dismiss = async (memoryId: string) => {
+    setDismissedIds((current) => new Set(current).add(memoryId))
+    try {
+      await fetch(`/api/agents/${agentId}/memories`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: memoryId, status: 'dismissed' }),
+      })
+    } finally {
+      onChanged()
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50/40 px-3 py-3">
+      <h4 className="mono-label mb-2 flex items-center gap-1.5 text-amber-700">
+        <Lightbulb className="h-3.5 w-3.5" /> Suggestions
+      </h4>
+      <ul className="space-y-2">
+        {visible.map((suggestion) => (
+          <li key={suggestion.memoryId} className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-800">{suggestion.title}</p>
+              <p className="text-xs text-gray-500">{suggestion.rationale}</p>
+              {suggestion.actionType === 'connect' && (
+                <Link href="/connections" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                  <LinkIcon className="h-3 w-3" /> Open connections
+                </Link>
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label="Dismiss suggestion"
+              onClick={() => dismiss(suggestion.memoryId)}
+              className="shrink-0 rounded p-1 text-gray-400 transition-colors duration-150 hover:bg-amber-100 hover:text-gray-600"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 // Merge thinking events and tool-call steps into one chronological process
 // timeline, so the log reads as the agent's reasoning interleaved with its calls.
 type ContextFact = { type: string; text: string }
@@ -427,10 +538,14 @@ type TimelineItem =
   | { key: string; ts: number; kind: 'thinking'; text: string }
   | { key: string; ts: number; kind: 'tool'; step: RunStep }
   | { key: string; ts: number; kind: 'context'; summary: string; hits: ContextFact[]; related: ContextFact[] }
+  | { key: string; ts: number; kind: 'plan'; text: string }
+  | { key: string; ts: number; kind: 'memory'; summary: string }
+  | { key: string; ts: number; kind: 'autoanswer'; question: string; answer: string }
 
-function buildTimeline(details: RunDetails | null): TimelineItem[] {
-  if (!details) return []
+function buildTimeline(details: RunDetails | null): { items: TimelineItem[]; suggestions: SuggestionItem[] } {
+  if (!details) return { items: [], suggestions: [] }
   const items: TimelineItem[] = []
+  const suggestionsById = new Map<string, SuggestionItem>()
   for (const event of details.events ?? []) {
     if (event.kind === 'agent.thinking' && event.payload?.text) {
       items.push({ key: `t-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'thinking', text: String(event.payload.text) })
@@ -445,31 +560,66 @@ function buildTimeline(details: RunDetails | null): TimelineItem[] {
         related: Array.isArray(event.payload?.related) ? (event.payload.related as ContextFact[]) : [],
       })
     }
+    if (event.kind === 'agent.plan' && event.payload?.text) {
+      items.push({ key: `p-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'plan', text: String(event.payload.text) })
+    }
+    if (event.kind === 'memory.retrieved' && event.payload?.summary) {
+      items.push({ key: `m-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'memory', summary: String(event.payload.summary) })
+    }
+    if (event.kind === 'agent.question.autoanswered') {
+      items.push({
+        key: `a-${event.id}`,
+        ts: new Date(event.ts).getTime(),
+        kind: 'autoanswer',
+        question: String(event.payload?.question ?? ''),
+        answer: String(event.payload?.answer ?? ''),
+      })
+    }
+    if (event.kind === 'agent.suggestion' && event.payload?.memoryId) {
+      suggestionsById.set(String(event.payload.memoryId), {
+        memoryId: String(event.payload.memoryId),
+        title: String(event.payload.title ?? ''),
+        rationale: String(event.payload.rationale ?? ''),
+        actionType: String(event.payload.actionType ?? ''),
+      })
+    }
   }
   for (const step of details.steps ?? []) {
     const ts = step.startedAt ? new Date(step.startedAt).getTime() : 0
     items.push({ key: `s-${step.id}`, ts, kind: 'tool', step })
   }
-  return items.sort((a, b) => a.ts - b.ts)
+  return { items: items.sort((a, b) => a.ts - b.ts), suggestions: [...suggestionsById.values()] }
 }
 
 function RunRow({
   activity,
+  agentId,
   expanded,
   onToggle,
   onChanged,
+  onSuggestionsChanged,
 }: {
   activity: Activity
+  agentId: string
   expanded: boolean
   onToggle: () => void
   onChanged: () => void
+  /** Fired after a suggestion is dismissed so the pane's badge count can refresh. */
+  onSuggestionsChanged: () => void
 }) {
   const [details, setDetails] = useState<RunDetails | null>(null)
   const [reply, setReply] = useState('')
   const [replying, setReplying] = useState(false)
   const status = activityStatus(activity)
   const isActive = ['running', 'pending', 'waiting_for_input'].includes(status)
-  const timeline = buildTimeline(details)
+  const { items: timeline, suggestions } = buildTimeline(details)
+  // The most recent question this run asked that carries a remembered prior
+  // answer, so the reply box can offer a one-click prefill instead of making
+  // the user retype an answer the agent already has on file.
+  const suggested = [...(details?.events ?? [])]
+    .reverse()
+    .find((event) => event.kind === 'agent.question' && event.payload?.suggestedAnswer)
+    ?.payload?.suggestedAnswer as { content: string } | undefined
 
   useEffect(() => {
     if (!expanded) {
@@ -555,6 +705,11 @@ function RunRow({
                   {replying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>
+              {suggested && !reply && (
+                <button type="button" onClick={() => setReply(suggested.content)} className="mt-2 flex items-center gap-1.5 text-xs font-medium text-indigo-700 hover:text-indigo-900">
+                  <History className="h-3.5 w-3.5" /> Use previous answer: <span className="italic">“{suggested.content.slice(0, 80)}”</span>
+                </button>
+              )}
             </div>
           )}
 
@@ -573,7 +728,13 @@ function RunRow({
                     ? <ThinkingCard text={item.text} />
                     : item.kind === 'context'
                       ? <ContextCard summary={item.summary} hits={item.hits} related={item.related} />
-                      : <ToolCallCard step={item.step} />}
+                      : item.kind === 'plan'
+                        ? <PlanCard text={item.text} />
+                        : item.kind === 'memory'
+                          ? <MemoryCard summary={item.summary} />
+                          : item.kind === 'autoanswer'
+                            ? <AutoAnswerCard question={item.question} answer={item.answer} />
+                            : <ToolCallCard step={item.step} />}
                 </div>
               ))}
               {isActive && (
@@ -585,6 +746,10 @@ function RunRow({
               {details && !timeline.length && !isActive && <p className="text-sm text-gray-500">No steps recorded for this run.</p>}
             </div>
           </div>
+
+          {suggestions.length > 0 && (
+            <SuggestionsCard suggestions={suggestions} agentId={agentId} onChanged={onSuggestionsChanged} />
+          )}
 
           {/* The run's OUTPUT is shown in the assistant pane on the right (that
               surface holds agent output + the conversation); the left pane is
@@ -611,6 +776,7 @@ export function AgentActivityPane({
   onSelectRun?: (activity: Activity | null) => void
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [suggestionCount, setSuggestionCount] = useState(0)
 
   // Collapse when switching agents; expand the focused run when one arrives.
   useEffect(() => {
@@ -623,20 +789,49 @@ export function AgentActivityPane({
     onSelectRun?.(activities.find((activity) => activity.id === expandedId) ?? null)
   }, [expandedId, activities, onSelectRun])
 
+  // Open-suggestion count for the lightbulb badge: refetched whenever the
+  // selected agent changes, and again after a suggestion is dismissed below.
+  const refreshSuggestionCount = () => {
+    fetch(`/api/agents/${agent.id}/memories?kind=suggestion&status=open`, { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((data) => setSuggestionCount(typeof data.openSuggestions === 'number' ? data.openSuggestions : 0))
+      .catch(() => setSuggestionCount(0))
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { refreshSuggestionCount() }, [agent.id])
+
+  const header = (
+    <div className="flex items-center gap-2 border-b px-4 py-2">
+      <span className="truncate text-sm font-semibold">{agent.title}</span>
+      {suggestionCount > 0 && (
+        <span
+          title="Open suggestions from this agent's runs"
+          className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+        >
+          <Lightbulb className="h-3 w-3" /> {suggestionCount}
+        </span>
+      )}
+    </div>
+  )
+
   if (!activities.length) {
     return (
-      <div className="p-4">
-        <EmptyState
-          icon={Play}
-          title="No runs yet"
-          description="Create agent and logs will show here"
-        />
+      <div>
+        {header}
+        <div className="p-4">
+          <EmptyState
+            icon={Play}
+            title="No runs yet"
+            description="Create agent and logs will show here"
+          />
+        </div>
       </div>
     )
   }
 
   return (
     <div>
+      {header}
       {groupOrder.map((groupStatus) => {
         const items = activities.filter((activity) => activityStatus(activity) === groupStatus)
         if (!items.length) return null
@@ -653,9 +848,11 @@ export function AgentActivityPane({
               <RunRow
                 key={activity.id}
                 activity={activity}
+                agentId={agent.id}
                 expanded={expandedId === activity.id}
                 onToggle={() => setExpandedId((current) => (current === activity.id ? null : activity.id))}
                 onChanged={onChanged}
+                onSuggestionsChanged={refreshSuggestionCount}
               />
             ))}
           </div>
