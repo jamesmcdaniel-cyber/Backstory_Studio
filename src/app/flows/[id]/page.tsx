@@ -86,6 +86,10 @@ function storedRunInput(input: unknown): unknown {
   return input
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
 function triggerInputFields(graph: FlowGraph) {
   const triggerNode = graph.nodes.find((node): node is Extract<FlowNode, { type: 'trigger' }> => node.type === 'trigger')
   return triggerInputFieldsFromTrigger(triggerNode?.data.trigger)
@@ -754,6 +758,13 @@ export default function FlowBuilder() {
             onDeleteNode={(nodeId) => {
               commitGraph(deleteNode(graph, nodeId))
               if (selectedId === nodeId) setSelectedId(null)
+            }}
+            onPickTrigger={(type) => {
+              const triggerNode = graph.nodes.find((n) => n.type === 'trigger')
+              if (!triggerNode || triggerNode.type !== 'trigger') return
+              const current = isRecordLike(triggerNode.data.trigger) ? triggerNode.data.trigger : {}
+              commitGraph(updateNode(graph, { ...triggerNode, data: { trigger: { ...current, type } } }))
+              setSelectedId(triggerNode.id)
             }}
           />
         </div>

@@ -1,27 +1,13 @@
 'use client'
 
-import { Fragment, useMemo, useState } from 'react'
-import {
-  Bot,
-  CircleStop,
-  Filter,
-  GitBranch,
-  Globe,
-  Plus,
-  Repeat,
-  Rows3,
-  Search,
-  SlidersHorizontal,
-  Sparkles,
-  Split,
-  Wrench,
-} from 'lucide-react'
-import { IntegrationLogo } from '@/components/integrations/integration-logo'
+import { Fragment, useState } from 'react'
+import { Plus, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { FlowGraph, FlowNode } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
 import type { DataField } from '@/lib/flows/datatree'
 import { StepCard, type StepStatus } from './step-card'
+import { FlowPicker } from './flow-picker'
 import type { ToolCatalog } from './step-drawer'
 
 type Agent = { id: string; title: string }
@@ -31,90 +17,6 @@ export type FlowInsertSeed = {
   connectionId?: string
   toolName?: string
   label?: string
-}
-
-type PickerItem = {
-  id: string
-  type: StepType
-  label: string
-  description: string
-  icon: typeof Bot
-  tone: string
-  seed?: FlowInsertSeed
-  connector?: { id: string; name: string }
-}
-
-const BUILT_IN_ITEMS: PickerItem[] = [
-  {
-    id: 'http',
-    type: 'http',
-    label: 'HTTP request',
-    description: 'Send data to an API endpoint and use its response in later steps.',
-    icon: Globe,
-    tone: 'bg-emerald-600 text-white',
-  },
-  {
-    id: 'transform',
-    type: 'transform',
-    label: 'Set fields',
-    description: 'Create named values that downstream steps can reuse.',
-    icon: SlidersHorizontal,
-    tone: 'bg-violet-500 text-white',
-  },
-  {
-    id: 'condition',
-    type: 'condition',
-    label: 'If / else',
-    description: 'Route the flow down different paths based on a rule.',
-    icon: GitBranch,
-    tone: 'bg-amber-500 text-white',
-  },
-  {
-    id: 'switch',
-    type: 'switch',
-    label: 'Switch',
-    description: 'Route to one of several cases, with a default path.',
-    icon: Split,
-    tone: 'bg-fuchsia-600 text-white',
-  },
-  {
-    id: 'filter',
-    type: 'filter',
-    label: 'Filter',
-    description: 'Continue only when an item or value matches a rule.',
-    icon: Filter,
-    tone: 'bg-lime-600 text-white',
-  },
-  {
-    id: 'loop',
-    type: 'loop',
-    label: 'For each',
-    description: 'Run steps once for each item in a list.',
-    icon: Repeat,
-    tone: 'bg-sky-500 text-white',
-  },
-  {
-    id: 'parallel',
-    type: 'parallel',
-    label: 'Parallel branches',
-    description: 'Run independent branches at the same time.',
-    icon: Rows3,
-    tone: 'bg-cyan-600 text-white',
-  },
-  {
-    id: 'stop',
-    type: 'stop',
-    label: 'Stop flow',
-    description: 'End the flow early with an optional message.',
-    icon: CircleStop,
-    tone: 'bg-red-500 text-white',
-  },
-]
-
-function matchesQuery(item: PickerItem, query: string): boolean {
-  const normalized = query.trim().toLowerCase()
-  if (!normalized) return true
-  return `${item.label} ${item.description} ${item.connector?.name ?? ''}`.toLowerCase().includes(normalized)
 }
 
 function InsertMenu({
@@ -131,61 +33,6 @@ function InsertMenu({
   tail?: boolean
 }) {
   const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState('')
-
-  const agentItems = useMemo<PickerItem[]>(() => {
-    if (!agents.length) {
-      return [
-        {
-          id: 'agent',
-          type: 'agent',
-          label: 'Run an agent',
-          description: 'Add an agent step, then choose which agent to run.',
-          icon: Bot,
-          tone: 'bg-slate-900 text-white',
-        },
-      ]
-    }
-    return agents.map((agent) => ({
-      id: `agent-${agent.id}`,
-      type: 'agent',
-      label: agent.title,
-      description: 'Run this agent and pass its response to the next step.',
-      icon: Bot,
-      tone: 'bg-slate-900 text-white',
-      seed: { agentId: agent.id },
-    }))
-  }, [agents])
-
-  const connectorItems = useMemo<PickerItem[]>(
-    () =>
-      toolCatalog.map((connection) => ({
-        id: `connection-${connection.id}`,
-        type: 'tool',
-        label: connection.name,
-        description: connection.tools.length
-          ? `${connection.tools.length} available action${connection.tools.length === 1 ? '' : 's'}`
-          : 'Choose an action from this connection.',
-        icon: Wrench,
-        tone: 'bg-orange-500 text-white',
-        seed: {
-          connectionId: connection.id,
-          toolName: connection.tools[0]?.name ?? '',
-        },
-        connector: { id: connection.id, name: connection.name },
-      })),
-    [toolCatalog],
-  )
-
-  const filteredAgents = agentItems.filter((item) => matchesQuery(item, query))
-  const filteredBuiltIn = BUILT_IN_ITEMS.filter((item) => matchesQuery(item, query))
-  const filteredConnectors = connectorItems.filter((item) => matchesQuery(item, query))
-
-  const pick = (item: PickerItem) => {
-    setOpen(false)
-    setQuery('')
-    onPick(item.type, item.seed)
-  }
 
   return (
     <div className={cn('relative flex flex-col items-center', compact && 'items-start')} onClick={(event) => event.stopPropagation()}>
@@ -222,72 +69,20 @@ function InsertMenu({
               compact ? 'left-0 top-full w-[min(620px,calc(100vw-4rem))]' : 'left-1/2 top-full w-[min(720px,calc(100vw-4rem))] -translate-x-1/2',
             )}
           >
-            <div className="border-b border-slate-200 p-4">
-              <p className="text-lg font-semibold text-slate-950">Add an action</p>
-              <p className="mt-1 text-sm text-slate-500">Choose what should happen next in this flow.</p>
-              <div className="mt-4 flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
-                <Search className="h-4 w-4 text-slate-400" />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  className="min-w-0 flex-1 bg-transparent text-sm text-slate-950 outline-none placeholder:text-slate-400"
-                  placeholder="Search agents, actions, or connectors"
-                  autoFocus
-                />
-              </div>
-            </div>
-            <div className="max-h-[calc(72vh-126px)] space-y-5 overflow-y-auto p-4">
-              <PickerSection title="AI capabilities" items={filteredAgents} onPick={pick} />
-              <PickerSection title="Built-in tools" items={filteredBuiltIn} onPick={pick} />
-              {toolCatalog.length > 0 ? (
-                <PickerSection title="Connected tools" items={filteredConnectors} onPick={pick} />
-              ) : (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
-                  Connected tools will show here after this workspace has integrations available.
-                </div>
-              )}
-              {filteredAgents.length + filteredBuiltIn.length + filteredConnectors.length === 0 && (
-                <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No matching actions found.</p>
-              )}
-            </div>
+            <FlowPicker
+              mode="action"
+              agents={agents}
+              toolCatalog={toolCatalog}
+              onPick={(type, seed) => {
+                setOpen(false)
+                onPick(type, seed)
+              }}
+              onClose={() => setOpen(false)}
+            />
           </div>
         </>
       )}
     </div>
-  )
-}
-
-function PickerSection({ title, items, onPick }: { title: string; items: PickerItem[]; onPick: (item: PickerItem) => void }) {
-  if (!items.length) return null
-  return (
-    <section>
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{title}</h4>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {items.map((item) => {
-          const Icon = item.icon
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => onPick(item)}
-              className="flex min-h-[84px] items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-blue-300 hover:bg-blue-50"
-            >
-              {item.connector ? (
-                <IntegrationLogo slug={item.connector.id} name={item.connector.name} className="h-10 w-10 rounded-lg bg-white p-1 shadow-sm" />
-              ) : (
-                <span className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg', item.tone)}>
-                  <Icon className="h-5 w-5" />
-                </span>
-              )}
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-slate-950">{item.label}</span>
-                <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-slate-500">{item.description}</span>
-              </span>
-            </button>
-          )
-        })}
-      </div>
-    </section>
   )
 }
 
@@ -307,6 +102,7 @@ export function FlowCanvas({
   onDuplicateNode,
   onDeleteNode,
   onBackgroundClick,
+  onPickTrigger,
 }: {
   graph: FlowGraph
   agentName: (agentId: string) => string
@@ -323,6 +119,7 @@ export function FlowCanvas({
   onDuplicateNode?: (id: string) => void
   onDeleteNode?: (id: string) => void
   onBackgroundClick?: () => void
+  onPickTrigger?: (triggerType: 'manual' | 'schedule' | 'webhook' | 'signal') => void
 }) {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const nextOf = (id: string): FlowNode | undefined => {
@@ -511,6 +308,14 @@ export function FlowCanvas({
       </div>
       <div className="flex w-full flex-col items-center">
         {trigger && card(trigger)}
+        {trigger && !first && (
+          <div
+            className="mt-4 w-full max-w-[620px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <FlowPicker mode="trigger" agents={agents} toolCatalog={toolCatalog} onPick={() => {}} onPickTrigger={onPickTrigger} onClose={() => {}} />
+          </div>
+        )}
         {trigger && !first && (
           <div className="flex flex-col items-center">
             <div className="h-6 w-px bg-slate-300" />
