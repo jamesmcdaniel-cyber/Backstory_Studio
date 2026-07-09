@@ -276,5 +276,25 @@ export async function runFlowExecution(
     where: { id: run.id },
     data: { status, output: jsonValue(result.output), finishedAt: status === 'waiting' ? null : new Date() },
   })
+
+  // Fire the flow.completed signal for other flows listening in this org.
+  // Dynamic import: signals.ts imports runFlowExecution statically (it fires
+  // matched flows), so a static import here back to signals.ts would be a
+  // cycle — this keeps the edge one-directional. Fire-and-forget: a signal
+  // emit must never block or fail this run's completion.
+  if (status === 'succeeded') {
+    void import('./signals')
+      .then((signals) =>
+        signals.emitFlowSignal({
+          organizationId: job.organizationId,
+          signal: 'flow.completed',
+          payload: { flowId: flow.id, flowName: flow.name, output: result.output },
+          sourceFlowId: flow.id,
+          depth: signals.signalDepthOf(job.trigger) + 1,
+        }),
+      )
+      .catch(() => undefined)
+  }
+
   return { flowRunId: run.id, status, output: result.output }
 }

@@ -4,6 +4,12 @@ export const FLOW_TRIGGER_TYPES = ['manual', 'schedule', 'webhook', 'signal'] as
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number]
 export type FlowTrigger = { type: FlowTriggerType; [key: string]: unknown }
 
+// Signals a flow's trigger can listen for (a signal-type trigger fires when a
+// flow or agent completes elsewhere in the org). Client-safe — no prisma — so
+// the builder UI can import this list directly.
+export const KNOWN_SIGNALS = ['flow.completed', 'agent.completed'] as const
+export type KnownSignal = (typeof KNOWN_SIGNALS)[number]
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }

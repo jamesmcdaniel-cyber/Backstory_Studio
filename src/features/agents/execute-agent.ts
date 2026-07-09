@@ -1427,6 +1427,20 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       processLog: transcriptSummaryForReflection(transcript),
       recordSuggestionEvent: (payload) => recordEvent(execution.id, null, 'agent.suggestion', payload),
     }).catch(() => undefined)
+    // Fire the agent.completed signal for flows listening in this org. Dynamic
+    // import avoids pulling the flows feature (and its execute-flow ->
+    // signals static edge) into every agent-execution module load; strictly
+    // fire-and-forget — a signal emit must never block or fail this run.
+    void import('@/features/flows/signals')
+      .then((signals) =>
+        signals.emitFlowSignal({
+          organizationId,
+          signal: 'agent.completed',
+          payload: { agentId: agent.id, executionId: execution.id, summary: summary.slice(0, 2000) },
+          depth: 1,
+        }),
+      )
+      .catch(() => undefined)
     return { ...output, executionId: execution.id }
   } catch (error) {
     // A cancelled run that then throws (e.g. the completion guard above
