@@ -33,6 +33,7 @@ import { Markdown } from '@/components/ui/markdown'
 import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
+import { isCancellableRunStatus, isTerminalRunStatus } from '@/lib/agents/run-status'
 import type { Activity, Agent } from '@/lib/types'
 
 /**
@@ -639,8 +640,8 @@ function RunRow({
   const [actionBusy, setActionBusy] = useState(false)
   const status = activityStatus(activity)
   const isActive = ['running', 'pending', 'cancelling', 'waiting_for_input', 'waiting_for_approval'].includes(status)
-  const isCancellable = ['running', 'waiting_for_input', 'waiting_for_approval'].includes(status)
-  const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
+  const isCancellable = isCancellableRunStatus(status)
+  const isTerminal = isTerminalRunStatus(status)
   const { items: timeline, suggestions } = buildTimeline(details)
   // The most recent question this run asked that carries a remembered prior
   // answer, so the reply box can offer a one-click prefill instead of making

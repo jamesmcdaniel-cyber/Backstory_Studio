@@ -764,6 +764,49 @@ export async function runAgentExecution(data: AgentExecutionJob) {
   const segmentStart = Date.now()
   const usage = { inputTokens: 0, outputTokens: 0 }
 
+  // Single graceful cancel-finalize path, shared by the in-loop per-turn check
+  // AND the completion/failure guards below. A cancel request only ever flips
+  // status to 'cancelling' (never mutates this in-memory run), so whichever
+  // call site notices it first does the actual persistence; `alreadyFinalized`
+  // lets a later call site (e.g. the failure guard, after the completion
+  // guard already persisted 'cancelled' but then threw) skip re-recording the
+  // event/notification while still returning the cancelled summary instead of
+  // falling through to complete/fail. No reflection/indexing runs for a
+  // cancelled run — those are for runs that actually produced an outcome
+  // worth learning from.
+  const finalizeCancelled = async (alreadyFinalized: boolean) => {
+    const cancelSummary = 'Run cancelled by the user.'
+    if (!alreadyFinalized) {
+      await prisma.executionMessage.create({
+        data: { executionId: execution.id, role: 'agent', content: cancelSummary },
+      })
+      await prisma.agentExecution.update({
+        where: { id: execution.id },
+        data: {
+          status: 'cancelled',
+          error: null,
+          transcript: jsonValue(transcript),
+          inputTokens: { increment: usage.inputTokens },
+          outputTokens: { increment: usage.outputTokens },
+          executionTime: { increment: Date.now() - segmentStart },
+          completedAt: new Date(),
+        },
+      })
+      await recordEvent(execution.id, null, 'run.cancelled', { reason: 'user_requested' })
+      await notify({
+        organizationId,
+        userId,
+        type: 'agent.cancelled',
+        level: 'info',
+        title: `${agentMetadata.title || agent.description} run cancelled`,
+        body: cancelSummary,
+        agentTaskId: agent.id,
+        executionId: execution.id,
+      })
+    }
+    return { summary: cancelSummary, executionId: execution.id }
+  }
+
   try {
     // Enforce the workspace's monthly token ceiling before doing any model work.
     // The run's owner is passed so exempt admin accounts are never blocked.
@@ -990,37 +1033,8 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       // check the freshest DB status once per turn (an extra findUnique per
       // LLM call is cheap) and exit cleanly the moment it's noticed.
       const live = await prisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
-      if (live?.status === 'cancelling') {
-        const cancelSummary = 'Run cancelled by the user.'
-        await prisma.executionMessage.create({
-          data: { executionId: execution.id, role: 'agent', content: cancelSummary },
-        })
-        await prisma.agentExecution.update({
-          where: { id: execution.id },
-          data: {
-            status: 'cancelled',
-            error: null,
-            transcript: jsonValue(transcript),
-            inputTokens: { increment: usage.inputTokens },
-            outputTokens: { increment: usage.outputTokens },
-            executionTime: { increment: Date.now() - segmentStart },
-            completedAt: new Date(),
-          },
-        })
-        await recordEvent(execution.id, null, 'run.cancelled', { reason: 'user_requested' })
-        await notify({
-          organizationId,
-          userId,
-          type: 'agent.cancelled',
-          level: 'info',
-          title: `${agentMetadata.title || agent.description} run cancelled`,
-          body: cancelSummary,
-          agentTaskId: agent.id,
-          executionId: execution.id,
-        })
-        // No reflection/indexing for a cancelled run — those are for runs that
-        // actually produced an outcome worth learning from.
-        return { summary: cancelSummary, executionId: execution.id }
+      if (live?.status === 'cancelling' || live?.status === 'cancelled') {
+        return await finalizeCancelled(live.status === 'cancelled')
       }
 
       const turnResult = await runner.next(transcript, system, [...tools, ASK_USER_TOOL])
@@ -1330,6 +1344,18 @@ export async function runAgentExecution(data: AgentExecutionJob) {
       })
     }
 
+    // A cancel requested near this run's natural end can land after the
+    // in-loop check above already passed for what turns out to be the final
+    // turn (e.g. while the last runner.next() call was in flight, and that
+    // turn broke the loop with no more tool calls). Re-check the live status
+    // once more before treating this as a normal completion, so the user's
+    // cancel wins the race instead of being silently overwritten — and so
+    // indexing/reflection (below) never run for a run the user asked to stop.
+    const liveBeforeCompletion = await prisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
+    if (liveBeforeCompletion?.status === 'cancelling' || liveBeforeCompletion?.status === 'cancelled') {
+      return await finalizeCancelled(liveBeforeCompletion.status === 'cancelled')
+    }
+
     const summary = finalText || 'Agent reached the maximum number of tool-call turns.'
     const output = { summary }
     const headline = await generateHeadline(summary)
@@ -1403,6 +1429,17 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     }).catch(() => undefined)
     return { ...output, executionId: execution.id }
   } catch (error) {
+    // A cancelled run that then throws (e.g. the completion guard above
+    // finalized it as cancelled but a later step in this same try block still
+    // threw) should finalize as cancelled, not failed — re-check the live
+    // status before writing a failure over what may already be a cancel.
+    const liveOnFailure = await prisma.agentExecution
+      .findUnique({ where: { id: execution.id }, select: { status: true } })
+      .catch(() => null)
+    if (liveOnFailure?.status === 'cancelling' || liveOnFailure?.status === 'cancelled') {
+      return await finalizeCancelled(liveOnFailure.status === 'cancelled')
+    }
+
     const message = error instanceof Error ? error.message : String(error)
     await prisma.agentExecution.update({
       where: { id: execution.id },
