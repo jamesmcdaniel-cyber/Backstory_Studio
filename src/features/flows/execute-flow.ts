@@ -28,7 +28,7 @@ export type FlowExecutionJob = {
   // executes the working draft so you can test before publishing.
   usePublished?: boolean
   // How this run was started — persisted on the FlowRun for provenance.
-  trigger?: { type: 'manual' | 'schedule' | 'webhook'; [key: string]: unknown }
+  trigger?: { type: 'manual' | 'schedule' | 'webhook' | 'signal'; [key: string]: unknown }
 }
 
 // Bound HTTP responses so downstream prompts/logs stay manageable.

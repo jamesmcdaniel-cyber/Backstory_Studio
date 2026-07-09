@@ -29,6 +29,7 @@ export const maxDuration = 1200
 export const dynamic = 'force-dynamic'
 
 const MAX_AGENTS_PER_TICK = 25
+const MAX_FLOWS_PER_TICK = 10
 const STUCK_RUN_TIMEOUT_MS = AGENT_RUN_TIMEOUT_MS
 const MAX_ERROR_LENGTH = 300
 
@@ -217,7 +218,7 @@ export async function GET(request: Request) {
     // even in worker mode.
     const flows = await prisma.flow.findMany({
       where: { status: 'ACTIVE' },
-      include: { runs: { orderBy: { startedAt: 'desc' }, take: 1, select: { startedAt: true } } },
+      include: { runs: { orderBy: { startedAt: 'desc' }, take: 1, select: { startedAt: true, status: true } } },
       take: 100,
     })
     const ranFlowIds: string[] = []
@@ -229,6 +230,14 @@ export async function GET(request: Request) {
         // Only PUBLISHED flows run on a schedule — a draft-only flow does not fire.
         if (flow.publishedGraph == null) continue
         if (!isDue(schedule, flow.runs[0]?.startedAt ?? null, now)) continue
+        // Overlap guard: a still-active previous run means skip this tick —
+        // a slow flow must never stack concurrent scheduled executions.
+        const lastRun = flow.runs[0]
+        if (lastRun && (lastRun.status === 'running' || lastRun.status === 'waiting')) {
+          apiLogger.warn('cron/dispatch: flow run still active, skipping tick', { flowId: flow.id })
+          continue
+        }
+        if (ranFlowIds.length >= MAX_FLOWS_PER_TICK) break
         const owner = flow.userId
           ? await prisma.user.findFirst({ where: { id: flow.userId, organizationId: flow.organizationId, isActive: true } })
           : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })
