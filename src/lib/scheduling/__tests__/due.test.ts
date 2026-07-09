@@ -1,6 +1,6 @@
-import { describe, it } from 'node:test'
+import { describe, it, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isDue, type AgentSchedule } from '../due.js'
+import { isDue, nextOccurrence, type AgentSchedule } from '../due.js'
 
 // --- helpers -----------------------------------------------------------------
 
@@ -313,4 +313,63 @@ describe('isDue — once (one-time)', () => {
     assert.equal(isDue(schedule, null, nowAtTime(8, 0, 'UTC')), false)
     assert.equal(isDue(schedule, null, nowAtTime(10, 0, 'UTC')), true)
   })
+})
+
+// --- nextOccurrence ----------------------------------------------------------
+
+test('nextOccurrence: daily returns today’s instant when still ahead, else tomorrow’s', () => {
+  const schedule = { type: 'daily', time: '09:00', cron: '', timezone: 'UTC', isActive: true } as AgentSchedule
+  const before = nextOccurrence(schedule, new Date('2026-07-09T05:00:00Z'))
+  assert.equal(before?.toISOString(), '2026-07-09T09:00:00.000Z')
+  const after = nextOccurrence(schedule, new Date('2026-07-09T10:00:00Z'))
+  assert.equal(after?.toISOString(), '2026-07-10T09:00:00.000Z')
+})
+
+test('nextOccurrence: respects timezone wall-clock', () => {
+  const schedule = { type: 'daily', time: '09:00', cron: '', timezone: 'America/New_York', isActive: true } as AgentSchedule
+  const next = nextOccurrence(schedule, new Date('2026-07-09T05:00:00Z')) // 01:00 NY
+  assert.equal(next?.toISOString(), '2026-07-09T13:00:00.000Z') // 09:00 EDT = 13:00Z
+})
+
+test('nextOccurrence: once in the future fires once, in the past returns null', () => {
+  const future = { type: 'once', time: '12:00', cron: '', timezone: 'UTC', runAt: '2026-07-10', isActive: true } as AgentSchedule
+  assert.equal(nextOccurrence(future, new Date('2026-07-09T00:00:00Z'))?.toISOString(), '2026-07-10T12:00:00.000Z')
+  assert.equal(nextOccurrence(future, new Date('2026-07-11T00:00:00Z')), null)
+})
+
+test('nextOccurrence: cron scans forward with the existing matcher', () => {
+  const schedule = { type: 'cron', time: '', cron: '30 14 * * 1', timezone: 'UTC', isActive: true } as AgentSchedule
+  const next = nextOccurrence(schedule, new Date('2026-07-09T00:00:00Z')) // Thursday
+  assert.equal(next?.toISOString(), '2026-07-13T14:30:00.000Z') // next Monday 14:30
+})
+
+test('nextOccurrence: manual and inactive return null', () => {
+  assert.equal(nextOccurrence({ type: 'manual', time: '', cron: '', timezone: 'UTC', isActive: true } as AgentSchedule, new Date()), null)
+  assert.equal(nextOccurrence({ type: 'daily', time: '09:00', cron: '', timezone: 'UTC', isActive: false } as AgentSchedule, new Date()), null)
+})
+
+// isDue's hourly case never reads `time` — it fires when lastExecutedAt is
+// null, else 60 real minutes after lastExecutedAt (no clock-alignment to the
+// top of the hour). nextOccurrence has no lastExecutedAt input, so it mirrors
+// that convention by treating `from` as the anchor: the next occurrence is
+// exactly 60 minutes after `from`, preserving `from`'s minute/second rather
+// than rounding to :00.
+test('nextOccurrence: hourly fires exactly 60 minutes after `from` (not aligned to the top of the hour)', () => {
+  const schedule = { type: 'hourly', time: '', cron: '', timezone: 'UTC', isActive: true } as AgentSchedule
+  const next = nextOccurrence(schedule, new Date('2026-07-09T05:37:00Z'))
+  assert.equal(next?.toISOString(), '2026-07-09T06:37:00.000Z')
+})
+
+// isDue's weekly case never reads a day-of-week field (AgentSchedule has
+// none) — it only requires >=7 days since lastExecutedAt (or null) AND that
+// `now` is past *today's* scheduled time. So the "day of week" it fires on is
+// whatever day is >=7 days after the anchor, not a stored weekday.
+// nextOccurrence mirrors this using `from` as the 7-day anchor: this week's
+// scheduled instant if still ahead, else the same wall-clock time 7 days out.
+test('nextOccurrence: weekly returns this week’s instant when still ahead, else 7 days out', () => {
+  const schedule = { type: 'weekly', time: '09:00', cron: '', timezone: 'UTC', isActive: true } as AgentSchedule
+  const before = nextOccurrence(schedule, new Date('2026-07-09T05:00:00Z'))
+  assert.equal(before?.toISOString(), '2026-07-09T09:00:00.000Z')
+  const after = nextOccurrence(schedule, new Date('2026-07-09T10:00:00Z'))
+  assert.equal(after?.toISOString(), '2026-07-16T09:00:00.000Z')
 })

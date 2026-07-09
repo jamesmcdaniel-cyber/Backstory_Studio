@@ -197,3 +197,89 @@ export function isDue(
       return false
   }
 }
+
+/**
+ * Returns the next UTC instant strictly after `from` at which the schedule
+ * fires, or null if it never will (manual, inactive, or a passed `once`).
+ *
+ * Mirrors `isDue`'s per-type semantics, but since this function has no
+ * `lastExecutedAt` input it treats `from` as the anchor point for types whose
+ * `isDue` behavior depends on elapsed time since the last run (hourly,
+ * weekly).
+ *
+ * Pure function — has no side effects; safe to call in tight loops.
+ */
+export function nextOccurrence(schedule: AgentSchedule, from: Date): Date | null {
+  if (!schedule.isActive) return null
+  if (schedule.type === 'manual') return null
+
+  switch (schedule.type) {
+    case 'once': {
+      // Mirrors isDue's once: target = runAt + time in timezone. Unlike isDue
+      // (which also checks lastExecutedAt === null), nextOccurrence has no
+      // execution history — it simply reports the target if it is still
+      // ahead of `from`, else null (it has passed).
+      if (!schedule.runAt) return null
+      const [y, mo, d] = schedule.runAt.split('-').map(Number)
+      if (!y || !mo || !d) return null
+      const target = instantForDate(y, mo, d, schedule.time || '09:00', schedule.timezone || 'UTC')
+      return target > from ? target : null
+    }
+
+    case 'hourly': {
+      // isDue's hourly convention: due immediately when never run, else 60
+      // real minutes after lastExecutedAt — no alignment to the top of the
+      // hour. Treating `from` as that anchor, the next occurrence is exactly
+      // `from` + 60 minutes.
+      return new Date(from.getTime() + 60 * 60_000)
+    }
+
+    case 'daily': {
+      const tz = schedule.timezone || 'UTC'
+      const time = schedule.time || '00:00'
+      const scheduled = todayInstant(time, tz, from)
+      if (scheduled > from) return scheduled
+      const p = zoneParts(from, tz)
+      return instantForDate(p.year, p.month, p.day + 1, time, tz)
+    }
+
+    case 'weekly': {
+      // isDue's weekly convention has no stored day-of-week — it only gates
+      // on >=7 days since lastExecutedAt (or null) plus today's scheduled
+      // time having passed. Mirroring that with `from` as the anchor: this
+      // week's scheduled instant if still ahead, else the same wall-clock
+      // time 7 days out.
+      const tz = schedule.timezone || 'UTC'
+      const time = schedule.time || '00:00'
+      const scheduled = todayInstant(time, tz, from)
+      if (scheduled > from) return scheduled
+      const p = zoneParts(from, tz)
+      return instantForDate(p.year, p.month, p.day + 7, time, tz)
+    }
+
+    case 'cron': {
+      if (!schedule.cron) return null
+      const tz = schedule.timezone || 'UTC'
+
+      // Scan forward minute-by-minute from `from + 1min`, evaluating the
+      // existing matcher against zoned wall-clock parts exactly as isDue
+      // does. Floor `from` to a minute boundary first so the scan always
+      // starts strictly after `from` regardless of its seconds/ms. Cap the
+      // scan at 370 days out — if nothing matches, return null.
+      const MINUTE_MS = 60_000
+      const MAX_SCAN_MS = 370 * 24 * 60 * 60 * 1000
+      const flooredFrom = Math.floor(from.getTime() / MINUTE_MS) * MINUTE_MS
+      const deadline = from.getTime() + MAX_SCAN_MS
+
+      let cursor = flooredFrom + MINUTE_MS
+      while (cursor <= deadline) {
+        if (matchesCron(schedule.cron, tz, new Date(cursor))) return new Date(cursor)
+        cursor += MINUTE_MS
+      }
+      return null
+    }
+
+    default:
+      return null
+  }
+}
