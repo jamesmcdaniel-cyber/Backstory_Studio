@@ -1,0 +1,64 @@
+import { z } from 'zod'
+import { prisma } from '@/lib/prisma'
+import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+import { agentVisibilityScope } from '@/lib/server/visibility'
+import { serializeFlow } from '@/lib/flows/serialize'
+
+function jsonValue(value: unknown) {
+  return JSON.parse(JSON.stringify(value ?? null))
+}
+
+// GET /api/flows/[id]/versions — list published snapshots (no graph payload),
+// or ?version=N for a single snapshot with its graph (view overlay).
+// POST /api/flows/[id]/versions — { version, action: 'restore' } copies that
+// snapshot's graph into the flow's draft. id is the segment before "versions".
+export const GET = withAuthenticatedApi(async (request, auth) => {
+  const id = request.nextUrl.pathname.split('/').at(-2)
+  if (!id) throw new ApiError('Flow id is required')
+
+  const flow = await prisma.flow.findFirst({
+    where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
+    select: { id: true },
+  })
+  if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+
+  const versionParam = request.nextUrl.searchParams.get('version')
+  if (versionParam != null) {
+    const version = z.coerce.number().int().positive().parse(versionParam)
+    const row = await prisma.flowVersion.findFirst({
+      where: { flowId: id, organizationId: auth.organizationId, version },
+    })
+    if (!row) throw new ApiError('Version not found', 404, 'NOT_FOUND')
+    return { success: true, version: row }
+  }
+
+  const versions = await prisma.flowVersion.findMany({
+    where: { flowId: id, organizationId: auth.organizationId },
+    orderBy: { version: 'desc' },
+    take: 50,
+    select: { id: true, version: true, note: true, publishedAt: true, publishedBy: true },
+  })
+  return { success: true, versions }
+})
+
+const restoreSchema = z.object({ version: z.number().int().positive(), action: z.literal('restore') })
+
+export const POST = withAuthenticatedApi(async (request, auth) => {
+  const id = request.nextUrl.pathname.split('/').at(-2)
+  if (!id) throw new ApiError('Flow id is required')
+
+  const flow = await prisma.flow.findFirst({
+    where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
+    select: { id: true },
+  })
+  if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+
+  const { version } = restoreSchema.parse(await request.json())
+  const row = await prisma.flowVersion.findFirst({
+    where: { flowId: id, organizationId: auth.organizationId, version },
+  })
+  if (!row) throw new ApiError('Version not found', 404, 'NOT_FOUND')
+
+  const updated = await prisma.flow.update({ where: { id }, data: { graph: jsonValue(row.graph) } })
+  return { success: true, flow: serializeFlow(updated) }
+})

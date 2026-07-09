@@ -51,14 +51,28 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
   }
 
-  const flow = await prisma.flow.update({
-    where: { id },
-    data: {
-      trigger: jsonValue(preserveWebhookSecretHash(triggerFromGraph(graph, existing.trigger), existing.trigger)),
-      publishedGraph: existing.graph ?? {},
-      version: { increment: 1 },
-    },
-  })
+  const nextVersion = existing.version + 1
+  const trigger = jsonValue(preserveWebhookSecretHash(triggerFromGraph(graph, existing.trigger), existing.trigger))
+  const [flow] = await prisma.$transaction([
+    prisma.flow.update({
+      where: { id },
+      data: {
+        trigger,
+        publishedGraph: existing.graph ?? {},
+        version: { increment: 1 },
+      },
+    }),
+    prisma.flowVersion.create({
+      data: {
+        flowId: id,
+        organizationId: auth.organizationId,
+        version: nextVersion,
+        graph: jsonValue(existing.graph ?? {}),
+        trigger,
+        publishedBy: auth.dbUser.id,
+      },
+    }),
+  ])
   await recordAudit({
     organizationId: auth.organizationId,
     actorUserId: auth.dbUser.id,
