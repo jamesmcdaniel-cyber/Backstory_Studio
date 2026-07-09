@@ -1,7 +1,7 @@
 'use client'
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
-import type { ClipboardEvent, KeyboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent, KeyboardEvent } from 'react'
 import { cn } from '@/lib/utils'
 import { friendlyTokenLabel, parseTokenSegments } from '@/lib/flows/token-text'
 import type { TokenLabelContext, TokenSegment } from '@/lib/flows/token-text'
@@ -42,8 +42,12 @@ export function serializeEditorDom(root: HTMLElement): string {
       const token = child.getAttribute('data-token')
       if (token !== null) out += `{{${token}}}`
       else if (child.tagName === 'BR') out += '\n'
-      else if (child.tagName === 'DIV' || child.tagName === 'P') out += (index > 0 ? '\n' : '') + walk(child)
-      else out += walk(child)
+      else if (child.tagName === 'DIV' || child.tagName === 'P') {
+        // A block whose sole child is a <br> is one blank line: emit only the
+        // block's own leading \n, not a second one for the inner <br>.
+        const onlyBr = child.childNodes.length === 1 && child.firstChild instanceof HTMLElement && child.firstChild.tagName === 'BR'
+        out += (index > 0 ? '\n' : '') + (onlyBr ? '' : walk(child))
+      } else out += walk(child)
     })
     return out
   }
@@ -83,13 +87,18 @@ function placeCaretAfter(node: Node) {
   selection.addRange(range)
 }
 
+/** Current selection range when it sits entirely inside the editor, else null. */
+function selectionRangeInside(editor: HTMLElement): Range | null {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  return editor.contains(range.startContainer) && editor.contains(range.endContainer) ? range : null
+}
+
 /** Current selection range if it sits inside the editor, else a caret at the end. */
 function editRange(editor: HTMLElement): Range {
-  const selection = window.getSelection()
-  if (selection && selection.rangeCount > 0) {
-    const range = selection.getRangeAt(0)
-    if (editor.contains(range.startContainer)) return range
-  }
+  const inside = selectionRangeInside(editor)
+  if (inside) return inside
   const range = document.createRange()
   range.selectNodeContents(editor)
   range.collapse(false)
@@ -138,8 +147,17 @@ export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditor
     insertToken: (token: string) => {
       const editor = editorRef.current
       if (!editor) return
+      // A brace in the path would corrupt the {{token}} round-trip.
+      if (token.includes('{') || token.includes('}')) return
+      // Capture before focus(): programmatic focus drops a caret at content
+      // start, which would otherwise shadow the caret-at-end fallback.
+      const wasInside = selectionRangeInside(editor) !== null
       editor.focus()
       const range = editRange(editor)
+      if (!wasInside) {
+        range.selectNodeContents(editor)
+        range.collapse(false)
+      }
       range.deleteContents()
       const chip = makeChip(token, labelCtx)
       range.insertNode(chip)
@@ -180,12 +198,11 @@ export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditor
     emit(editor)
   }
 
-  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    event.preventDefault()
+  /** Shared paste/drop path: sanitize and insert plain text at the caret. */
+  const insertPlainText = (raw: string) => {
     const editor = editorRef.current
     if (!editor) return
-    let text = event.clipboardData.getData('text/plain')
-    if (!multiline) text = text.replace(/\n+/g, ' ')
+    const text = multiline ? raw : raw.replace(/\n+/g, ' ')
     if (!text) return
     const range = editRange(editor)
     range.deleteContents()
@@ -195,6 +212,32 @@ export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditor
     range.insertNode(fragment)
     if (last) placeCaretAfter(last)
     emit(editor)
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    insertPlainText(event.clipboardData.getData('text/plain'))
+  }
+
+  // Dropped text must not bypass paste sanitization (raw <br>/<div> markup).
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    insertPlainText(event.dataTransfer.getData('text/plain'))
+  }
+
+  /** Copy/cut the canonical `{{token}}` text, not the friendly chip labels. */
+  const handleCopyCut = (event: ClipboardEvent<HTMLDivElement>, cut: boolean) => {
+    const editor = editorRef.current
+    if (!editor) return
+    const range = selectionRangeInside(editor)
+    if (!range) return
+    event.preventDefault()
+    const container = document.createElement('div')
+    container.appendChild(range.cloneContents())
+    event.clipboardData.setData('text/plain', serializeEditorDom(container))
+    if (!cut) return
+    range.deleteContents()
+    handleInput()
   }
 
   return (
@@ -209,6 +252,9 @@ export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditor
       onInput={handleInput}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
+      onDrop={handleDrop}
+      onCopy={(event) => handleCopyCut(event, false)}
+      onCut={(event) => handleCopyCut(event, true)}
       onFocus={onFocus}
       style={multiline ? { minHeight: rows * 20 + 18 } : undefined}
       className={cn(
