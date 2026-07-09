@@ -682,6 +682,7 @@ export default function FlowBuilder() {
       <div className="flex min-h-0 flex-1">
         <div
           className="min-w-0 flex-1 overflow-y-auto bg-white p-8"
+          onClick={() => setSelectedId(null)}
           style={{
             backgroundImage: 'radial-gradient(circle, rgba(15, 23, 42, 0.22) 1px, transparent 1px)',
             backgroundSize: '28px 28px',

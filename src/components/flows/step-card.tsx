@@ -342,7 +342,7 @@ export function StepCard({
         {status && (
           <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700">
             <span className={cn('h-2 w-2 rounded-full', STATUS_DOT[status])} />
-            {status === 'running' ? <TypewriterStatus /> : status}
+            {status === 'running' ? <TypewriterStatus seed={node.id.length ? node.id.charCodeAt(node.id.length - 1) : 0} /> : status}
           </span>
         )}
         <button
