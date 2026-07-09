@@ -122,11 +122,13 @@ function InsertMenu({
   agents,
   toolCatalog,
   compact,
+  tail,
 }: {
   onPick: (type: StepType, seed?: FlowInsertSeed) => void
   agents: Agent[]
   toolCatalog: ToolCatalog
   compact?: boolean
+  tail?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -187,22 +189,29 @@ function InsertMenu({
 
   return (
     <div className={cn('relative flex flex-col items-center', compact && 'items-start')} onClick={(event) => event.stopPropagation()}>
-      {!compact && <div className="h-8 w-px bg-slate-300" />}
+      {!compact && !tail && <div className="h-6 w-px bg-slate-300" />}
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-label="Add step"
         className={cn(
-          'group flex items-center justify-center border bg-white text-slate-600 shadow-sm transition-all hover:border-blue-400 hover:text-blue-700 hover:shadow-md',
+          'group flex items-center justify-center border bg-white text-slate-500 shadow-sm transition-all hover:border-blue-400 hover:text-blue-700 hover:shadow-md',
           compact
             ? 'gap-2 rounded-lg border-dashed px-3 py-2 text-sm font-semibold'
-            : 'h-9 w-9 rounded-full border-slate-300',
+            : 'h-8 w-8 rounded-full border-slate-300',
         )}
       >
-        <Plus className={cn('h-5 w-5', compact && 'h-4 w-4')} />
+        <Plus className={cn('h-4 w-4', compact && 'h-4 w-4')} />
         {compact && 'Add a step'}
       </button>
-      {!compact && <div className="h-8 w-px bg-slate-300" />}
+      {!compact && !tail && (
+        <div className="flex flex-col items-center">
+          <div className="h-5 w-px bg-slate-300" />
+          <svg width="10" height="6" viewBox="0 0 10 6" className="-mt-px text-slate-400" aria-hidden="true">
+            <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+      )}
 
       {open && (
         <>
@@ -480,8 +489,8 @@ export function FlowCanvas({
       } else {
         parts.push(
           <div key={`${node.id}-tail`} className="flex flex-col items-center">
-            <div className="h-2 w-px bg-slate-300" />
-            <InsertMenu compact agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(node.id, type, seed)} />
+            <div className="h-6 w-px bg-slate-300" />
+            <InsertMenu tail agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(node.id, type, seed)} />
           </div>,
         )
       }
