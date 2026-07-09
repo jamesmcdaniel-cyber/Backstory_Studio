@@ -44,7 +44,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       select: { id: true, description: true, metadata: true },
       take: 100,
     }),
-    loadFlowToolCatalog(auth.organizationId, { takeConnections: 25, takeTools: 100 }),
+    loadFlowToolCatalog(auth.organizationId, { userId: auth.dbUser.id, takeConnections: 25, takeTools: 100 }),
   ])
   const roster = agents
     .map((agent) => ({ id: agent.id, name: readAgentMetadata(agent.metadata).title || agent.description }))
