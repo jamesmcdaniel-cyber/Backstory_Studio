@@ -572,6 +572,11 @@ export default function FlowBuilder() {
         },
       })
     }
+    // Every other step type only carries the label (picker leaves like
+    // "HTTP Webhook" and "Set variable" pre-name their node).
+    if (seed.label && node.type !== 'trigger') {
+      return updateNode(next, { ...node, data: { ...node.data, label: seed.label } } as FlowNode)
+    }
     return next
   }, [])
 
