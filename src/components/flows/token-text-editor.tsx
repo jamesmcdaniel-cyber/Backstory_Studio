@@ -1,0 +1,222 @@
+'use client'
+
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import type { ClipboardEvent, KeyboardEvent } from 'react'
+import { cn } from '@/lib/utils'
+import { friendlyTokenLabel, parseTokenSegments } from '@/lib/flows/token-text'
+import type { TokenLabelContext, TokenSegment } from '@/lib/flows/token-text'
+
+export type TokenTextEditorHandle = { insertToken: (token: string) => void, focus: () => void }
+
+export type TokenTextEditorProps = {
+  value: string
+  onChange: (value: string) => void
+  labelCtx: TokenLabelContext
+  multiline?: boolean
+  rows?: number
+  placeholder?: string
+  className?: string
+  invalid?: boolean
+  onFocus?: () => void
+  ariaLabel?: string
+}
+
+const chipClass =
+  'inline-flex items-center rounded bg-indigo-50 px-1.5 py-0.5 text-xs font-medium text-indigo-700 border border-indigo-200 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300'
+
+const baseClass =
+  'w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300 ' +
+  'empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]'
+
+/** Walk the editable DOM back into the canonical `{{token}}` template string. */
+export function serializeEditorDom(root: HTMLElement): string {
+  const walk = (parent: Node): string => {
+    let out = ''
+    parent.childNodes.forEach((child, index) => {
+      if (child.nodeType === 3) {
+        // Browsers write &nbsp; for edge/consecutive spaces; store plain spaces.
+        out += (child.textContent ?? '').replace(/\u00a0/g, ' ')
+        return
+      }
+      if (!(child instanceof HTMLElement)) return
+      const token = child.getAttribute('data-token')
+      if (token !== null) out += `{{${token}}}`
+      else if (child.tagName === 'BR') out += '\n'
+      else if (child.tagName === 'DIV' || child.tagName === 'P') out += (index > 0 ? '\n' : '') + walk(child)
+      else out += walk(child)
+    })
+    return out
+  }
+  return walk(root)
+}
+
+function makeChip(path: string, ctx: TokenLabelContext): HTMLSpanElement {
+  const chip = document.createElement('span')
+  chip.contentEditable = 'false'
+  chip.setAttribute('data-token', path)
+  chip.className = chipClass
+  chip.textContent = friendlyTokenLabel(path, ctx)
+  return chip
+}
+
+/** Append segments as text nodes, `<br>`s, and chip spans (never innerHTML). */
+function appendSegments(parent: HTMLElement | DocumentFragment, segments: TokenSegment[], ctx: TokenLabelContext) {
+  for (const segment of segments) {
+    if (segment.kind === 'token') {
+      parent.appendChild(makeChip(segment.path, ctx))
+      continue
+    }
+    segment.value.split('\n').forEach((line, index) => {
+      if (index > 0) parent.appendChild(document.createElement('br'))
+      if (line) parent.appendChild(document.createTextNode(line))
+    })
+  }
+}
+
+function placeCaretAfter(node: Node) {
+  const selection = window.getSelection()
+  if (!selection) return
+  const range = document.createRange()
+  range.setStartAfter(node)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+/** Current selection range if it sits inside the editor, else a caret at the end. */
+function editRange(editor: HTMLElement): Range {
+  const selection = window.getSelection()
+  if (selection && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0)
+    if (editor.contains(range.startContainer)) return range
+  }
+  const range = document.createRange()
+  range.selectNodeContents(editor)
+  range.collapse(false)
+  return range
+}
+
+/**
+ * A contentEditable field that shows `{{token}}`s as plain-English chips while
+ * emitting the unchanged canonical template string through `onChange`.
+ */
+export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditorProps>(function TokenTextEditor(
+  { value, onChange, labelCtx, multiline = false, rows = 3, placeholder, className, invalid, onFocus, ariaLabel },
+  ref
+) {
+  const editorRef = useRef<HTMLDivElement>(null)
+  const lastEmittedRef = useRef<string | null>(null)
+  // `value` plus the rendered chip labels — a label change (step rename) must
+  // also trigger a rebuild even though the stored value is unchanged.
+  const renderedKeyRef = useRef<string | null>(null)
+
+  const renderKey = (v: string) =>
+    v + '\u0000' + parseTokenSegments(v).map((s) => (s.kind === 'token' ? friendlyTokenLabel(s.path, labelCtx) : '')).join('\u0000')
+
+  const emit = (editor: HTMLElement) => {
+    const serialized = serializeEditorDom(editor)
+    lastEmittedRef.current = serialized
+    renderedKeyRef.current = renderKey(serialized)
+    onChange(serialized)
+  }
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const key = renderKey(value)
+    if (key === renderedKeyRef.current) return
+    // Label-only change while the user is typing: skip so the caret survives.
+    if (value === lastEmittedRef.current && document.activeElement === editor) return
+    editor.replaceChildren()
+    appendSegments(editor, parseTokenSegments(value), labelCtx)
+    lastEmittedRef.current = value
+    renderedKeyRef.current = key
+  })
+
+  useImperativeHandle(ref, () => ({
+    focus: () => editorRef.current?.focus(),
+    insertToken: (token: string) => {
+      const editor = editorRef.current
+      if (!editor) return
+      editor.focus()
+      const range = editRange(editor)
+      range.deleteContents()
+      const chip = makeChip(token, labelCtx)
+      range.insertNode(chip)
+      // A trailing space only when nothing typable follows, so the caret has a home.
+      const next = chip.nextSibling
+      if (!next || (next instanceof HTMLElement && next.hasAttribute('data-token'))) {
+        const space = document.createTextNode(' ')
+        chip.after(space)
+        placeCaretAfter(space)
+      } else {
+        placeCaretAfter(chip)
+      }
+      emit(editor)
+    },
+  }))
+
+  const handleInput = () => {
+    const editor = editorRef.current
+    if (!editor) return
+    // Deleting everything can leave a stray <br>; clear it so :empty (placeholder) matches.
+    if (editor.childNodes.length === 1 && editor.firstChild instanceof HTMLElement && editor.firstChild.tagName === 'BR') editor.replaceChildren()
+    emit(editor)
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Enter during IME composition commits the candidate, not a line break.
+    if (event.nativeEvent.isComposing) return
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+    if (!multiline) return
+    const editor = editorRef.current
+    if (!editor) return
+    const range = editRange(editor)
+    range.deleteContents()
+    const br = document.createElement('br')
+    range.insertNode(br)
+    placeCaretAfter(br)
+    emit(editor)
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const editor = editorRef.current
+    if (!editor) return
+    let text = event.clipboardData.getData('text/plain')
+    if (!multiline) text = text.replace(/\n+/g, ' ')
+    if (!text) return
+    const range = editRange(editor)
+    range.deleteContents()
+    const fragment = document.createDocumentFragment()
+    appendSegments(fragment, text.includes('{{') ? parseTokenSegments(text) : [{ kind: 'text', value: text }], labelCtx)
+    const last = fragment.lastChild
+    range.insertNode(fragment)
+    if (last) placeCaretAfter(last)
+    emit(editor)
+  }
+
+  return (
+    <div
+      ref={editorRef}
+      contentEditable
+      role="textbox"
+      aria-multiline={multiline}
+      aria-label={ariaLabel}
+      aria-invalid={invalid || undefined}
+      data-placeholder={placeholder}
+      onInput={handleInput}
+      onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
+      onFocus={onFocus}
+      style={multiline ? { minHeight: rows * 20 + 18 } : undefined}
+      className={cn(
+        baseClass,
+        invalid ? 'border-red-400' : 'border-border',
+        multiline ? 'whitespace-pre-wrap break-words' : 'overflow-x-auto whitespace-nowrap',
+        className
+      )}
+    />
+  )
+})
