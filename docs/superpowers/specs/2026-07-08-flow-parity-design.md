@@ -27,6 +27,7 @@ Gaps vs. the Microsoft reference: trigger/action picker browsing UX, typed manua
 ## Build order (workstreams)
 
 1. Step wiring core
+1.5. Backstory MCP native connection + onboarding gate (added 2026-07-08)
 2. Picker/catalog UX
 3. Toolbar surfaces (checker, test, versions)
 4. Trigger execution parity (schedule + signal)
@@ -91,6 +92,21 @@ Agent node config gains:
 - Message textarea with token support
 - "Request human assistance when unsure" toggle → maps to the existing agent ask-user/pause mechanism in `execute-flow.ts`
 - **Agent response**: "Text only" (default) vs "Structured" — a property-list schema builder (name, type, description). When structured, the interpreter requests schema-constrained output from `runAgentExecution` and the properties become downstream datatree tokens.
+
+---
+
+## 1.5. Backstory MCP native connection + onboarding gate
+
+*Added 2026-07-08 mid-execution at user request.*
+
+**Native connection.** The Backstory MCP server (`https://mcp.backstory.ai/mcp`, OAuth 2.0) is included for every user on the platform — it appears in the connections list and the flow tool catalog by default, without the user having to add it manually. The codebase already has `BackstoryMcpClient` / `backstoryMcpConfigured` (`src/lib/mcp/backstory-mcp.ts`) — this workstream surfaces it as a first-class, always-present connection rather than an optional one.
+
+**Onboarding gate.** Users must complete their Backstory MCP OAuth connection before using the rest of the platform: until the connection is authorized and active, the app directs them to a setup step (connect screen with the OAuth flow) and blocks the main surfaces (flows, agents, dashboard). Once connected, the gate never reappears unless the connection is revoked or expires without refresh.
+
+**Scope notes (to detail at planning time):**
+- Where the gate lives (middleware/layout-level check vs per-page), and which routes are exempt (auth, connect, terms/privacy).
+- Connection status source of truth: `McpConnection` row for the Backstory server, per user or per org.
+- The catalog treats the Backstory connection like any other MCP connection (tools appear in pickers, flows can call them), but it is not deletable — only re-authorizable.
 
 ---
 
