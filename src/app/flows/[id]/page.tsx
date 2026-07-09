@@ -320,7 +320,9 @@ export default function FlowBuilder() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null
-      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return
+      // isContentEditable covers the TokenTextEditor chip fields (tagName DIV):
+      // without it, Backspace inside a chip editor would delete the whole step.
+      if (el && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable)) return
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault()
         if (e.shiftKey) redo()

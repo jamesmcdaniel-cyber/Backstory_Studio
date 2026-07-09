@@ -42,7 +42,7 @@ import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import type { ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
 import { DataTree } from './data-tree'
-import { insertAtCaret } from './insert-token'
+import { TokenTextEditor, type TokenTextEditorHandle } from './token-text-editor'
 import type { DataField } from '@/lib/flows/datatree'
 import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import {
@@ -117,8 +117,12 @@ const INPUT_TYPES: {
 
 const controlClass =
   'h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-950 outline-none transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
-const textareaClass =
-  'min-h-[92px] rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-950 outline-none transition-colors placeholder:text-slate-400 hover:border-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+// TokenTextEditor overrides that restyle the drawer-flavored defaults to match
+// the card's denser slate inputs. No border color here — `invalid` red borders
+// (appended after this string) must win in tailwind-merge order.
+const tokenControlBase =
+  'min-h-10 rounded-md bg-white px-3 py-2 text-sm text-slate-950 transition-colors empty:before:text-slate-400 hover:border-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+const tokenControlClass = `${tokenControlBase} border-slate-300`
 const labelClass = 'text-[11px] font-semibold uppercase tracking-wide text-slate-500'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -215,15 +219,35 @@ function collapsedAffordance(node: FlowNode): React.ReactNode | null {
   )
 }
 
-type TokenTarget = {
-  el: HTMLInputElement | HTMLTextAreaElement
-  read: (node: FlowNode) => string
-  write: (node: FlowNode, value: string) => FlowNode
+// Sentinel for activeFieldRef: a non-token input (labels, field names, KV
+// keys, …) is focused, so datatree inserts must be a no-op — falling back to
+// the step's primary field would silently write to a field the user is not
+// editing. Mirrors step-drawer.tsx.
+const NON_TOKEN_FOCUSED = 'non-token-focused'
+
+// Where a datatree click lands when no chip editor has been focused yet: the
+// step type's primary token field.
+const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
+  agent: 'agent.input',
+  http: 'http.body',
+  loop: 'loop.over',
+  transform: 'xf.0',
+  condition: 'clause.left',
+  filter: 'clause.left',
+  switch: 'sw.left',
 }
-export type RegisterTokenTarget = (
-  read: (node: FlowNode) => string,
-  write: (node: FlowNode, value: string) => FlowNode,
-) => (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => void
+
+// Chip editors still render when the caller omitted labelCtx: chips fall back
+// to generic step labels instead of crashing.
+const EMPTY_LABEL_CTX: TokenLabelContext = { stepLabels: {} }
+
+type TokenEditorWiring = {
+  labelCtx: TokenLabelContext
+  registerEditor: (key: string) => (handle: TokenTextEditorHandle | null) => void
+  focusEditor: (key: string) => () => void
+  blockActive: () => void
+  unblockActive: () => void
+}
 
 export function StepCard({
   node,
@@ -294,17 +318,32 @@ export function StepCard({
     event.preventDefault()
     onClick?.()
   }
-  const nodeRef = useRef(node)
-  nodeRef.current = node
-  const tokenTargetRef = useRef<TokenTarget | null>(null)
+  // Chip-editor handles keyed by field, so a datatree click inserts a token
+  // chip at the caret of the last-focused editor (mirrors step-drawer.tsx).
+  const editorHandles = useRef<Map<string, TokenTextEditorHandle | null>>(new Map())
+  const editorRefCallbacks = useRef<Map<string, (handle: TokenTextEditorHandle | null) => void>>(new Map())
+  const activeFieldRef = useRef<string | null>(null)
+  const activeEditorElRef = useRef<HTMLElement | null>(null)
   const tokenPopoverRef = useRef<HTMLDivElement | null>(null)
   const [tokenPopover, setTokenPopover] = useState<{ top: number; left: number; width: number } | null>(null)
-  const registerTokenTarget: RegisterTokenTarget = (read, write) => (event) => {
-    tokenTargetRef.current = { el: event.currentTarget, read, write }
-    if (selected && dataFields && dataFields.length > 0) {
+  const registerEditor = (key: string) => {
+    let callback = editorRefCallbacks.current.get(key)
+    if (!callback) {
+      callback = (handle: TokenTextEditorHandle | null) => {
+        editorHandles.current.set(key, handle)
+      }
+      editorRefCallbacks.current.set(key, callback)
+    }
+    return callback
+  }
+  const focusEditor = (key: string) => () => {
+    activeFieldRef.current = key
+    const el = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    activeEditorElRef.current = el
+    if (selected && dataFields && dataFields.length > 0 && el) {
       // getBoundingClientRect() already returns post-transform (zoomed) coordinates, so the
       // popover lines up with the field regardless of the canvas zoom level — no scale compensation needed.
-      const rect = event.currentTarget.getBoundingClientRect()
+      const rect = el.getBoundingClientRect()
       setTokenPopover({
         top: rect.bottom + 6,
         left: Math.min(rect.left, window.innerWidth - 380),
@@ -312,11 +351,31 @@ export function StepCard({
       })
     }
   }
+  // While any non-token input is focused, datatree inserts are blocked
+  // entirely; blur restores the normal fallback behavior.
+  const blockActive = () => {
+    activeFieldRef.current = NON_TOKEN_FOCUSED
+  }
+  const unblockActive = () => {
+    if (activeFieldRef.current === NON_TOKEN_FOCUSED) activeFieldRef.current = null
+  }
+  // Insert a token chip at the caret of the last-focused editor; fall back to
+  // the step's primary field when nothing has been focused yet. DataTree emits
+  // braced `{{token}}`s; the chip editor takes the bare path.
   const insertToken = (token: string) => {
-    const target = tokenTargetRef.current
-    if (!target) return
-    const current = target.read(nodeRef.current)
-    onChange?.(target.write(nodeRef.current, insertAtCaret(current, token, target.el)))
+    if (activeFieldRef.current === NON_TOKEN_FOCUSED) return
+    const path = token.startsWith('{{') && token.endsWith('}}') ? token.slice(2, -2).trim() : token
+    const active = activeFieldRef.current ? editorHandles.current.get(activeFieldRef.current) : null
+    const fallbackKey = DEFAULT_EDITOR_KEYS[node.type]
+    const editor = active ?? (fallbackKey ? editorHandles.current.get(fallbackKey) : null)
+    editor?.insertToken(path)
+  }
+  const tokenWiring: TokenEditorWiring = {
+    labelCtx: labelCtx ?? EMPTY_LABEL_CTX,
+    registerEditor,
+    focusEditor,
+    blockActive,
+    unblockActive,
   }
   const showErrors = Boolean(issues?.errors)
   const issuesButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -326,7 +385,11 @@ export function StepCard({
   const issueItems = issues ? [...issues.items].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1)) : []
 
   useEffect(() => {
-    if (!selected) setTokenPopover(null)
+    if (!selected) {
+      setTokenPopover(null)
+      activeFieldRef.current = null
+      activeEditorElRef.current = null
+    }
   }, [selected])
 
   // Issues fixed while the popover is open: drop the popover with the badge.
@@ -362,7 +425,7 @@ export function StepCard({
     const onMouseDown = (event: MouseEvent) => {
       const target = event.target as Node
       if (tokenPopoverRef.current?.contains(target)) return
-      if (tokenTargetRef.current?.el === target) return
+      if (activeEditorElRef.current?.contains(target)) return
       close()
     }
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -431,7 +494,11 @@ export function StepCard({
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === 'Escape') setRenaming(false)
                   }}
-                  onBlur={() => setRenaming(false)}
+                  onFocus={blockActive}
+                  onBlur={() => {
+                    unblockActive()
+                    setRenaming(false)
+                  }}
                   className="h-9 min-w-0 flex-1 rounded-md border border-blue-400 bg-white px-2 text-lg font-semibold text-slate-950 outline-none ring-2 ring-blue-100"
                   placeholder={displayTitle}
                   aria-label="Step name"
@@ -552,7 +619,7 @@ export function StepCard({
             className="overflow-hidden"
           >
             <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget, showErrors })}
+              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors })}
             </div>
           </motion.div>
         ) : (
@@ -631,7 +698,7 @@ function renderNodeBody({
   toolCatalog,
   update,
   onRefreshAgents,
-  registerTokenTarget,
+  tokenWiring,
   showErrors,
 }: {
   node: FlowNode
@@ -639,30 +706,30 @@ function renderNodeBody({
   toolCatalog: ToolCatalog
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
   showErrors?: boolean
 }) {
   switch (node.type) {
     case 'trigger':
       return <TriggerBody node={node} update={update} />
     case 'agent':
-      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} registerTokenTarget={registerTokenTarget} showErrors={showErrors} />
+      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'http':
-      return <HttpBody node={node} update={update} registerTokenTarget={registerTokenTarget} showErrors={showErrors} />
+      return <HttpBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'tool':
       return <ToolBody node={node} toolCatalog={toolCatalog} update={update} showErrors={showErrors} />
     case 'condition':
-      return <ConditionBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
+      return <ConditionBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'filter':
-      return <ConditionBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
+      return <ConditionBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'transform':
-      return <TransformBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
+      return <TransformBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'loop':
-      return <LoopBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
+      return <LoopBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'parallel':
       return <p className="text-sm text-slate-600">Runs {node.data.branches.length || 0} branches side by side. Add and configure branch steps from the settings panel.</p>
     case 'switch':
-      return <SwitchBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
+      return <SwitchBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'stop':
       return <StopBody node={node} update={update} />
   }
@@ -792,16 +859,17 @@ function AgentBody({
   agents,
   update,
   onRefreshAgents,
-  registerTokenTarget,
+  tokenWiring,
   showErrors,
 }: {
   node: Extract<FlowNode, { type: 'agent' }>
   agents: Agent[]
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
   showErrors?: boolean
 }) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
   const isDefaultInput = defaultAgentInput(node.data.input)
   const responseFormat = node.data.responseFormat ?? 'text'
   const outputFields = node.data.outputFields ?? []
@@ -848,15 +916,17 @@ function AgentBody({
       </div>
       <div className="grid gap-2">
         <label className={labelClass}>Message to agent</label>
-        <textarea
+        <TokenTextEditor
+          ref={registerEditor('agent.input')}
+          multiline
+          rows={4}
           value={isDefaultInput ? '' : node.data.input ?? ''}
-          onChange={(event) => update({ ...node, data: { ...node.data, input: event.target.value } })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'agent' ? (defaultAgentInput(n.data.input) ? '' : n.data.input ?? '') : ''),
-            (n, v) => (n.type === 'agent' ? { ...n, data: { ...n.data, input: v } } : n),
-          )}
-          className={textareaClass}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('agent.input')}
+          onChange={(input) => update({ ...node, data: { ...node.data, input } })}
+          className={tokenControlClass}
           placeholder={isDefaultInput ? 'Uses the trigger input by default. Add instructions here if needed.' : 'Tell the agent what to do at this step.'}
+          ariaLabel="Message to agent"
         />
       </div>
       <div className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 p-3">
@@ -909,6 +979,8 @@ function AgentBody({
                 <input
                   value={field.name}
                   onChange={(event) => setOutputFields(outputFields.map((entry, j) => (j === index ? { ...entry, name: event.target.value } : entry)))}
+                  onFocus={blockActive}
+                  onBlur={unblockActive}
                   className={controlClass}
                   placeholder="propertyName"
                 />
@@ -951,28 +1023,31 @@ function AgentBody({
 function HttpBody({
   node,
   update,
-  registerTokenTarget,
+  tokenWiring,
   showErrors,
 }: {
   node: Extract<FlowNode, { type: 'http' }>
   update: (node: FlowNode) => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
   showErrors?: boolean
 }) {
+  const { labelCtx, registerEditor, focusEditor } = tokenWiring
+  const urlInvalid = Boolean(showErrors && !node.data.url)
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-[1fr_150px]">
         <div className="grid gap-2">
           <label className={labelClass}>URI <span className="text-red-500">*</span></label>
-          <input
+          <TokenTextEditor
+            ref={registerEditor('http.url')}
             value={node.data.url}
-            onChange={(event) => update({ ...node, data: { ...node.data, url: event.target.value } })}
-            onFocus={registerTokenTarget(
-              (n) => (n.type === 'http' ? n.data.url : ''),
-              (n, v) => (n.type === 'http' ? { ...n, data: { ...n.data, url: v } } : n),
-            )}
-            className={cn(controlClass, showErrors && !node.data.url && 'border-red-400 focus:border-red-500')}
+            labelCtx={labelCtx}
+            onFocus={focusEditor('http.url')}
+            onChange={(url) => update({ ...node, data: { ...node.data, url } })}
+            invalid={urlInvalid}
+            className={cn(tokenControlBase, urlInvalid ? 'focus:border-red-500' : 'border-slate-300')}
             placeholder="https://api.example.com/endpoint"
+            ariaLabel="URI"
           />
         </div>
         <div className="grid gap-2">
@@ -992,47 +1067,31 @@ function HttpBody({
       </div>
       <InlineKeyValue
         label="Headers"
+        editorKey="http.headers"
         value={node.data.headers}
         onChange={(headers) => update({ ...node, data: { ...node.data, headers } })}
-        registerValueFocus={(index) =>
-          registerTokenTarget(
-            (n) => (n.type === 'http' ? parseKeyValueRows(n.data.headers)[index]?.value ?? '' : ''),
-            (n, v) => {
-              if (n.type !== 'http') return n
-              const rows = parseKeyValueRows(n.data.headers)
-              rows[index] = { key: rows[index]?.key ?? '', value: v }
-              return { ...n, data: { ...n.data, headers: serializeKeyValueRows(rows) } }
-            },
-          )
-        }
+        tokenWiring={tokenWiring}
       />
       <InlineKeyValue
         label="Queries"
+        editorKey="http.query"
         value={node.data.query}
         onChange={(query) => update({ ...node, data: { ...node.data, query } })}
-        registerValueFocus={(index) =>
-          registerTokenTarget(
-            (n) => (n.type === 'http' ? parseKeyValueRows(n.data.query)[index]?.value ?? '' : ''),
-            (n, v) => {
-              if (n.type !== 'http') return n
-              const rows = parseKeyValueRows(n.data.query)
-              rows[index] = { key: rows[index]?.key ?? '', value: v }
-              return { ...n, data: { ...n.data, query: serializeKeyValueRows(rows) } }
-            },
-          )
-        }
+        tokenWiring={tokenWiring}
       />
       <div className="grid gap-2">
         <label className={labelClass}>Body</label>
-        <textarea
+        <TokenTextEditor
+          ref={registerEditor('http.body')}
+          multiline
+          rows={4}
           value={node.data.body ?? ''}
-          onChange={(event) => update({ ...node, data: { ...node.data, body: event.target.value } })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'http' ? n.data.body ?? '' : ''),
-            (n, v) => (n.type === 'http' ? { ...n, data: { ...n.data, body: v } } : n),
-          )}
-          className={textareaClass}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('http.body')}
+          onChange={(body) => update({ ...node, data: { ...node.data, body } })}
+          className={tokenControlClass}
           placeholder="Optional JSON or text body for POST, PUT, and PATCH requests."
+          ariaLabel="Body"
         />
       </div>
       <AdvancedParamsSection node={node} onChange={update} />
@@ -1042,15 +1101,18 @@ function HttpBody({
 
 function InlineKeyValue({
   label,
+  editorKey,
   value,
   onChange,
-  registerValueFocus,
+  tokenWiring,
 }: {
   label: string
+  editorKey: string
   value?: string
   onChange: (value: string) => void
-  registerValueFocus: (index: number) => (event: React.FocusEvent<HTMLInputElement>) => void
+  tokenWiring: TokenEditorWiring
 }) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
   const rows = parseKeyValueRows(value)
   const updateRow = (index: number, patch: Partial<KeyValueRow>) => {
     onChange(serializeKeyValueRows(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row))))
@@ -1072,15 +1134,20 @@ function InlineKeyValue({
             <input
               value={row.key}
               onChange={(event) => updateRow(index, { key: event.target.value })}
+              onFocus={blockActive}
+              onBlur={unblockActive}
               className={controlClass}
               placeholder="Key"
             />
-            <input
+            <TokenTextEditor
+              ref={registerEditor(`${editorKey}.${index}.value`)}
               value={row.value}
-              onChange={(event) => updateRow(index, { value: event.target.value })}
-              onFocus={registerValueFocus(index)}
-              className={controlClass}
+              labelCtx={labelCtx}
+              onFocus={focusEditor(`${editorKey}.${index}.value`)}
+              onChange={(next) => updateRow(index, { value: next })}
+              className={cn(tokenControlClass, 'min-w-0')}
               placeholder="Value"
+              ariaLabel={`${label} value`}
             />
             <button
               type="button"
@@ -1164,12 +1231,13 @@ function ToolBody({
 function ConditionBody({
   node,
   update,
-  registerTokenTarget,
+  tokenWiring,
 }: {
   node: Extract<FlowNode, { type: 'condition' | 'filter' }>
   update: (node: FlowNode) => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
 }) {
+  const { labelCtx, registerEditor, focusEditor } = tokenWiring
   const clause = firstClause(node)
   const setClause = (patch: Partial<ConditionClause>) => {
     update({ ...node, data: { ...node.data, clauses: [{ ...clause, ...patch }], match: node.data.match ?? 'all' } } as FlowNode)
@@ -1178,18 +1246,15 @@ function ConditionBody({
     <div className="space-y-3">
       <p className="text-sm text-slate-600">{node.type === 'condition' ? 'Route the flow based on a rule.' : 'Continue only when this rule is true.'}</p>
       <div className="grid gap-2 sm:grid-cols-[1fr_150px_1fr]">
-        <input
+        <TokenTextEditor
+          ref={registerEditor('clause.left')}
           value={clause.left}
-          onChange={(event) => setClause({ left: event.target.value })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'condition' || n.type === 'filter' ? firstClause(n).left : ''),
-            (n, v) =>
-              n.type === 'condition' || n.type === 'filter'
-                ? ({ ...n, data: { ...n.data, clauses: [{ ...firstClause(n), left: v }], match: n.data.match ?? 'all' } } as FlowNode)
-                : n,
-          )}
-          className={controlClass}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('clause.left')}
+          onChange={(left) => setClause({ left })}
+          className={cn(tokenControlClass, 'min-w-0')}
           placeholder="Field or value"
+          ariaLabel="Field or value"
         />
         <select value={clause.op} onChange={(event) => setClause({ op: event.target.value as ConditionOp })} className={controlClass}>
           {CONDITION_OPS.map((op) => (
@@ -1198,18 +1263,15 @@ function ConditionBody({
             </option>
           ))}
         </select>
-        <input
+        <TokenTextEditor
+          ref={registerEditor('clause.right')}
           value={clause.right}
-          onChange={(event) => setClause({ right: event.target.value })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'condition' || n.type === 'filter' ? firstClause(n).right : ''),
-            (n, v) =>
-              n.type === 'condition' || n.type === 'filter'
-                ? ({ ...n, data: { ...n.data, clauses: [{ ...firstClause(n), right: v }], match: n.data.match ?? 'all' } } as FlowNode)
-                : n,
-          )}
-          className={controlClass}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('clause.right')}
+          onChange={(right) => setClause({ right })}
+          className={cn(tokenControlClass, 'min-w-0')}
           placeholder="Compare to"
+          ariaLabel="Compare to"
         />
       </div>
     </div>
@@ -1219,12 +1281,13 @@ function ConditionBody({
 function TransformBody({
   node,
   update,
-  registerTokenTarget,
+  tokenWiring,
 }: {
   node: Extract<FlowNode, { type: 'transform' }>
   update: (node: FlowNode) => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
 }) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
   const fields = transformFields(node)
   const setFields = (next: typeof fields) => update({ ...node, data: { ...node.data, fields: next } })
   return (
@@ -1235,21 +1298,20 @@ function TransformBody({
           <input
             value={field.name}
             onChange={(event) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, name: event.target.value } : entry)))}
+            onFocus={blockActive}
+            onBlur={unblockActive}
             className={controlClass}
             placeholder="Output field"
           />
-          <input
+          <TokenTextEditor
+            ref={registerEditor(`xf.${index}`)}
             value={field.value}
-            onChange={(event) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: event.target.value } : entry)))}
-            onFocus={registerTokenTarget(
-              (n) => (n.type === 'transform' ? transformFields(n)[index]?.value ?? '' : ''),
-              (n, v) =>
-                n.type === 'transform'
-                  ? { ...n, data: { ...n.data, fields: transformFields(n).map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: v } : entry)) } }
-                  : n,
-            )}
-            className={controlClass}
+            labelCtx={labelCtx}
+            onFocus={focusEditor(`xf.${index}`)}
+            onChange={(value) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value } : entry)))}
+            className={cn(tokenControlClass, 'min-w-0')}
             placeholder="Value"
+            ariaLabel={`Value for field ${field.name || index + 1}`}
           />
           <button
             type="button"
@@ -1271,12 +1333,13 @@ function TransformBody({
 function LoopBody({
   node,
   update,
-  registerTokenTarget,
+  tokenWiring,
 }: {
   node: Extract<FlowNode, { type: 'loop' }>
   update: (node: FlowNode) => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
 }) {
+  const { labelCtx, registerEditor, focusEditor } = tokenWiring
   const usesTriggerInput = node.data.over === '{{trigger.input}}'
   return (
     <div className="space-y-3">
@@ -1290,17 +1353,20 @@ function LoopBody({
           <option value="trigger">Trigger input</option>
           <option value="custom">Custom list</option>
         </select>
-        <input
-          value={usesTriggerInput ? '' : node.data.over}
-          onChange={(event) => update({ ...node, data: { ...node.data, over: event.target.value } })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'loop' ? (n.data.over === '{{trigger.input}}' ? '' : n.data.over) : ''),
-            (n, v) => (n.type === 'loop' ? { ...n, data: { ...n.data, over: v } } : n),
-          )}
-          className={controlClass}
-          placeholder={usesTriggerInput ? 'Uses trigger input' : 'Comma-separated list, JSON array, or mapped list'}
-          disabled={usesTriggerInput}
-        />
+        {usesTriggerInput ? (
+          <input value="" readOnly className={controlClass} placeholder="Uses trigger input" disabled aria-label="Items to process" />
+        ) : (
+          <TokenTextEditor
+            ref={registerEditor('loop.over')}
+            value={node.data.over}
+            labelCtx={labelCtx}
+            onFocus={focusEditor('loop.over')}
+            onChange={(over) => update({ ...node, data: { ...node.data, over } })}
+            className={cn(tokenControlClass, 'min-w-0')}
+            placeholder="Comma-separated list, JSON array, or mapped list"
+            ariaLabel="Items to process"
+          />
+        )}
       </div>
       <AdvancedParamsSection node={node} onChange={update} />
     </div>
@@ -1310,27 +1376,28 @@ function LoopBody({
 function SwitchBody({
   node,
   update,
-  registerTokenTarget,
+  tokenWiring,
 }: {
   node: Extract<FlowNode, { type: 'switch' }>
   update: (node: FlowNode) => void
-  registerTokenTarget: RegisterTokenTarget
+  tokenWiring: TokenEditorWiring
 }) {
+  const { labelCtx, registerEditor, focusEditor } = tokenWiring
   const first = switchFirstCase(node)
   const setFirst = (patch: Partial<typeof first>) => update({ ...node, data: { ...node.data, cases: [{ ...first, ...patch }] } })
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-600">Route to the first matching case, otherwise use the default path.</p>
       <div className="grid gap-2 sm:grid-cols-[1fr_150px_1fr]">
-        <input
+        <TokenTextEditor
+          ref={registerEditor('sw.left')}
           value={first.left}
-          onChange={(event) => setFirst({ left: event.target.value })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'switch' ? switchFirstCase(n).left : ''),
-            (n, v) => (n.type === 'switch' ? { ...n, data: { ...n.data, cases: [{ ...switchFirstCase(n), left: v }] } } : n),
-          )}
-          className={controlClass}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('sw.left')}
+          onChange={(left) => setFirst({ left })}
+          className={cn(tokenControlClass, 'min-w-0')}
           placeholder="Field or value"
+          ariaLabel="Field or value"
         />
         <select value={first.op} onChange={(event) => setFirst({ op: event.target.value as ConditionOp })} className={controlClass}>
           {CONDITION_OPS.map((op) => (
@@ -1339,15 +1406,15 @@ function SwitchBody({
             </option>
           ))}
         </select>
-        <input
+        <TokenTextEditor
+          ref={registerEditor('sw.right')}
           value={first.right}
-          onChange={(event) => setFirst({ right: event.target.value })}
-          onFocus={registerTokenTarget(
-            (n) => (n.type === 'switch' ? switchFirstCase(n).right : ''),
-            (n, v) => (n.type === 'switch' ? { ...n, data: { ...n.data, cases: [{ ...switchFirstCase(n), right: v }] } } : n),
-          )}
-          className={controlClass}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('sw.right')}
+          onChange={(right) => setFirst({ right })}
+          className={cn(tokenControlClass, 'min-w-0')}
           placeholder="Compare to"
+          ariaLabel="Compare to"
         />
       </div>
     </div>
