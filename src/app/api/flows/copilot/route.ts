@@ -10,16 +10,42 @@ import { readAgentMetadata } from '@/lib/agents/metadata'
 import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
 import { outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 
-// JSON-schema the model must fill: a graph of nodes + edges. Kept loose here
-// (objects) and tightened by flowGraphSchema.parse afterwards.
+// Anthropic strict structured outputs can't express a free-form object
+// ({type:'object'} with no declared properties collapses to {} under
+// additionalProperties:false), and node/edge shapes vary too much per node
+// type to enumerate as a strict schema. So the model returns the whole graph
+// as a JSON STRING inside a wrapper object, and we JSON.parse that string
+// ourselves — see parseGeneratedGraphReply below.
 const GRAPH_JSON_SCHEMA = {
   type: 'object',
   properties: {
-    nodes: { type: 'array', items: { type: 'object' } },
-    edges: { type: 'array', items: { type: 'object' } },
+    graphJson: {
+      type: 'string',
+      description: 'The complete flow graph as a JSON string: {"nodes": [...], "edges": [...]}',
+    },
   },
-  required: ['nodes', 'edges'],
+  required: ['graphJson'],
   additionalProperties: false,
+}
+
+/**
+ * Tolerantly extract the graph object from a structured-output reply shaped
+ * as {graphJson: "..."}. Strips ```json fences from the inner string before
+ * parsing. Falls back to treating the raw reply itself as the graph JSON
+ * (pre-wrapper shape) for backward safety, in case the model ever emits the
+ * graph directly instead of through the string wrapper.
+ */
+function parseGeneratedGraphReply(raw: string): unknown {
+  const outer = JSON.parse(raw)
+  const graphJson = isRecord(outer) ? outer.graphJson : undefined
+  if (typeof graphJson !== 'string') return outer
+  const trimmed = graphJson.trim()
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  return JSON.parse(fenced ? fenced[1].trim() : trimmed)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
 function toolInputHint(schema: unknown): string {
@@ -67,7 +93,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   )
 
   const system =
-    'You design runnable workflow graphs for Backstory Studio. Return ONLY JSON matching the graph schema. ' +
+    'You design runnable workflow graphs for Backstory Studio. Return a single JSON object with one property, graphJson: a JSON string containing the flow graph, shaped as {"nodes": [...], "edges": [...]}. ' +
     'Always include one trigger node with id "trigger". Prefer deterministic tool nodes for concrete integration actions and agent nodes for reasoning/writing decisions. ' +
     'Allowed node types: agent, tool, http, transform, filter, condition, switch, loop, parallel, stop. ' +
     'If the flow expects named input fields, put them on the trigger as data.trigger.inputFields: [{name,type,description}]. ' +
@@ -108,7 +134,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       toolCatalog,
     }
     const raw = await generateStructured({ system, user, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph', maxTokens: 3500 })
-    let graph = repairGeneratedFlowGraph(flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(JSON.parse(raw))), { agents: roster, toolCatalog })
+    let graph = repairGeneratedFlowGraph(flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(parseGeneratedGraphReply(raw))), { agents: roster, toolCatalog })
     let validation = validateFlowGraph(graph, { ...validationContext, requireRunnable: graph.nodes.length > 1 })
 
     if (!validation.ok) {
@@ -122,7 +148,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         `Broken graph:\n${JSON.stringify(graph)}`,
       ].join('\n')
       const repairedRaw = await generateStructured({ system, user: repairUser, schema: GRAPH_JSON_SCHEMA, schemaName: 'flow_graph_repair', maxTokens: 3500 })
-      graph = repairGeneratedFlowGraph(flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(JSON.parse(repairedRaw))), { agents: roster, toolCatalog })
+      graph = repairGeneratedFlowGraph(flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(parseGeneratedGraphReply(repairedRaw))), { agents: roster, toolCatalog })
       validation = validateFlowGraph(graph, { ...validationContext, requireRunnable: graph.nodes.length > 1 })
     }
 

@@ -351,6 +351,40 @@ export function structuredProviderOrder(input: {
 }
 
 /**
+ * Anthropic structured outputs require every object schema to close
+ * additionalProperties. Deep-normalize: any {type:'object'} WITH properties
+ * gains additionalProperties:false (unless explicitly set); recurses through
+ * properties/items/anyOf/oneOf/allOf/definitions/$defs.
+ *
+ * A {type:'object'} WITHOUT properties (free-form) is left untouched — strict
+ * mode cannot express a free-form object at all, so forcing
+ * additionalProperties:false there would collapse it to an empty object.
+ */
+export function strictifySchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const visit = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(visit)
+    if (!node || typeof node !== 'object') return node
+    const out: Record<string, unknown> = { ...(node as Record<string, unknown>) }
+    if (out.type === 'object' && out.properties && typeof out.properties === 'object') {
+      if (out.additionalProperties === undefined) out.additionalProperties = false
+      out.properties = Object.fromEntries(
+        Object.entries(out.properties as Record<string, unknown>).map(([key, value]) => [key, visit(value)]),
+      )
+    }
+    for (const key of ['items', 'anyOf', 'oneOf', 'allOf'] as const) {
+      if (out[key] !== undefined) out[key] = visit(out[key])
+    }
+    for (const key of ['definitions', '$defs'] as const) {
+      if (out[key] && typeof out[key] === 'object') {
+        out[key] = Object.fromEntries(Object.entries(out[key] as Record<string, unknown>).map(([k, v]) => [k, visit(v)]))
+      }
+    }
+    return out
+  }
+  return visit(schema) as Record<string, unknown>
+}
+
+/**
  * One structured call over the Anthropic Messages API (both Claude and Qwen
  * speak it). `output_config` json_schema constrains the reply to the schema.
  */
@@ -360,7 +394,7 @@ async function anthropicWireStructured(opts: StructuredOpts, client: Anthropic, 
     max_tokens: opts.maxTokens ?? 4096,
     system: opts.system,
     messages: [{ role: 'user', content: opts.user }],
-    output_config: { format: { type: 'json_schema', schema: opts.schema } },
+    output_config: { format: { type: 'json_schema', schema: strictifySchema(opts.schema) } },
   })
   return response.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
