@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +25,7 @@ import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import { CheckerPanel } from '@/components/flows/checker-panel'
 import { ResizablePanel } from '@/components/flows/resizable-panel'
 import { TestPanel } from '@/components/flows/test-panel'
+import { VersionsPanel } from '@/components/flows/versions-panel'
 import type { StepStatus } from '@/components/flows/step-card'
 
 type Agent = { id: string; title: string }
@@ -184,6 +185,8 @@ export default function FlowBuilder() {
   const [showRuns, setShowRuns] = useState(false)
   const [showChecker, setShowChecker] = useState(false)
   const [showTest, setShowTest] = useState(false)
+  const [showVersions, setShowVersions] = useState(false)
+  const [viewingVersion, setViewingVersion] = useState<{ version: number; graph: FlowGraph } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
   const [zoom, setZoomState] = useState(() => {
@@ -310,6 +313,7 @@ export default function FlowBuilder() {
         return
       }
       if ((e.key === 'Delete' || e.key === 'Backspace') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (viewingVersion) return
         if (selectedId && selectedId !== 'trigger') {
           e.preventDefault()
           commitGraph(deleteNode(graph, selectedId))
@@ -327,6 +331,7 @@ export default function FlowBuilder() {
         return
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
+        if (viewingVersion) return
         const copied = readFlowClipboard()
         if (!copied) return
         e.preventDefault()
@@ -340,7 +345,7 @@ export default function FlowBuilder() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo, selectedId, selectedNode, graph, commitGraph])
+  }, [undo, redo, selectedId, selectedNode, graph, commitGraph, viewingVersion])
 
   const loopContext = useMemo(() => parentLoop(graph, selectedId), [graph, selectedId])
   const parallelContext = useMemo(() => parentParallelBranch(graph, selectedId), [graph, selectedId])
@@ -488,6 +493,40 @@ export default function FlowBuilder() {
       if (found) setSelectedRun(found)
     },
     [id],
+  )
+
+  const viewVersion = useCallback(
+    async (v: number) => {
+      const data = await fetch(`/api/flows/${id}/versions?version=${v}`, { cache: 'no-store' })
+        .then((r) => r.json())
+        .catch(() => null)
+      if (data?.success && data.version?.graph) {
+        setSelectedId(null)
+        setViewingVersion({ version: v, graph: data.version.graph })
+      } else {
+        toast.error('Could not load that version.')
+      }
+    },
+    [id],
+  )
+
+  const restoreVersion = useCallback(
+    async (v: number) => {
+      const response = await fetch(`/api/flows/${id}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version: v, action: 'restore' }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data.flow?.graph) {
+        commitGraph(data.flow.graph)
+        setViewingVersion(null)
+        toast.success(`Restored v${v} into the draft.`)
+      } else {
+        toast.error(data.error || 'Could not restore that version.')
+      }
+    },
+    [id, commitGraph],
   )
 
   const run = useCallback(async () => {
@@ -662,6 +701,11 @@ export default function FlowBuilder() {
     )
   }
 
+  // While viewing a historical snapshot, the canvas renders that version's
+  // graph and every mutation path is inert — the live draft (`graph` state)
+  // is untouched underneath, so Save/Publish/Run still act on the real draft.
+  const canvasGraph = viewingVersion ? viewingVersion.graph : graph
+
   return (
     <div className="flex h-full flex-col">
       {/* Top bar */}
@@ -716,6 +760,9 @@ export default function FlowBuilder() {
         <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
           <ListChecks className="mr-1.5 h-4 w-4" /> Runs
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setShowVersions((v) => !v)}>
+          <History className="mr-1.5 h-4 w-4" /> History
+        </Button>
         <Button variant="outline" size="sm" onClick={() => setShowCopilot((v) => !v)}>
           <Sparkles className="mr-1.5 h-4 w-4" /> Copilot
         </Button>
@@ -745,6 +792,20 @@ export default function FlowBuilder() {
         </Button>
       </div>
 
+      {viewingVersion && (
+        <div className="flex items-center justify-between border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/40 dark:text-amber-200">
+          <span>Viewing v{viewingVersion.version} — read-only</span>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => restoreVersion(viewingVersion.version)}>
+              Restore this version
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setViewingVersion(null)}>
+              Close
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Body: canvas + optional drawer + optional copilot */}
       <div className="relative flex min-h-0 flex-1">
         <div
@@ -758,7 +819,7 @@ export default function FlowBuilder() {
         >
           <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', width: `${100 / zoom}%`, marginLeft: `${(1 - 1 / zoom) * 50}%` }}>
             <FlowCanvas
-              graph={graph}
+              graph={canvasGraph}
               agentName={(agentId) => agentsById.get(agentId) ?? ''}
               agents={agents}
               toolCatalog={toolCatalog}
@@ -766,41 +827,63 @@ export default function FlowBuilder() {
               statusByNode={statusByNode}
               issuesByNode={issuesByNode}
               selectedId={selectedId}
-              onSelect={setSelectedId}
+              onSelect={viewingVersion ? () => {} : setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}
-              onChangeNode={(node) => setGraph((g) => updateNode(g, node))}
-              onInsertAfter={(afterId, type, seed) => {
-                const { graph: inserted, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
-                const next = applyInsertSeed(inserted, nodeId, seed)
-                commitGraph(next)
-                setSelectedId(nodeId)
-              }}
-              onAppendBranch={(conditionId, branch, type, seed) => {
-                const { graph: inserted, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
-                const next = applyInsertSeed(inserted, nodeId, seed)
-                commitGraph(next)
-                setSelectedId(nodeId)
-              }}
+              onChangeNode={viewingVersion ? () => {} : (node) => setGraph((g) => updateNode(g, node))}
+              onInsertAfter={
+                viewingVersion
+                  ? () => {}
+                  : (afterId, type, seed) => {
+                      const { graph: inserted, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
+                      const next = applyInsertSeed(inserted, nodeId, seed)
+                      commitGraph(next)
+                      setSelectedId(nodeId)
+                    }
+              }
+              onAppendBranch={
+                viewingVersion
+                  ? () => {}
+                  : (conditionId, branch, type, seed) => {
+                      const { graph: inserted, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
+                      const next = applyInsertSeed(inserted, nodeId, seed)
+                      commitGraph(next)
+                      setSelectedId(nodeId)
+                    }
+              }
               onRefreshAgents={refreshAgents}
-              onDuplicateNode={(nodeId) => {
-                const { graph: next, nodeId: newId } = duplicateNode(graph, nodeId)
-                commitGraph(next)
-                setSelectedId(newId)
-              }}
-              onDeleteNode={(nodeId) => {
-                commitGraph(deleteNode(graph, nodeId))
-                if (selectedId === nodeId) setSelectedId(null)
-              }}
-              onPickTrigger={(type) => {
-                const triggerNode = graph.nodes.find((n) => n.type === 'trigger')
-                if (!triggerNode || triggerNode.type !== 'trigger') return
-                const current = isRecordLike(triggerNode.data.trigger) ? triggerNode.data.trigger : {}
-                commitGraph(updateNode(graph, { ...triggerNode, data: { trigger: { ...current, type } } }))
-                setSelectedId(triggerNode.id)
-              }}
-              onMoveAfter={(nodeId, afterId) => commitGraph(moveNodeAfter(graph, nodeId, afterId))}
-              onReorderContainer={(containerId, from, to, branchIndex) =>
-                commitGraph(moveContainerStep(graph, containerId, from, to, branchIndex))
+              onDuplicateNode={
+                viewingVersion
+                  ? () => {}
+                  : (nodeId) => {
+                      const { graph: next, nodeId: newId } = duplicateNode(graph, nodeId)
+                      commitGraph(next)
+                      setSelectedId(newId)
+                    }
+              }
+              onDeleteNode={
+                viewingVersion
+                  ? () => {}
+                  : (nodeId) => {
+                      commitGraph(deleteNode(graph, nodeId))
+                      if (selectedId === nodeId) setSelectedId(null)
+                    }
+              }
+              onPickTrigger={
+                viewingVersion
+                  ? () => {}
+                  : (type) => {
+                      const triggerNode = graph.nodes.find((n) => n.type === 'trigger')
+                      if (!triggerNode || triggerNode.type !== 'trigger') return
+                      const current = isRecordLike(triggerNode.data.trigger) ? triggerNode.data.trigger : {}
+                      commitGraph(updateNode(graph, { ...triggerNode, data: { trigger: { ...current, type } } }))
+                      setSelectedId(triggerNode.id)
+                    }
+              }
+              onMoveAfter={viewingVersion ? () => {} : (nodeId, afterId) => commitGraph(moveNodeAfter(graph, nodeId, afterId))}
+              onReorderContainer={
+                viewingVersion
+                  ? () => {}
+                  : (containerId, from, to, branchIndex) => commitGraph(moveContainerStep(graph, containerId, from, to, branchIndex))
               }
             />
           </div>
@@ -813,8 +896,8 @@ export default function FlowBuilder() {
             setZoom(1)
             canvasScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
           }}
-          nodes={graph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
-          onJump={jumpToNode}
+          nodes={canvasGraph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
+          onJump={viewingVersion ? () => {} : jumpToNode}
         />
 
         {selectedNode && (
@@ -898,6 +981,18 @@ export default function FlowBuilder() {
               onFixWithCopilot={fixWithCopilot}
               onClose={() => setShowChecker(false)}
               onJump={jumpToNode}
+            />
+          </ResizablePanel>
+        )}
+
+        {showVersions && (
+          <ResizablePanel storageKey="flow.versionsWidth">
+            <VersionsPanel
+              flowId={id}
+              currentVersion={version}
+              onView={viewVersion}
+              onRestore={restoreVersion}
+              onClose={() => setShowVersions(false)}
             />
           </ResizablePanel>
         )}
