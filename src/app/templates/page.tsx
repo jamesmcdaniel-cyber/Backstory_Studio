@@ -140,6 +140,7 @@ function ExplorePage() {
   // Create/edit dialog for community templates + skills.
   const [dialog, setDialog] = useState<AssetDraft | null>(null)
   const [savingAsset, setSavingAsset] = useState(false)
+  const aiRequestSeq = useRef(0)
 
   const openCreate = (kind: 'template' | 'skill') => setDialog(emptyAsset(kind))
   const openEditTemplate = (t: TemplateItem) =>
@@ -266,6 +267,7 @@ function ExplorePage() {
   const runAiSearch = async () => {
     const goal = search.trim()
     if (goal.length < 3 || aiLoading) return
+    const seq = ++aiRequestSeq.current
     setAiResults([])
     setAiError(null)
     setAiLoading(true)
@@ -281,20 +283,22 @@ function ExplorePage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setAiError(data.error || 'Could not find matches for that goal.')
+        if (seq === aiRequestSeq.current) setAiError(data.error || 'Could not find matches for that goal.')
         return
       }
-      setAiResults(data.matches || [])
+      if (seq === aiRequestSeq.current) setAiResults(data.matches || [])
     } catch {
-      setAiError('Could not find matches for that goal.')
+      if (seq === aiRequestSeq.current) setAiError('Could not find matches for that goal.')
     } finally {
-      setAiLoading(false)
+      if (seq === aiRequestSeq.current) setAiLoading(false)
     }
   }
 
   const closeAiResults = () => {
+    aiRequestSeq.current++
     setAiResults(null)
     setAiError(null)
+    setAiLoading(false)
   }
 
   const jumpToMatch = (match: { id: string; kind: string }, name: string) => {
