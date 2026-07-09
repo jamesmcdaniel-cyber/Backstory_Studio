@@ -112,6 +112,8 @@ function KeyValueJsonEditor({
   registerEditor,
   focusEditor,
   clearActive,
+  blockActive,
+  unblockActive,
 }: {
   label: string
   value: string | undefined
@@ -124,6 +126,8 @@ function KeyValueJsonEditor({
   registerEditor: (key: string) => (handle: TokenTextEditorHandle | null) => void
   focusEditor: (key: string) => () => void
   clearActive: () => void
+  blockActive: () => void
+  unblockActive: () => void
 }) {
   const parsed = parseKeyValueRows(value)
 
@@ -136,7 +140,8 @@ function KeyValueJsonEditor({
           className={`${areaClass} font-mono text-xs`}
           value={value ?? ''}
           placeholder={'{"name": "value"}'}
-          onFocus={clearActive}
+          onFocus={blockActive}
+          onBlur={unblockActive}
           onChange={(e) => onChange(e.target.value || undefined)}
         />
         <p className="mt-1 text-[11px] text-amber-600">This saved value is not a JSON object. Fix it here, or clear it to return to key/value rows.</p>
@@ -239,6 +244,11 @@ function AddNestedStepMenu({
   )
 }
 
+// Sentinel for activeFieldRef: the raw-JSON fallback textarea is focused, so
+// datatree inserts must be a no-op — falling back to the step's primary field
+// would silently write to a field the user is not editing.
+const RAW_JSON_BLOCKED = 'raw-json-blocked'
+
 // Where a datatree click lands when no chip editor has been focused yet: the
 // step type's primary token field (mirrors the old default-accessor behavior).
 const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
@@ -302,6 +312,14 @@ export function StepDrawer({
   const clearActive = () => {
     activeFieldRef.current = null
   }
+  // While the raw-JSON fallback textarea is focused, datatree inserts are
+  // blocked entirely; blur restores the normal fallback behavior.
+  const blockActive = () => {
+    activeFieldRef.current = RAW_JSON_BLOCKED
+  }
+  const unblockActive = () => {
+    if (activeFieldRef.current === RAW_JSON_BLOCKED) activeFieldRef.current = null
+  }
   useEffect(() => {
     activeFieldRef.current = null
   }, [node.id])
@@ -312,6 +330,7 @@ export function StepDrawer({
   // the step's primary field when nothing has been focused yet. DataTree emits
   // braced `{{token}}`s; the chip editor takes the bare path.
   const insertToken = (token: string) => {
+    if (activeFieldRef.current === RAW_JSON_BLOCKED) return
     const path = token.startsWith('{{') && token.endsWith('}}') ? token.slice(2, -2).trim() : token
     const active = activeFieldRef.current ? editorHandles.current.get(activeFieldRef.current) : null
     const fallbackKey = DEFAULT_EDITOR_KEYS[node.type]
@@ -630,6 +649,8 @@ export function StepDrawer({
               registerEditor={registerEditor}
               focusEditor={focusEditor}
               clearActive={clearActive}
+              blockActive={blockActive}
+              unblockActive={unblockActive}
             />
             <KeyValueJsonEditor
               label="Headers"
@@ -643,6 +664,8 @@ export function StepDrawer({
               registerEditor={registerEditor}
               focusEditor={focusEditor}
               clearActive={clearActive}
+              blockActive={blockActive}
+              unblockActive={unblockActive}
             />
             <div>
               <label className={labelClass}>Body</label>

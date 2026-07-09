@@ -66,11 +66,20 @@ function coerce(value: string): number | string {
   return value.trim() !== '' && !Number.isNaN(n) ? n : value
 }
 
+/**
+ * Trim resolved string operands before comparison. Chip insertion appends a
+ * trailing space (and users hand-type padding), which would break strict
+ * comparisons like eq. Non-string operands pass through untouched.
+ */
+function trimOperand<T>(value: T): T {
+  return typeof value === 'string' ? (value.trim() as T) : value
+}
+
 /** Evaluate a structured condition against the context. Never runs arbitrary code. */
 /** Evaluate a single comparison. Both sides are templated (RHS may be dynamic). */
 export function evalClause(clause: { left: string; op: ConditionOp; right: string }, ctx: FlowContext): boolean {
-  const leftRaw = resolveTemplate(clause.left, ctx)
-  const rightRaw = resolveTemplate(clause.right, ctx)
+  const leftRaw = trimOperand(resolveTemplate(clause.left, ctx))
+  const rightRaw = trimOperand(resolveTemplate(clause.right, ctx))
   const cond = clause
   switch (cond.op) {
     case 'contains':

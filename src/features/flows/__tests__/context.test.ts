@@ -61,6 +61,40 @@ test('evalClause templates the right-hand side (dynamic comparison)', () => {
   assert.equal(evalClause({ left: '{{step.s.output.score}}', op: 'lt', right: '{{trigger.input}}' }, c), false)
 })
 
+test('evalClause trims resolved string operands (chip insertion leaves trailing spaces)', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { s: { output: { stage: 'enterprise ', notes: 'the enterprise tier' } } },
+  }
+  // eq: trailing space from a chip insert on either side still matches.
+  assert.equal(evalClause({ left: '{{step.s.output.stage}}', op: 'eq', right: 'enterprise' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.stage}} ', op: 'eq', right: ' enterprise ' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.stage}}', op: 'neq', right: 'enterprise' }, c), false)
+  // contains: a trailing-space needle still matches.
+  assert.equal(evalClause({ left: '{{step.s.output.notes}}', op: 'contains', right: 'enterprise ' }, c), true)
+  // matches: a padded pattern still compiles and matches.
+  assert.equal(evalClause({ left: '{{step.s.output.stage}}', op: 'matches', right: ' ^enter ' }, c), true)
+})
+
+test('evalClause numeric comparisons still work with padded numerics', () => {
+  const c: FlowContext = { trigger: { input: ' 80 ' }, step: { s: { output: { score: '91 ' } } } }
+  assert.equal(evalClause({ left: '{{step.s.output.score}} ', op: 'gt', right: '{{trigger.input}}' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.score}}', op: 'lte', right: '{{trigger.input}}' }, c), false)
+  assert.equal(evalClause({ left: ' 91 ', op: 'eq', right: '91' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.score}}', op: 'gte', right: '91' }, c), true)
+})
+
+test('evalClause leaves non-string operands from structured outputs intact', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { s: { output: { score: 91, active: true, ratio: 0.5 } } },
+  }
+  assert.equal(evalClause({ left: '{{step.s.output.score}}', op: 'eq', right: '91' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.active}}', op: 'eq', right: 'true' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.ratio}}', op: 'lt', right: '1' }, c), true)
+  assert.equal(evalClause({ left: '{{step.s.output.score}} ', op: 'gt', right: '90' }, c), true)
+})
+
 test('evalCondition combines clauses with all (AND) / any (OR)', () => {
   const pass = { left: '{{step.n3.output.score}}', op: 'gt' as const, right: '80' }
   const fail = { left: '{{item}}', op: 'eq' as const, right: 'Globex' }
