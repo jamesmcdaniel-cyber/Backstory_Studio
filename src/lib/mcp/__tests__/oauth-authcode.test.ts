@@ -19,3 +19,10 @@ test('safeReturnToPath rejects protocol-relative, backslash, and absolute URLs',
 test('safeReturnToPath rejects backslashes anywhere in the path', () => {
   assert.equal(safeReturnToPath('/connect\\..'), undefined)
 })
+
+test('safeReturnToPath rejects control characters (WHATWG strips them before parsing)', () => {
+  assert.equal(safeReturnToPath('/\t/evil.com'), undefined)
+  assert.equal(safeReturnToPath('/\n/evil.com'), undefined)
+  assert.equal(safeReturnToPath('/\r/evil.com'), undefined)
+  assert.equal(safeReturnToPath('/connect '), undefined)
+})

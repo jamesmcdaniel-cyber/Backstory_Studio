@@ -23,11 +23,17 @@ import crypto from 'crypto'
 /**
  * Accept only same-origin path redirects: must start with exactly one '/',
  * and never contain a backslash (WHATWG URL normalizes '\' to '/' for http(s),
- * so '/\evil.com' would resolve off-origin — CWE-601).
+ * so '/\evil.com' would resolve off-origin — CWE-601). Also rejects control
+ * characters and whitespace, which WHATWG strips during parsing and could
+ * smuggle a protocol-relative redirect.
  */
 export function safeReturnToPath(value: string | undefined | null): string | undefined {
   if (!value) return undefined
   if (value.includes('\\')) return undefined
+  // WHATWG URL strips C0 controls/DEL during parsing, so any of them could
+  // smuggle a protocol-relative redirect ('/\t/evil.com' -> '//evil.com').
+  // Also reject space and other whitespace which can't appear in valid paths.
+  if (/[\x00-\x20\x7F]/.test(value)) return undefined
   if (!/^\/(?!\/)/.test(value)) return undefined
   return value
 }
