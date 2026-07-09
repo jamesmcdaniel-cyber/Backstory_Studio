@@ -20,6 +20,7 @@ import {
   Play,
   Send,
   Sparkles,
+  Trash2,
   Wrench,
   X,
   XCircle,
@@ -58,12 +59,15 @@ type RunDetails = {
   messages: Array<{ id: string; role: string; content: string; createdAt: string }>
 }
 
-export const groupOrder = ['running', 'waiting_for_input', 'failed', 'completed'] as const
+export const groupOrder = ['running', 'cancelling', 'waiting_for_input', 'waiting_for_approval', 'failed', 'cancelled', 'completed'] as const
 
 export const groupLabels: Record<string, string> = {
   running: 'Running',
+  cancelling: 'Cancelling',
   waiting_for_input: 'Needs input',
+  waiting_for_approval: 'Needs approval',
   failed: 'Error',
+  cancelled: 'Cancelled',
   completed: 'Success',
 }
 
@@ -82,8 +86,13 @@ function runStatusIcon(status: string) {
     case 'running':
     case 'pending':
       return <CircleDashed className="h-4 w-4 shrink-0 animate-spin text-blue-600" aria-label="Running" />
+    case 'cancelling':
+      return <CircleDashed className="h-4 w-4 shrink-0 animate-spin text-gray-400" aria-label="Cancelling" />
     case 'waiting_for_input':
+    case 'waiting_for_approval':
       return <HelpCircle className="h-4 w-4 shrink-0 text-amber-500" aria-label="Needs input" />
+    case 'cancelled':
+      return <XCircle className="h-4 w-4 shrink-0 text-gray-400" aria-label="Cancelled" />
     default:
       return <AlertCircle className="h-4 w-4 shrink-0 text-gray-400" aria-label={status} />
   }
@@ -627,8 +636,11 @@ function RunRow({
   const [details, setDetails] = useState<RunDetails | null>(null)
   const [reply, setReply] = useState('')
   const [replying, setReplying] = useState(false)
+  const [actionBusy, setActionBusy] = useState(false)
   const status = activityStatus(activity)
-  const isActive = ['running', 'pending', 'waiting_for_input'].includes(status)
+  const isActive = ['running', 'pending', 'cancelling', 'waiting_for_input', 'waiting_for_approval'].includes(status)
+  const isCancellable = ['running', 'waiting_for_input', 'waiting_for_approval'].includes(status)
+  const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
   const { items: timeline, suggestions } = buildTimeline(details)
   // The most recent question this run asked that carries a remembered prior
   // answer, so the reply box can offer a one-click prefill instead of making
@@ -672,14 +684,63 @@ function RunRow({
     }
   }
 
+  const cancelRun = async () => {
+    if (actionBusy || !window.confirm('Cancel this run?')) return
+    setActionBusy(true)
+    try {
+      const response = await fetch(`/api/agents/${agentId}/runs/${activity.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'cancel' }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) {
+        toast.error(data.error || 'Could not cancel the run.')
+        return
+      }
+      toast.success('Run cancelled.')
+      onChanged()
+    } catch {
+      toast.error('Could not cancel the run.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const deleteRun = async () => {
+    if (actionBusy || !window.confirm('Delete this run from history? This cannot be undone.')) return
+    setActionBusy(true)
+    try {
+      const response = await fetch(`/api/agents/${agentId}/runs/${activity.id}`, { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) {
+        toast.error(data.error || 'Could not delete the run.')
+        return
+      }
+      toast.success('Run deleted.')
+      onChanged()
+    } catch {
+      toast.error('Could not delete the run.')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
   return (
     <div className="border-b">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         aria-expanded={expanded}
         onClick={onToggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onToggle()
+          }
+        }}
         className={cn(
-          'grid w-full grid-cols-[auto_auto_1fr_auto] items-center gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-gray-50',
+          'grid w-full cursor-pointer grid-cols-[auto_auto_1fr_auto_auto] items-center gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-gray-50',
           expanded && 'bg-gray-50',
         )}
       >
@@ -693,13 +754,38 @@ function RunRow({
                 activity.metadata?.pendingQuestion?.question || activity.metadata?.headline || activity.error || resultText(activity)
               if (summary) return summary
               if (status === 'waiting_for_input') return 'Waiting for you…'
+              if (status === 'cancelling') return 'Cancelling…'
               if (isActive) return <TypewriterStatus seed={activity.id ? activity.id.charCodeAt(activity.id.length - 1) : 0} />
               return 'No output'
             })()}
           </div>
         </div>
         <time className="shrink-0 font-mono text-xs tabular-nums text-gray-400">{new Date(activity.startedAt).toLocaleString()}</time>
-      </button>
+        <span className="flex shrink-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
+          {isCancellable && (
+            <button
+              type="button"
+              title="Cancel this run"
+              disabled={actionBusy}
+              onClick={cancelRun}
+              className="shrink-0 rounded p-1 text-gray-400 transition-colors duration-150 hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <XCircle className="h-4 w-4" />
+            </button>
+          )}
+          {isTerminal && (
+            <button
+              type="button"
+              title="Delete this run"
+              disabled={actionBusy}
+              onClick={deleteRun}
+              className="shrink-0 rounded p-1 text-gray-400 transition-colors duration-150 hover:bg-red-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </span>
+      </div>
 
       {expanded && (
         <div className="space-y-4 border-t bg-gray-50/60 px-4 py-4">
@@ -857,7 +943,9 @@ export function AgentActivityPane({
             <div className="flex items-center gap-2 border-b bg-gray-50 px-4 py-2 text-sm font-medium">
               {groupStatus === 'completed' ? <CheckCircle2 className="h-4 w-4 text-green-600" /> :
                 groupStatus === 'running' ? <CircleDashed className="h-4 w-4 animate-spin text-blue-600" /> :
-                groupStatus === 'waiting_for_input' ? <HelpCircle className="h-4 w-4 text-amber-500" /> :
+                groupStatus === 'cancelling' ? <CircleDashed className="h-4 w-4 animate-spin text-gray-400" /> :
+                groupStatus === 'waiting_for_input' || groupStatus === 'waiting_for_approval' ? <HelpCircle className="h-4 w-4 text-amber-500" /> :
+                groupStatus === 'cancelled' ? <XCircle className="h-4 w-4 text-gray-400" /> :
                 <AlertCircle className="h-4 w-4 text-red-600" />}
               {groupLabels[groupStatus]} <span className="font-mono text-xs tabular-nums text-gray-400">{items.length}</span>
             </div>

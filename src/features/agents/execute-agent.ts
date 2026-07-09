@@ -985,6 +985,44 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     let planEmitted = false
 
     for (let turn = startTurn; turn < maxTurns; turn += 1) {
+      // Cooperative cancellation: the cancel API flips a running execution's
+      // status to 'cancelling' rather than mutating this in-memory loop, so
+      // check the freshest DB status once per turn (an extra findUnique per
+      // LLM call is cheap) and exit cleanly the moment it's noticed.
+      const live = await prisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
+      if (live?.status === 'cancelling') {
+        const cancelSummary = 'Run cancelled by the user.'
+        await prisma.executionMessage.create({
+          data: { executionId: execution.id, role: 'agent', content: cancelSummary },
+        })
+        await prisma.agentExecution.update({
+          where: { id: execution.id },
+          data: {
+            status: 'cancelled',
+            error: null,
+            transcript: jsonValue(transcript),
+            inputTokens: { increment: usage.inputTokens },
+            outputTokens: { increment: usage.outputTokens },
+            executionTime: { increment: Date.now() - segmentStart },
+            completedAt: new Date(),
+          },
+        })
+        await recordEvent(execution.id, null, 'run.cancelled', { reason: 'user_requested' })
+        await notify({
+          organizationId,
+          userId,
+          type: 'agent.cancelled',
+          level: 'info',
+          title: `${agentMetadata.title || agent.description} run cancelled`,
+          body: cancelSummary,
+          agentTaskId: agent.id,
+          executionId: execution.id,
+        })
+        // No reflection/indexing for a cancelled run — those are for runs that
+        // actually produced an outcome worth learning from.
+        return { summary: cancelSummary, executionId: execution.id }
+      }
+
       const turnResult = await runner.next(transcript, system, [...tools, ASK_USER_TOOL])
       usage.inputTokens += turnResult.usage.inputTokens
       usage.outputTokens += turnResult.usage.outputTokens
