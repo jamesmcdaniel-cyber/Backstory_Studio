@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -764,6 +764,9 @@ export default function FlowBuilder() {
         </Button>
         <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
           <ListChecks className="mr-1.5 h-4 w-4" /> Runs
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => router.push(`/flows/${id}/activity`)}>
+          <ScrollText className="mr-1.5 h-4 w-4" /> Activity
         </Button>
         <Button variant="outline" size="sm" onClick={() => setShowVersions((v) => !v)}>
           <History className="mr-1.5 h-4 w-4" /> History

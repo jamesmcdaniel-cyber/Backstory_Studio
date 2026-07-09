@@ -33,8 +33,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     return <main id="main-content">{children}</main>
   }
 
-  // The flow builder (/flows/<id>) is fullscreen; the /flows list is centered.
-  const fullscreen = FULLSCREEN_ROUTES.has(pathname) || (pathname.startsWith('/flows/') && pathname !== '/flows')
+  // The flow builder (/flows/<id>) is fullscreen; the /flows list AND any
+  // deeper /flows/<id>/* subpage (e.g. /flows/<id>/activity) use the centered
+  // container, so only exactly one path segment past "/flows/" goes edge-to-edge.
+  const flowSegments = pathname.startsWith('/flows/') ? pathname.slice('/flows/'.length).split('/').filter(Boolean) : []
+  const fullscreen = FULLSCREEN_ROUTES.has(pathname) || flowSegments.length === 1
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       <Sidebar />

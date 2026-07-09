@@ -5,6 +5,15 @@ import { agentVisibilityScope } from '@/lib/server/visibility'
 // GET /api/flows/[id]/runs — recent runs + each run's per-step detail (input,
 // output, error), polled by the builder for live status and run inspection.
 // id is the segment before "runs".
+//
+// Query params (all optional, additive — no-param behavior is unchanged aside
+// from the `trigger` field always present on the shaped run now):
+//   status=a,b   filter to a comma-separated set of run statuses
+//   take=N       page size, default 20, capped at 100
+//   summary=1    lighter payload for list views: steps carry only
+//                {nodeId, status, order, error} and runs omit input/output
+//                (error is still included) — used by the activity table so it
+//                isn't shipping every run's full input/output over the wire.
 export const GET = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-2)
   if (!id) throw new ApiError('Flow id is required')
@@ -14,14 +23,23 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     select: { id: true },
   })
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+
+  const searchParams = request.nextUrl.searchParams
+  const statusList = (searchParams.get('status') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const takeParam = Number(searchParams.get('take'))
+  const take = Number.isFinite(takeParam) && takeParam > 0 ? Math.min(100, Math.floor(takeParam)) : 20
+  const summary = searchParams.get('summary') === '1'
+
   const runs = await prisma.flowRun.findMany({
-    where: { flowId: id, organizationId: auth.organizationId },
+    where: { flowId: id, organizationId: auth.organizationId, ...(statusList.length ? { status: { in: statusList } } : {}) },
     orderBy: { startedAt: 'desc' },
-    take: 20,
+    take,
     include: {
       steps: {
         orderBy: { order: 'asc' },
-        select: { nodeId: true, status: true, order: true, error: true, input: true, output: true, startedAt: true, finishedAt: true },
+        select: summary
+          ? { nodeId: true, status: true, order: true, error: true }
+          : { nodeId: true, status: true, order: true, error: true, input: true, output: true, startedAt: true, finishedAt: true },
       },
     },
   })
@@ -30,8 +48,8 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     status: run.status,
     startedAt: run.startedAt,
     finishedAt: run.finishedAt,
-    input: run.input,
-    output: run.output,
+    trigger: run.trigger,
+    ...(summary ? {} : { input: run.input, output: run.output }),
     error: run.error,
     steps: run.steps,
   })
