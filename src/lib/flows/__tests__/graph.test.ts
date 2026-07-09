@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { flowGraphSchema, emptyGraph } from '../graph'
+import { flowGraphSchema, emptyGraph, triggerInputFieldSchema } from '../graph'
 
 test('emptyGraph has a single manual trigger node and no edges', () => {
   const g = emptyGraph()
@@ -54,4 +54,35 @@ test('flowGraphSchema rejects a condition with a bad op', () => {
       edges: [],
     }),
   )
+})
+
+test('triggerInputFieldSchema accepts a required flag', () => {
+  const parsed = triggerInputFieldSchema.parse({ name: 'account', type: 'string', required: true })
+  assert.equal(parsed.required, true)
+  assert.equal(triggerInputFieldSchema.parse({ name: 'note', type: 'string' }).required, undefined)
+})
+
+test('agent nodes accept responseFormat and humanAssistance', () => {
+  const graph = flowGraphSchema.parse({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'n1',
+        type: 'agent',
+        data: {
+          agentId: 'a1',
+          responseFormat: 'structured',
+          humanAssistance: false,
+          outputFields: [{ name: 'score', type: 'number' }],
+        },
+      },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  })
+  const agent = graph.nodes[1]
+  assert.equal(agent.type, 'agent')
+  if (agent.type === 'agent') {
+    assert.equal(agent.data.responseFormat, 'structured')
+    assert.equal(agent.data.humanAssistance, false)
+  }
 })

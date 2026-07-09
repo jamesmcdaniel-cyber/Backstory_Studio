@@ -1,4 +1,4 @@
-import type { FlowGraph } from '@/lib/flows/graph'
+import { FIELD_TYPES, type FlowGraph, type TriggerInputField } from '@/lib/flows/graph'
 
 export const FLOW_TRIGGER_TYPES = ['manual', 'schedule', 'webhook', 'signal'] as const
 export type FlowTriggerType = (typeof FLOW_TRIGGER_TYPES)[number]
@@ -35,4 +35,15 @@ export function preserveWebhookSecretHash(next: unknown, existing: unknown): Flo
     trigger.webhookSecretHash = existing.webhookSecretHash
   }
   return trigger
+}
+
+/** Normalize the trigger's declared input fields from untrusted JSON. */
+export function triggerInputFieldsFromTrigger(trigger: unknown): TriggerInputField[] {
+  if (!isRecord(trigger) || !Array.isArray(trigger.inputFields)) return []
+  return trigger.inputFields.filter(isRecord).map((field) => ({
+    name: typeof field.name === 'string' ? field.name : '',
+    type: (FIELD_TYPES as readonly string[]).includes(String(field.type)) ? (field.type as TriggerInputField['type']) : 'any',
+    description: typeof field.description === 'string' ? field.description : undefined,
+    required: field.required === true,
+  }))
 }

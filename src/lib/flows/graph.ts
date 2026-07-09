@@ -11,6 +11,10 @@ export type FieldType = (typeof FIELD_TYPES)[number]
 export const outputFieldSchema = z.object({ name: z.string(), type: z.enum(FIELD_TYPES).default('any'), description: z.string().optional() })
 export type OutputField = z.infer<typeof outputFieldSchema>
 
+/** A trigger input field: an OutputField plus whether the run must supply it. */
+export const triggerInputFieldSchema = outputFieldSchema.extend({ required: z.boolean().optional() })
+export type TriggerInputField = z.infer<typeof triggerInputFieldSchema>
+
 const triggerNode = z.object({
   id: z.string(),
   type: z.literal('trigger'),
@@ -32,6 +36,12 @@ const agentNode = z.object({
     // Declared output schema — fields this step is expected to produce. Powers
     // the datatree field picker for downstream mapping.
     outputFields: z.array(outputFieldSchema).optional(),
+    // Agent response contract: 'structured' appends a JSON instruction built
+    // from outputFields and fails the step when the reply can't be parsed.
+    responseFormat: z.enum(['text', 'structured']).optional(),
+    // MS-parity "request human assistance when unsure": when false, a step
+    // that pauses to ask a human fails instead of waiting.
+    humanAssistance: z.boolean().optional(),
   }),
 })
 /** One left/op/right comparison; a condition ANDs/ORs a list of these. */
