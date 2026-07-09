@@ -111,7 +111,6 @@ function KeyValueJsonEditor({
   editorKey,
   registerEditor,
   focusEditor,
-  clearActive,
   blockActive,
   unblockActive,
 }: {
@@ -125,7 +124,6 @@ function KeyValueJsonEditor({
   editorKey: string
   registerEditor: (key: string) => (handle: TokenTextEditorHandle | null) => void
   focusEditor: (key: string) => () => void
-  clearActive: () => void
   blockActive: () => void
   unblockActive: () => void
 }) {
@@ -176,7 +174,8 @@ function KeyValueJsonEditor({
                 className={smallField}
                 value={row.key}
                 placeholder={keyPlaceholder}
-                onFocus={clearActive}
+                onFocus={blockActive}
+                onBlur={unblockActive}
                 onChange={(e) => setRow(index, { key: e.target.value })}
               />
               <TokenTextEditor
@@ -244,10 +243,11 @@ function AddNestedStepMenu({
   )
 }
 
-// Sentinel for activeFieldRef: the raw-JSON fallback textarea is focused, so
-// datatree inserts must be a no-op — falling back to the step's primary field
-// would silently write to a field the user is not editing.
-const RAW_JSON_BLOCKED = 'raw-json-blocked'
+// Sentinel for activeFieldRef: a non-token input (raw-JSON textarea, KV key
+// names, label/notes, field-name inputs, …) is focused, so datatree inserts
+// must be a no-op — falling back to the step's primary field would silently
+// write to a field the user is not editing.
+const NON_TOKEN_FOCUSED = 'non-token-focused'
 
 // Where a datatree click lands when no chip editor has been focused yet: the
 // step type's primary token field (mirrors the old default-accessor behavior).
@@ -309,16 +309,13 @@ export function StepDrawer({
   const focusEditor = (key: string) => () => {
     activeFieldRef.current = key
   }
-  const clearActive = () => {
-    activeFieldRef.current = null
-  }
-  // While the raw-JSON fallback textarea is focused, datatree inserts are
-  // blocked entirely; blur restores the normal fallback behavior.
+  // While any non-token input is focused, datatree inserts are blocked
+  // entirely; blur restores the normal fallback behavior.
   const blockActive = () => {
-    activeFieldRef.current = RAW_JSON_BLOCKED
+    activeFieldRef.current = NON_TOKEN_FOCUSED
   }
   const unblockActive = () => {
-    if (activeFieldRef.current === RAW_JSON_BLOCKED) activeFieldRef.current = null
+    if (activeFieldRef.current === NON_TOKEN_FOCUSED) activeFieldRef.current = null
   }
   useEffect(() => {
     activeFieldRef.current = null
@@ -330,7 +327,7 @@ export function StepDrawer({
   // the step's primary field when nothing has been focused yet. DataTree emits
   // braced `{{token}}`s; the chip editor takes the bare path.
   const insertToken = (token: string) => {
-    if (activeFieldRef.current === RAW_JSON_BLOCKED) return
+    if (activeFieldRef.current === NON_TOKEN_FOCUSED) return
     const path = token.startsWith('{{') && token.endsWith('}}') ? token.slice(2, -2).trim() : token
     const active = activeFieldRef.current ? editorHandles.current.get(activeFieldRef.current) : null
     const fallbackKey = DEFAULT_EDITOR_KEYS[node.type]
@@ -368,7 +365,7 @@ export function StepDrawer({
             </div>
             <div>
               <label className={labelClass}>Label (optional)</label>
-              <input className={fieldClass} value={(node.data as { label?: string }).label ?? ''} placeholder="A short name for this step" onChange={(e) => setLabel(e.target.value)} />
+              <input className={fieldClass} value={(node.data as { label?: string }).label ?? ''} placeholder="A short name for this step" onFocus={blockActive} onBlur={unblockActive} onChange={(e) => setLabel(e.target.value)} />
             </div>
             <div>
               <label className={labelClass}>Notes (optional)</label>
@@ -377,6 +374,8 @@ export function StepDrawer({
                 className={fieldClass}
                 value={(node.data as { note?: string }).note ?? ''}
                 placeholder="Why this step exists, gotchas, links…"
+                onFocus={blockActive}
+                onBlur={unblockActive}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, note: e.target.value || undefined } } as FlowNode)}
               />
             </div>
@@ -443,6 +442,8 @@ export function StepDrawer({
             <OutputFieldsEditor
               fields={node.data.outputFields ?? []}
               onChange={(outputFields) => onChange({ ...node, data: { ...node.data, outputFields: outputFields.length ? outputFields : undefined } })}
+              blockActive={blockActive}
+              unblockActive={unblockActive}
             />
           </>
         )}
@@ -541,6 +542,8 @@ export function StepDrawer({
                 max={20}
                 className={fieldClass}
                 value={node.data.concurrency ?? 3}
+                onFocus={blockActive}
+                onBlur={unblockActive}
                 onChange={(e) => onChange({ ...node, data: { ...node.data, concurrency: Math.max(1, Math.min(20, Number(e.target.value) || 1)) } })}
               />
             </div>
@@ -648,7 +651,6 @@ export function StepDrawer({
               editorKey="http.query"
               registerEditor={registerEditor}
               focusEditor={focusEditor}
-              clearActive={clearActive}
               blockActive={blockActive}
               unblockActive={unblockActive}
             />
@@ -663,7 +665,6 @@ export function StepDrawer({
               editorKey="http.headers"
               registerEditor={registerEditor}
               focusEditor={focusEditor}
-              clearActive={clearActive}
               blockActive={blockActive}
               unblockActive={unblockActive}
             />
@@ -704,6 +705,8 @@ export function StepDrawer({
                     className={`${smallField} flex-1`}
                     value={field.name}
                     placeholder="fieldName"
+                    onFocus={blockActive}
+                    onBlur={unblockActive}
                     onChange={(e) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, name: e.target.value } : f)) } })}
                   />
                   <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, fields: node.data.fields.filter((_, j) => j !== i) } })} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove field">
@@ -769,7 +772,7 @@ export function StepDrawer({
             {node.data.cases.map((c, i) => (
               <div key={c.id} className="space-y-1.5 rounded-lg border border-border/70 p-2">
                 <div className="flex gap-1.5">
-                  <input className={`${smallField} flex-1`} value={c.label ?? ''} placeholder={`Case ${i + 1} label`} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) } })} />
+                  <input className={`${smallField} flex-1`} value={c.label ?? ''} placeholder={`Case ${i + 1} label`} onFocus={blockActive} onBlur={unblockActive} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) } })} />
                   {node.data.cases.length > 1 && (
                     <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, cases: node.data.cases.filter((_, j) => j !== i) } })} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove case"><Trash2 className="h-4 w-4" /></button>
                   )}
@@ -816,7 +819,17 @@ export function StepDrawer({
 }
 
 /** Declare a step's output fields so downstream steps can map from them. */
-function OutputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onChange: (fields: OutputField[]) => void }) {
+function OutputFieldsEditor({
+  fields,
+  onChange,
+  blockActive,
+  unblockActive,
+}: {
+  fields: OutputField[]
+  onChange: (fields: OutputField[]) => void
+  blockActive: () => void
+  unblockActive: () => void
+}) {
   return (
     <div>
       <label className={labelClass}>Output fields (optional)</label>
@@ -828,6 +841,8 @@ function OutputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onCha
               className={`${smallField} flex-1`}
               value={field.name}
               placeholder="fieldName"
+              onFocus={blockActive}
+              onBlur={unblockActive}
               onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, name: e.target.value } : f)))}
             />
             <select className={smallField} value={field.type} onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, type: e.target.value as OutputField['type'] } : f)))}>
