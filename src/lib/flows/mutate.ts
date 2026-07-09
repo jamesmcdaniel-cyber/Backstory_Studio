@@ -201,17 +201,52 @@ function containedIdsOf(node: FlowNode): string[] {
   return []
 }
 
+/** Every node id reachable inside `node`'s own subtree: container body/branch
+ *  steps (recursively) plus branch-edge chains hanging off condition/switch
+ *  descendants. Used to block dropping a node into itself. */
+function subtreeIdsOf(graph: FlowGraph, rootId: string): Set<string> {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]))
+  const out = new Set<string>()
+  const queue = [rootId]
+  while (queue.length) {
+    const id = queue.pop()!
+    const node = byId.get(id)
+    if (!node) continue
+    for (const child of containedIdsOf(node)) {
+      if (!out.has(child)) {
+        out.add(child)
+        queue.push(child)
+      }
+    }
+    // Branch-edge children (condition/switch heads) and their plain chains.
+    for (const edge of graph.edges) {
+      if (edge.source !== id) continue
+      if (id === rootId && !edge.branch) continue // the root's main-chain successor is NOT its subtree
+      if (!out.has(edge.target)) {
+        out.add(edge.target)
+        queue.push(edge.target)
+      }
+    }
+  }
+  return out
+}
+
 /**
  * Move an existing step so it sits immediately after `afterId`, healing both
  * the old and new positions. Container bodies are NOT movable this way — use
  * moveContainerStep. No-op on any invalid move.
+ *
+ * Condition/switch nodes anchor their subtrees (they have only branch-tagged
+ * outgoing edges, never a plain successor) and cannot be relocated by this
+ * operation — moving one would sever the chain and orphan its branches.
  */
 export function moveNodeAfter(graph: FlowGraph, nodeId: string, afterId: string): FlowGraph {
   if (nodeId === afterId || nodeId === 'trigger') return graph
   const node = graph.nodes.find((n) => n.id === nodeId)
   const target = graph.nodes.find((n) => n.id === afterId)
   if (!node || !target) return graph
-  if (containedIdsOf(node).includes(afterId)) return graph
+  if (node.type === 'condition' || node.type === 'switch') return graph
+  if (subtreeIdsOf(graph, nodeId).has(afterId)) return graph
   // A step referenced by any container's body/branches moves via the array API.
   const contained = new Set(graph.nodes.flatMap(containedIdsOf))
   if (contained.has(nodeId)) return graph

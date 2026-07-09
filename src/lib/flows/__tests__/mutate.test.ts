@@ -138,6 +138,32 @@ test('moveNodeAfter no-ops for trigger, same id, missing ids, and own-subtree dr
   assert.equal(moveNodeAfter(g, bodyId, 'trigger'), g) // body steps use the array variant
 })
 
+test('moveNodeAfter no-ops for condition and switch nodes', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'http').graph
+  const a = g.nodes.find((n) => n.type === 'http')!.id
+  g = insertNodeAfter(g, a, 'condition').graph
+  const cond = g.nodes.find((n) => n.type === 'condition')!.id
+  g = appendToBranch(g, cond, 'true', 'stop').graph
+  const stop = g.nodes.find((n) => n.type === 'stop')!.id
+  assert.equal(moveNodeAfter(g, cond, stop), g)
+  assert.equal(moveNodeAfter(g, cond, a), g)
+})
+
+test('moveNodeAfter blocks drops into deep subtrees (nested containers and branch chains)', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'loop').graph
+  const outer = g.nodes.find((n) => n.type === 'loop')!.id
+  g = addContainerStep(g, outer, 'loop').graph
+  const inner = (g.nodes.find((n) => n.id === outer) as Extract<FlowNode, { type: 'loop' }>).data.body.find((id) => {
+    const n = g.nodes.find((x) => x.id === id)
+    return n?.type === 'loop'
+  })!
+  const innerBody = (g.nodes.find((n) => n.id === inner) as Extract<FlowNode, { type: 'loop' }>).data.body[0]
+  assert.ok(innerBody)
+  assert.equal(moveNodeAfter(g, outer, innerBody), g)
+})
+
 test('moveContainerStep reorders a loop body', () => {
   let g = emptyGraph()
   g = insertNodeAfter(g, 'trigger', 'loop').graph
