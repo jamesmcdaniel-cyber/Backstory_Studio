@@ -57,12 +57,13 @@ export type ApplyResult = {
 
 /** Shallow-merge `data` over a node's data and schema-validate the result. */
 function mergeNodeData(node: FlowNode, data: Record<string, unknown>): FlowNode | null {
-  // Container reference keys (loop `body`, parallel `branches`) are structural
-  // wiring, not step config — a data merge must never repoint them (for any
-  // node type). Containers will be edited via dedicated ops later.
+  // Container reference keys are structural wiring, not step config — a data
+  // merge must never repoint them. Scoped by node type: only loop `body` and
+  // parallel `branches` hold child-node ids (http `body` is a request payload
+  // string and stays mergeable). Containers get dedicated ops later.
   const safe = { ...data }
-  delete safe.body
-  delete safe.branches
+  if (node.type === 'loop') delete safe.body
+  if (node.type === 'parallel') delete safe.branches
   // flowNodeSchema runs in zod strip mode, so unknown data keys are silently
   // dropped: an update containing only unknown keys reports applied while
   // changing nothing.

@@ -82,6 +82,16 @@ test('update cannot rewrite container reference keys (loop body, parallel branch
   assert.deepEqual((updated.data as { body: string[] }).body, originalBody)
 })
 
+test('container-ref strip is scoped by type: http body stays mergeable', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'http').graph
+  const http = g.nodes.find((n) => n.type === 'http')!
+  const result = applyCopilotOps(g, [{ op: 'update', id: http.id, data: { body: '{"x":1}' } }] as CopilotOp[])
+  assert.equal(result.applied, 1)
+  const updated = result.graph.nodes.find((n) => n.id === http.id)!
+  assert.equal((updated.data as { body?: string }).body, '{"x":1}')
+})
+
 test('copilotOpSchema parses model-shaped ops and tolerates extra keys', () => {
   const parsed = copilotOpSchema.safeParse({ op: 'add', type: 'http', afterId: 'trigger', data: { url: 'https://x.test' }, note: 'why not' })
   assert.equal(parsed.success, true)
