@@ -7,6 +7,8 @@ import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
 import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
+import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
+import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 import { flowActionRetries, flowActionTimeoutMs, runWithRetries } from './action-reliability'
 import { prepareHttpRequest, responseOutput } from './http'
@@ -49,6 +51,7 @@ export async function runFlowExecution(
   const source = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
   const graph = flowGraphSchema.parse(source)
   const input = job.input ?? ''
+  const resuming = Boolean(job.flowRunId && job.reply !== undefined)
   const usedConnectionIds = Array.from(new Set(graph.nodes.filter((node) => node.type === 'tool').map((node) => node.data.connectionId).filter(Boolean)))
   const [agents, toolCatalog] = await Promise.all([
     prisma.agentTask.findMany({
@@ -68,7 +71,19 @@ export async function runFlowExecution(
     throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
   }
 
-  const resuming = Boolean(job.flowRunId && job.reply !== undefined)
+  // Required trigger inputs (declared on the trigger node) must be present.
+  // Skipped when resuming: the original input was validated on the first run.
+  if (!resuming) {
+    const inputFields = triggerInputFieldsFromTrigger(triggerFromGraph(graph, flow.trigger))
+    const missing = missingRequiredInputFields(inputFields, input)
+    if (missing.length) {
+      throw new ApiError(
+        `Missing required input field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
+        400,
+        'FLOW_INPUT_ERROR',
+      )
+    }
+  }
   const run = job.flowRunId
     ? await prisma.flowRun.update({ where: { id: job.flowRunId }, data: { status: 'running' } })
     : await prisma.flowRun.create({
