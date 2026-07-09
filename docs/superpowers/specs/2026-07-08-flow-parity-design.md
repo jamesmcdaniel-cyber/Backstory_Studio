@@ -262,6 +262,15 @@ Follow the existing pattern (`src/lib/flows/__tests__/`, `src/features/flows/__t
 - Interpreter: structured agent response propagation into context tokens.
 - Verification locally = typecheck + lint + test (no local Supabase); builds validate on Vercel.
 
+## 7. Plain-English tokens + actionable validation (added 2026-07-09, user live-testing feedback)
+
+User mandate: **no `{{...}}` bracket syntax anywhere in the UI**, and red validation indicators must say what is wrong, not just show a count.
+
+- **Token chips:** every field that accepts flow data (agent message, HTTP URL/body/header values, tool args, transform/filter/switch/condition expressions, loop source) renders stored `{{token}}` text as inline plain-English chips ("Run input", "Score each › output", "Current item") while the graph JSON keeps the canonical `{{...}}` storage format. Chips are atomic (delete as a unit), inserted at the caret from the Available data tree, and resolve labels from the same DataField tree the picker uses. Placeholders and helper copy lose all bracket examples.
+- **Read surfaces:** collapsed step-card summaries and any other read-only rendering of templated values show the humanized form, never raw brackets.
+- **Actionable validation:** clicking a step's red/amber count badge opens a popover listing that step's issue messages (errors first) with a "Fix" action that opens the step's settings. Opening a step with issues shows the same messages in a banner at the top of the drawer. Messages reuse `validateFlowGraph` copy (already plain English).
+- Copilot chat/generate surfaces must not show raw token syntax to users where feasible (needsAttention messages already come from the validator).
+
 ## Out of scope
 
 - React Flow / canvas replatform
