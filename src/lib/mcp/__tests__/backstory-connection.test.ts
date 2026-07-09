@@ -50,3 +50,19 @@ test('readyCacheFresh is a 60s TTL', () => {
   assert.equal(readyCacheFresh(now - 59_000, now), true)
   assert.equal(readyCacheFresh(now - 61_000, now), false)
 })
+
+test('sameServerUrl ignores trailing slashes and case', async () => {
+  const { sameServerUrl } = await import('../backstory-connection')
+  assert.equal(sameServerUrl('https://mcp.backstory.ai/mcp/', 'https://MCP.backstory.ai/mcp'), true)
+  assert.equal(sameServerUrl('https://mcp.backstory.ai/mcp', 'https://other.example.com/mcp'), false)
+  assert.equal(sameServerUrl('', ''), false)
+})
+
+test('evaluateExistingBackstoryConnection accepts active matching rows regardless of auth type', async () => {
+  const { evaluateExistingBackstoryConnection, BACKSTORY_MCP_DEFAULT_URL } = await import('../backstory-connection')
+  assert.equal(evaluateExistingBackstoryConnection({ isActive: true, serverUrl: BACKSTORY_MCP_DEFAULT_URL, authType: 'oauth2' }, BACKSTORY_MCP_DEFAULT_URL), true)
+  assert.equal(evaluateExistingBackstoryConnection({ isActive: true, serverUrl: `${BACKSTORY_MCP_DEFAULT_URL}/`, authType: 'api_key' }, BACKSTORY_MCP_DEFAULT_URL), true)
+  assert.equal(evaluateExistingBackstoryConnection({ isActive: false, serverUrl: BACKSTORY_MCP_DEFAULT_URL, authType: 'oauth2' }, BACKSTORY_MCP_DEFAULT_URL), false)
+  assert.equal(evaluateExistingBackstoryConnection({ isActive: true, serverUrl: 'https://other.example.com', authType: 'oauth2' }, BACKSTORY_MCP_DEFAULT_URL), false)
+  assert.equal(evaluateExistingBackstoryConnection(null, BACKSTORY_MCP_DEFAULT_URL), false)
+})

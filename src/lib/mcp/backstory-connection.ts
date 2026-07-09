@@ -32,6 +32,21 @@ export function evaluateBackstoryReady(row: { isActive: boolean; authConfig: unk
   return config.flow === 'authcode' && typeof config.accessToken === 'string' && config.accessToken.length > 0
 }
 
+/** Loose server-URL equality: case-insensitive, ignores trailing slashes. */
+export function sameServerUrl(a: string, b: string): boolean {
+  const norm = (value: string) => value.trim().replace(/\/+$/, '').toLowerCase()
+  return norm(a) === norm(b) && norm(a).length > 0
+}
+
+/** A pre-existing, user-managed connection to the Backstory server counts as configured. */
+export function evaluateExistingBackstoryConnection(
+  row: { isActive: boolean; serverUrl: string; authType: string } | null,
+  expectedUrl: string,
+): boolean {
+  if (!row || !row.isActive) return false
+  return sameServerUrl(row.serverUrl, expectedUrl)
+}
+
 const READY_TTL_MS = 60_000
 export function readyCacheFresh(cachedAt: number, now: number = Date.now()): boolean {
   return now - cachedAt < READY_TTL_MS
@@ -53,6 +68,17 @@ export async function ensureBackstoryConnection(organizationId: string, userId: 
   const key = cacheKey(organizationId, userId)
   if (seededMemo.has(key)) return
   try {
+    const existingRows = await prisma.mcpConnection.findMany({
+      where: { organizationId, provider: null, isActive: true },
+      select: { isActive: true, serverUrl: true, authType: true },
+      take: 10,
+    })
+    if (existingRows.some((r) => evaluateExistingBackstoryConnection(r, backstoryServerUrl()))) {
+      // A pre-existing, user-managed connection to the Backstory server already
+      // satisfies the gate. Don't seed a duplicate per-user "Backstory MCP" row.
+      seededMemo.add(key)
+      return
+    }
     await prisma.mcpConnection.upsert({
       where: {
         organizationId_userId_provider: {
@@ -91,7 +117,20 @@ export async function backstoryMcpReady(organizationId: string, userId: string):
     where: { organizationId, userId, provider: BACKSTORY_PROVIDER },
     select: { isActive: true, authConfig: true },
   })
-  const ready = evaluateBackstoryReady(row)
+  let ready = evaluateBackstoryReady(row)
+  if (!ready) {
+    // A pre-existing, user-managed connection pointing at the same Backstory
+    // server URL also satisfies the gate — users who already configured
+    // Backstory MCP should never be forced to re-configure it.
+    const existingRows = await prisma.mcpConnection.findMany({
+      where: { organizationId, provider: null, isActive: true },
+      select: { isActive: true, serverUrl: true, authType: true },
+      take: 10,
+    })
+    // NOTE: serverUrl match is done in JS via sameServerUrl because URL
+    // normalization (trailing slash/case) can't be expressed in the query.
+    ready = existingRows.some((r) => evaluateExistingBackstoryConnection(r, backstoryServerUrl()))
+  }
   readyCache.set(key, { ready, cachedAt: Date.now() })
   return ready
 }

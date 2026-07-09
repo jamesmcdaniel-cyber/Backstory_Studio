@@ -56,7 +56,7 @@ Called from `requireAuthContext`'s user-provisioning path, guarded by an in-proc
 
 ### Decision function
 
-`backstoryMcpReady(orgId, userId)` — true when the user's `provider='backstory'` row exists, `isActive`, and `authConfig` holds authcode tokens. Pure evaluator over the row shape (unit-testable) + a thin cached resolver (60s in-process TTL per user).
+`backstoryMcpReady(orgId, userId)` — true when the user's `provider='backstory'` row exists, `isActive`, and `authConfig` holds authcode tokens. Pure evaluator over the row shape (unit-testable) + a thin cached resolver (60s in-process TTL per user). A pre-existing, user-managed active connection to the Backstory server URL (any auth type) also satisfies the gate — users who already configured Backstory MCP never re-configure it — and suppresses per-user seeding.
 
 ### API layer (server truth)
 
