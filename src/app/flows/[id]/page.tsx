@@ -521,16 +521,21 @@ export default function FlowBuilder() {
       const data = await response.json().catch(() => ({}))
       if (response.ok && data.flow?.graph) {
         commitGraph(data.flow.graph)
+        setSavedSnapshot(JSON.stringify({ name, description, graph: data.flow.graph, status }))
         setViewingVersion(null)
         toast.success(`Restored v${v} into the draft.`)
       } else {
         toast.error(data.error || 'Could not restore that version.')
       }
     },
-    [id, commitGraph],
+    [id, commitGraph, name, description, status],
   )
 
   const run = useCallback(async () => {
+    if (viewingVersion) {
+      toast.error('Close the version view before running.')
+      return
+    }
     if (!validation.ok) {
       toast.error(validation.errors[0]?.message || 'Fix the flow before running.')
       return
@@ -561,7 +566,7 @@ export default function FlowBuilder() {
     } finally {
       setRunning(false)
     }
-  }, [id, save, pollRuns, testInput, validation, inputFields])
+  }, [id, save, pollRuns, testInput, validation, inputFields, viewingVersion])
 
   const fixWithCopilot = useCallback(async () => {
     if (viewingVersion) {
@@ -832,8 +837,8 @@ export default function FlowBuilder() {
               agents={agents}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
-              statusByNode={statusByNode}
-              issuesByNode={issuesByNode}
+              statusByNode={viewingVersion ? {} : statusByNode}
+              issuesByNode={viewingVersion ? undefined : issuesByNode}
               selectedId={selectedId}
               onSelect={viewingVersion ? () => {} : setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}
