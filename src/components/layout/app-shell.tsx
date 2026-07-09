@@ -3,6 +3,7 @@
 import { ReactNode } from 'react'
 import { usePathname } from 'next/navigation'
 import { Sidebar } from './sidebar'
+import { SetupGate } from './setup-gate'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 
 /**
@@ -39,10 +40,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       <Sidebar />
       <main id="main-content" className="flex-1 overflow-y-auto">
         {fullscreen ? (
-          <ErrorBoundary>{children}</ErrorBoundary>
+          <ErrorBoundary><SetupGate>{children}</SetupGate></ErrorBoundary>
         ) : (
           <div className="container mx-auto max-w-7xl animate-fade-in px-3 py-4 sm:px-6 sm:py-8">
-            <ErrorBoundary>{children}</ErrorBoundary>
+            <ErrorBoundary><SetupGate>{children}</SetupGate></ErrorBoundary>
           </div>
         )}
       </main>

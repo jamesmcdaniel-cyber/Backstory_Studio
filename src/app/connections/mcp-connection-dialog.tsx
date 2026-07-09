@@ -33,6 +33,8 @@ export type SerializedConnection = {
   description: string | null
   serverUrl: string
   isActive: boolean
+  provider?: string | null
+  lastVerifiedAt?: string | null
   auth: {
     authType: AuthType
     hasApiKey?: boolean

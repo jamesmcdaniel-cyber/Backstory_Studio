@@ -231,38 +231,56 @@ function ConnectionsPage() {
                 </p>
 
                 <div className="flex items-center justify-between gap-2 border-t pt-3">
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={conn.isActive}
-                      onCheckedChange={() => toggleActive(conn)}
-                      aria-label={conn.isActive ? 'Disable server' : 'Enable server'}
-                    />
-                    {conn.isActive ? (
-                      <Badge variant="good" className="text-xs">Active</Badge>
-                    ) : (
-                      <Badge variant="secondary" className="text-xs">Inactive</Badge>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 px-2 text-xs"
-                      onClick={() => openEdit(conn)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                      disabled={deletingId === conn.id}
-                      onClick={() => deleteConnection(conn)}
-                      aria-label="Delete server"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
+                  {conn.provider ? (
+                    <>
+                      {conn.isActive ? (
+                        <Badge variant="good" className="text-xs">Active</Badge>
+                      ) : (
+                        <Badge variant="warn" className="text-xs">Needs authorization</Badge>
+                      )}
+                      <a
+                        href={`/api/mcp-connections/oauth/start?connectionId=${conn.id}&returnTo=/connections`}
+                        className="inline-flex h-7 items-center justify-center rounded-md border border-input bg-background px-2 text-xs font-medium shadow-1 transition-all duration-fast ease-out-quart hover:border-graphite-300 hover:bg-accent hover:text-accent-foreground"
+                      >
+                        Reauthorize
+                      </a>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={conn.isActive}
+                          onCheckedChange={() => toggleActive(conn)}
+                          aria-label={conn.isActive ? 'Disable server' : 'Enable server'}
+                        />
+                        {conn.isActive ? (
+                          <Badge variant="good" className="text-xs">Active</Badge>
+                        ) : (
+                          <Badge variant="secondary" className="text-xs">Inactive</Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => openEdit(conn)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                          disabled={deletingId === conn.id}
+                          onClick={() => deleteConnection(conn)}
+                          aria-label="Delete server"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
