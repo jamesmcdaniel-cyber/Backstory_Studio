@@ -18,6 +18,7 @@ import { indexExecution } from '@/lib/rag/indexer'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { isStrataUrl, selectedStrataServers } from '@/lib/mcp/strata'
+import { mcpConnectionScope } from '@/lib/flows/tool-catalog'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
 import { HttpToolClient, httpTools } from '@/lib/integrations/http'
@@ -353,20 +354,38 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         })
       }
     } else if (backstoryMcpConfigured()) {
-      apiLogger.warn('loadTools: People.ai tools using legacy env service account (no tenant isolation)', {
-        organizationId,
-      })
-      const backstoryUrl = process.env.BACKSTORY_MCP_URL!
-      const backstoryClient = new BackstoryMcpClient()
-      const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
-      for (const tool of available.slice(0, 20)) {
-        discovered.push({
-          name: toolName('backstory', tool.name),
-          description: tool.description || `${tool.name} via backstory`,
-          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-          binding: { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient },
-          isWrite: false,
+      // A per-user Backstory connection row is the tenant-isolated path (see
+      // above); if this owner already has one bound and ready, don't also load
+      // the legacy env-wide service account — it would double up tools and,
+      // worse, isn't scoped to this org/user.
+      const boundUserConnection = ownerUserId
+        ? await prisma.mcpConnection.findFirst({
+            where: { organizationId, userId: ownerUserId, provider: 'backstory', isActive: true },
+            select: { id: true },
+          })
+        : null
+      if (boundUserConnection) {
+        apiLogger.info('Backstory MCP bound via per-user connection; env service-account path skipped', {
+          organizationId, ownerUserId,
         })
+      } else {
+        // Deprecated: this env-wide service account bypasses per-user/tenant
+        // isolation. Prefer the per-user Backstory connection above.
+        apiLogger.warn('loadTools: People.ai tools using legacy env service account (no tenant isolation)', {
+          organizationId,
+        })
+        const backstoryUrl = process.env.BACKSTORY_MCP_URL!
+        const backstoryClient = new BackstoryMcpClient()
+        const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
+        for (const tool of available.slice(0, 20)) {
+          discovered.push({
+            name: toolName('backstory', tool.name),
+            description: tool.description || `${tool.name} via backstory`,
+            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
+            binding: { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient },
+            isWrite: false,
+          })
+        }
       }
     }
   } catch (error) {
@@ -386,7 +405,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // must NOT abort the run or block others.
   const strataSelected = selectedStrataServers(providers)
   const connections = (await prisma.mcpConnection.findMany({
-    where: { organizationId, isActive: true },
+    where: mcpConnectionScope(organizationId, ownerUserId ?? undefined),
   })).filter((conn) => !isStrataUrl(conn.serverUrl) || strataSelected.length > 0)
 
   // Discover all org MCP connections in parallel (cached per server URL); token

@@ -49,22 +49,28 @@ const mcpConnectionSchema = z.object({
 function serializeConnection(conn: {
   id: string
   organizationId: string
+  provider: string | null
+  userId: string | null
   name: string
   description: string | null
   serverUrl: string
   authType: string
   authConfig: unknown
   isActive: boolean
+  lastVerifiedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }) {
   return {
     id: conn.id,
     organizationId: conn.organizationId,
+    provider: conn.provider,
+    userId: conn.userId,
     name: conn.name,
     description: conn.description,
     serverUrl: conn.serverUrl,
     isActive: conn.isActive,
+    lastVerifiedAt: conn.lastVerifiedAt,
     createdAt: conn.createdAt,
     updatedAt: conn.updatedAt,
     auth: redactConfig(conn.authType, conn.authConfig),
@@ -75,7 +81,7 @@ function serializeConnection(conn: {
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
   const connections = await prisma.mcpConnection.findMany({
-    where: { organizationId: auth.organizationId },
+    where: { organizationId: auth.organizationId, OR: [{ userId: null }, { userId: auth.dbUser.id }] },
     orderBy: { createdAt: 'desc' },
   })
 
@@ -129,6 +135,9 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
     where: { id: body.id, organizationId: auth.organizationId },
   })
   if (!existing) throw new ApiError('MCP connection not found', 404, 'NOT_FOUND')
+  if (existing.provider) {
+    throw new ApiError('This connection is managed by the platform and cannot be edited or deleted.', 403, 'PROVIDER_MANAGED')
+  }
 
   await requirePublicUrl(body.serverUrl, 'serverUrl')
   await requirePublicUrl(body.tokenUrl, 'tokenUrl')
@@ -192,11 +201,15 @@ export const DELETE = withAuthenticatedApi(async (request, auth) => {
     id = body.id
   }
 
-  const result = await prisma.mcpConnection.deleteMany({
+  const existing = await prisma.mcpConnection.findFirst({
     where: { id, organizationId: auth.organizationId },
   })
+  if (!existing) throw new ApiError('MCP connection not found', 404, 'NOT_FOUND')
+  if (existing.provider) {
+    throw new ApiError('This connection is managed by the platform and cannot be edited or deleted.', 403, 'PROVIDER_MANAGED')
+  }
 
-  if (!result.count) throw new ApiError('MCP connection not found', 404, 'NOT_FOUND')
+  await prisma.mcpConnection.delete({ where: { id: existing.id } })
 
   return { success: true }
 }, { skipBackstoryGate: true })

@@ -60,7 +60,7 @@ export async function runFlowExecution(
       take: 500,
     }),
     usedConnectionIds.length
-      ? loadFlowToolCatalog(job.organizationId, { connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
+      ? loadFlowToolCatalog(job.organizationId, { userId: job.userId, connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
       : Promise.resolve([]),
   ])
   const validation = validateFlowGraph(graph, {

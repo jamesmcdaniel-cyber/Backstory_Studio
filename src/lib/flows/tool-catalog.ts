@@ -5,14 +5,20 @@ import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 export type FlowToolSummary = { name: string; description: string; inputSchema?: unknown; outputSchema?: unknown }
 export type FlowToolCatalogConnection = { id: string; name: string; tools: FlowToolSummary[] }
 
+/** Shared connection visibility: org-shared rows plus the acting user's own. */
+export function mcpConnectionScope(organizationId: string, userId?: string) {
+  return userId
+    ? { organizationId, isActive: true, OR: [{ userId: null }, { userId }] }
+    : { organizationId, isActive: true }
+}
+
 export async function loadFlowToolCatalog(
   organizationId: string,
-  options: { takeConnections?: number; takeTools?: number; connectionIds?: string[] } = {},
+  options: { userId?: string; takeConnections?: number; takeTools?: number; connectionIds?: string[] } = {},
 ): Promise<FlowToolCatalogConnection[]> {
   const connections = await prisma.mcpConnection.findMany({
     where: {
-      organizationId,
-      isActive: true,
+      ...mcpConnectionScope(organizationId, options.userId),
       ...(options.connectionIds?.length ? { id: { in: options.connectionIds } } : {}),
     },
     take: options.takeConnections ?? 25,
