@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import type { FlowGraph, FlowNode } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
 import type { DataField } from '@/lib/flows/datatree'
+import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { StepCard, type StepStatus } from './step-card'
 import { FlowPicker } from './flow-picker'
 import type { ToolCatalog } from './step-drawer'
@@ -115,6 +116,7 @@ export function FlowCanvas({
   agents,
   toolCatalog,
   dataFields,
+  labelCtx,
   statusByNode,
   issuesByNode,
   highlightIds,
@@ -136,6 +138,7 @@ export function FlowCanvas({
   agents: Agent[]
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
+  labelCtx?: TokenLabelContext
   statusByNode: Record<string, StepStatus>
   issuesByNode?: Record<string, { errors: number; warnings: number; messages: string[] }>
   highlightIds?: string[]
@@ -153,6 +156,9 @@ export function FlowCanvas({
   onReorderContainer?: (containerId: string, from: number, to: number, branchIndex?: number) => void
 }) {
   const [dragId, setDragId] = useState<string | null>(null)
+  // Branch labels rendered by the canvas itself (outside StepCard) must not
+  // leak raw {{token}} syntax — StepCard humanizes its own title/subtitle.
+  const humanize = (value: string) => (labelCtx ? humanizeTokens(value, labelCtx) : value)
   const onDropNode = (draggedId: string, afterId: string) => onMoveAfter?.(draggedId, afterId)
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const nextOf = (id: string): FlowNode | undefined => {
@@ -258,6 +264,7 @@ export function FlowCanvas({
         agents={agents}
         toolCatalog={toolCatalog}
         dataFields={selectedId === node.id ? dataFields : undefined}
+        labelCtx={labelCtx}
         onChange={onChangeNode}
         onClick={() => onSelect(node.id)}
         onRefreshAgents={onRefreshAgents}
@@ -344,7 +351,10 @@ export function FlowCanvas({
         return parts
       }
       if (node.type === 'switch') {
-        const branches = [...node.data.cases.map((c) => ({ key: c.id, label: c.label || `${c.left} ${c.op} ${c.right}` })), { key: 'default', label: 'default' }]
+        const branches = [
+          ...node.data.cases.map((c) => ({ key: c.id, label: c.label || humanize(`${c.left} ${c.op} ${c.right}`) })),
+          { key: 'default', label: 'default' },
+        ]
         parts.push(
           <div key={`${node.id}-cases`} className="my-3 grid gap-4 md:grid-cols-2">
             {branches.map((branch) => (

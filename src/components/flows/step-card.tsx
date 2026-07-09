@@ -37,6 +37,7 @@ import { toast } from 'sonner'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import { CONDITION_OPS, FIELD_TYPES, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
+import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import type { ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
@@ -236,6 +237,7 @@ export function StepCard({
   agents,
   toolCatalog,
   dataFields,
+  labelCtx,
   onChange,
   onClick,
   onRefreshAgents,
@@ -256,6 +258,7 @@ export function StepCard({
   agents: Agent[]
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
+  labelCtx?: TokenLabelContext
   onChange?: (node: FlowNode) => void
   onClick?: () => void
   onRefreshAgents?: () => void
@@ -266,6 +269,11 @@ export function StepCard({
   onDragEndNode?: () => void
 }) {
   const Icon = NODE_ICON[node.type]
+  // Read-only surfaces never show raw {{token}} syntax: humanize any node data
+  // echoed in the collapsed summary or tooltips. Storage keeps canonical tokens.
+  const humanize = (value: string) => (labelCtx ? humanizeTokens(value, labelCtx) : value)
+  const displayTitle = humanize(title)
+  const displaySubtitle = subtitle ? humanize(subtitle) : undefined
   const update = (updated: FlowNode) => onChange?.(updated)
   const [renaming, setRenaming] = useState(false)
   const [codeOpen, setCodeOpen] = useState(false)
@@ -393,7 +401,7 @@ export function StepCard({
                   }}
                   onBlur={() => setRenaming(false)}
                   className="h-9 min-w-0 flex-1 rounded-md border border-blue-400 bg-white px-2 text-lg font-semibold text-slate-950 outline-none ring-2 ring-blue-100"
-                  placeholder={title}
+                  placeholder={displayTitle}
                   aria-label="Step name"
                 />
                 <button
@@ -406,14 +414,14 @@ export function StepCard({
                 </button>
               </span>
             ) : (
-              <h3 className="truncate text-lg font-semibold text-slate-950">{title}</h3>
+              <h3 className="truncate text-lg font-semibold text-slate-950">{displayTitle}</h3>
             )}
           </div>
-          {subtitle && <p className="mt-0.5 truncate text-sm text-slate-500">{subtitle}</p>}
+          {displaySubtitle && <p className="mt-0.5 truncate text-sm text-slate-500">{displaySubtitle}</p>}
         </div>
         {issues && (issues.errors > 0 || issues.warnings > 0) && (
           <span
-            title={issues.messages.slice(0, 3).join('\n')}
+            title={issues.messages.slice(0, 3).map(humanize).join('\n')}
             className={cn(
               'flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-bold text-white',
               issues.errors > 0 ? 'bg-red-500' : 'bg-amber-500',

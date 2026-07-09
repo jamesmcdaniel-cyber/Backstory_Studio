@@ -293,7 +293,8 @@ export default function FlowBuilder() {
     setSelectedId(null)
   }, [graph])
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
-  // Friendly labels for {{token}} chips in the step drawer's editors.
+  // Friendly labels for {{token}} chips in the drawer's editors and for the
+  // humanized read-only summaries on canvas step cards.
   const labelCtx = useMemo(() => ({ stepLabels: stepLabelsOf(graph, agents) }), [graph, agents])
   const labelForNode = useCallback(
     (nodeId: string) => {
@@ -865,6 +866,7 @@ export default function FlowBuilder() {
               agents={agents}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
+              labelCtx={labelCtx}
               statusByNode={viewingVersion ? {} : statusByNode}
               issuesByNode={viewingVersion ? undefined : issuesByNode}
               highlightIds={viewingVersion ? [] : highlightIds}
