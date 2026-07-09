@@ -116,6 +116,7 @@ export function FlowCanvas({
   toolCatalog,
   dataFields,
   statusByNode,
+  issuesByNode,
   selectedId,
   onSelect,
   onChangeNode,
@@ -135,6 +136,7 @@ export function FlowCanvas({
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
   statusByNode: Record<string, StepStatus>
+  issuesByNode?: Record<string, { errors: number; warnings: number; messages: string[] }>
   selectedId: string | null
   onSelect: (nodeId: string) => void
   onChangeNode: (node: FlowNode) => void
@@ -236,6 +238,7 @@ export function FlowCanvas({
         title={titleFor(node)}
         subtitle={subtitleFor(node)}
         status={statusByNode[node.id]}
+        issues={issuesByNode?.[node.id]}
         selected={selectedId === node.id}
         agents={agents}
         toolCatalog={toolCatalog}

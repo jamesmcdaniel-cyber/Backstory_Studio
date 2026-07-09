@@ -364,6 +364,18 @@ export default function FlowBuilder() {
     [graph, agents, toolCatalog],
   )
 
+  const issuesByNode = useMemo(() => {
+    const map: Record<string, { errors: number; warnings: number; messages: string[] }> = {}
+    for (const issue of validation.issues) {
+      if (!issue.nodeId) continue
+      const entry = (map[issue.nodeId] ??= { errors: 0, warnings: 0, messages: [] })
+      if (issue.level === 'error') entry.errors += 1
+      else entry.warnings += 1
+      entry.messages.push(issue.message)
+    }
+    return map
+  }, [validation])
+
   const save = useCallback(async (): Promise<boolean> => {
     setSaving(true)
     try {
@@ -765,6 +777,7 @@ export default function FlowBuilder() {
               toolCatalog={toolCatalog}
               dataFields={dataFields}
               statusByNode={mode === 'test' ? statusByNode : {}}
+              issuesByNode={issuesByNode}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}

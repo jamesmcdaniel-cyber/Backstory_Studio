@@ -229,6 +229,7 @@ export function StepCard({
   title,
   subtitle,
   status,
+  issues,
   selected,
   agents,
   toolCatalog,
@@ -247,6 +248,7 @@ export function StepCard({
   title: string
   subtitle?: string
   status?: StepStatus
+  issues?: { errors: number; warnings: number; messages: string[] }
   selected?: boolean
   agents: Agent[]
   toolCatalog: ToolCatalog
@@ -293,6 +295,7 @@ export function StepCard({
     const current = target.read(nodeRef.current)
     onChange?.(target.write(nodeRef.current, insertAtCaret(current, token, target.el)))
   }
+  const showErrors = Boolean(issues?.errors)
 
   return (
     <div
@@ -306,7 +309,13 @@ export function StepCard({
       className={cn(
         'w-full rounded-[18px] border bg-white text-left shadow-[0_2px_10px_rgba(15,23,42,0.08)] outline-none transition-all duration-fast',
         'hover:border-slate-300 hover:shadow-[0_8px_24px_rgba(15,23,42,0.12)] focus-visible:ring-2 focus-visible:ring-blue-200',
-        selected ? 'border-blue-500 ring-2 ring-blue-100' : 'border-slate-200',
+        selected
+          ? 'border-blue-500 ring-2 ring-blue-100'
+          : issues?.errors
+            ? 'border-red-400 ring-2 ring-red-100'
+            : issues?.warnings
+              ? 'border-amber-300'
+              : 'border-slate-200',
       )}
     >
       <div className="flex items-center gap-5 px-5 py-5">
@@ -359,6 +368,17 @@ export function StepCard({
           </div>
           {subtitle && <p className="mt-0.5 truncate text-sm text-slate-500">{subtitle}</p>}
         </div>
+        {issues && (issues.errors > 0 || issues.warnings > 0) && (
+          <span
+            title={issues.messages.slice(0, 3).join('\n')}
+            className={cn(
+              'flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-bold text-white',
+              issues.errors > 0 ? 'bg-red-500' : 'bg-amber-500',
+            )}
+          >
+            {issues.errors + issues.warnings}
+          </span>
+        )}
         {status && (
           <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700">
             <span className={cn('h-2 w-2 rounded-full', STATUS_DOT[status])} />
@@ -434,7 +454,7 @@ export function StepCard({
             className="overflow-hidden"
           >
             <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget })}
+              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget, showErrors })}
               {dataFields && dataFields.length > 0 && (
                 <div className="mt-4 border-t border-slate-200 pt-3">
                   <DataTree
@@ -480,6 +500,7 @@ function renderNodeBody({
   update,
   onRefreshAgents,
   registerTokenTarget,
+  showErrors,
 }: {
   node: FlowNode
   agents: Agent[]
@@ -487,16 +508,17 @@ function renderNodeBody({
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
   registerTokenTarget: RegisterTokenTarget
+  showErrors?: boolean
 }) {
   switch (node.type) {
     case 'trigger':
       return <TriggerBody node={node} update={update} />
     case 'agent':
-      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} registerTokenTarget={registerTokenTarget} />
+      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} registerTokenTarget={registerTokenTarget} showErrors={showErrors} />
     case 'http':
-      return <HttpBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
+      return <HttpBody node={node} update={update} registerTokenTarget={registerTokenTarget} showErrors={showErrors} />
     case 'tool':
-      return <ToolBody node={node} toolCatalog={toolCatalog} update={update} />
+      return <ToolBody node={node} toolCatalog={toolCatalog} update={update} showErrors={showErrors} />
     case 'condition':
       return <ConditionBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'filter':
@@ -639,12 +661,14 @@ function AgentBody({
   update,
   onRefreshAgents,
   registerTokenTarget,
+  showErrors,
 }: {
   node: Extract<FlowNode, { type: 'agent' }>
   agents: Agent[]
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
   registerTokenTarget: RegisterTokenTarget
+  showErrors?: boolean
 }) {
   const isDefaultInput = defaultAgentInput(node.data.input)
   const responseFormat = node.data.responseFormat ?? 'text'
@@ -659,7 +683,7 @@ function AgentBody({
           <select
             value={node.data.agentId}
             onChange={(event) => update({ ...node, data: { ...node.data, agentId: event.target.value } })}
-            className={cn(controlClass, 'min-w-0 flex-1')}
+            className={cn(controlClass, 'min-w-0 flex-1', showErrors && !node.data.agentId && 'border-red-400 focus:border-red-500')}
           >
             <option value="">Choose an agent</option>
             {agents.map((agent) => (
@@ -796,10 +820,12 @@ function HttpBody({
   node,
   update,
   registerTokenTarget,
+  showErrors,
 }: {
   node: Extract<FlowNode, { type: 'http' }>
   update: (node: FlowNode) => void
   registerTokenTarget: RegisterTokenTarget
+  showErrors?: boolean
 }) {
   return (
     <div className="space-y-4">
@@ -813,7 +839,7 @@ function HttpBody({
               (n) => (n.type === 'http' ? n.data.url : ''),
               (n, v) => (n.type === 'http' ? { ...n, data: { ...n.data, url: v } } : n),
             )}
-            className={controlClass}
+            className={cn(controlClass, showErrors && !node.data.url && 'border-red-400 focus:border-red-500')}
             placeholder="https://api.example.com/endpoint"
           />
         </div>
@@ -939,7 +965,17 @@ function InlineKeyValue({
   )
 }
 
-function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { type: 'tool' }>; toolCatalog: ToolCatalog; update: (node: FlowNode) => void }) {
+function ToolBody({
+  node,
+  toolCatalog,
+  update,
+  showErrors,
+}: {
+  node: Extract<FlowNode, { type: 'tool' }>
+  toolCatalog: ToolCatalog
+  update: (node: FlowNode) => void
+  showErrors?: boolean
+}) {
   const { connection, tool } = selectedTool(node.data.connectionId, node.data.toolName, toolCatalog)
   return (
     <div className="space-y-4">
@@ -951,7 +987,7 @@ function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { typ
             const nextConnection = toolCatalog.find((entry) => entry.id === event.target.value)
             update({ ...node, data: { ...node.data, connectionId: event.target.value, toolName: nextConnection?.tools[0]?.name ?? '' } })
           }}
-          className={controlClass}
+          className={cn(controlClass, showErrors && !node.data.connectionId && 'border-red-400 focus:border-red-500')}
         >
           <option value="">Choose a connected tool</option>
           {toolCatalog.map((entry) => (
@@ -967,7 +1003,7 @@ function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { typ
           <select
             value={node.data.toolName}
             onChange={(event) => update({ ...node, data: { ...node.data, toolName: event.target.value } })}
-            className={controlClass}
+            className={cn(controlClass, showErrors && !node.data.toolName && 'border-red-400 focus:border-red-500')}
           >
             <option value="">Choose an action</option>
             {connection.tools.map((entry) => (
