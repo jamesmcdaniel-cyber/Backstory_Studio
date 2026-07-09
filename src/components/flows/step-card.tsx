@@ -252,7 +252,7 @@ export function StepCard({
   title: string
   subtitle?: string
   status?: StepStatus
-  issues?: { errors: number; warnings: number; messages: string[] }
+  issues?: { errors: number; warnings: number; items: { level: 'error' | 'warning'; message: string }[] }
   selected?: boolean
   highlighted?: boolean
   agents: Agent[]
@@ -319,10 +319,42 @@ export function StepCard({
     onChange?.(target.write(nodeRef.current, insertAtCaret(current, token, target.el)))
   }
   const showErrors = Boolean(issues?.errors)
+  const issuesButtonRef = useRef<HTMLButtonElement | null>(null)
+  const issuesPopoverRef = useRef<HTMLDivElement | null>(null)
+  const [issuesPopover, setIssuesPopover] = useState<{ top: number; left: number } | null>(null)
+  // Errors first so the most blocking problems lead the list.
+  const issueItems = issues ? [...issues.items].sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1)) : []
 
   useEffect(() => {
     if (!selected) setTokenPopover(null)
   }, [selected])
+
+  // Issues fixed while the popover is open: drop the popover with the badge.
+  useEffect(() => {
+    if (!issues || (issues.errors === 0 && issues.warnings === 0)) setIssuesPopover(null)
+  }, [issues])
+
+  useEffect(() => {
+    if (!issuesPopover) return
+    const close = () => setIssuesPopover(null)
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (issuesPopoverRef.current?.contains(target)) return
+      if (issuesButtonRef.current?.contains(target)) return
+      close()
+    }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [issuesPopover])
 
   useEffect(() => {
     if (!tokenPopover) return
@@ -420,15 +452,30 @@ export function StepCard({
           {displaySubtitle && <p className="mt-0.5 truncate text-sm text-slate-500">{displaySubtitle}</p>}
         </div>
         {issues && (issues.errors > 0 || issues.warnings > 0) && (
-          <span
-            title={issues.messages.slice(0, 3).map(humanize).join('\n')}
+          <button
+            ref={issuesButtonRef}
+            type="button"
+            aria-label="Show issues"
+            aria-expanded={Boolean(issuesPopover)}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (issuesPopover) {
+                setIssuesPopover(null)
+                return
+              }
+              const rect = event.currentTarget.getBoundingClientRect()
+              setIssuesPopover({
+                top: rect.bottom + 6,
+                left: Math.min(rect.left, window.innerWidth - 336),
+              })
+            }}
             className={cn(
               'flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1 text-[11px] font-bold text-white',
               issues.errors > 0 ? 'bg-red-500' : 'bg-amber-500',
             )}
           >
             {issues.errors + issues.warnings}
-          </span>
+          </button>
         )}
         {status && (
           <span className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-700">
@@ -539,6 +586,38 @@ export function StepCard({
             onMouseDown={(event) => event.stopPropagation()}
           >
             <DataTree fields={dataFields} onInsert={insertToken} title="Insert data" emptyMessage="No earlier step data is available yet." />
+          </div>,
+          document.body,
+        )}
+      {issuesPopover && issueItems.length > 0 &&
+        createPortal(
+          <div
+            ref={issuesPopoverRef}
+            style={{ position: 'fixed', top: issuesPopover.top, left: issuesPopover.left, zIndex: 60 }}
+            className="w-max max-w-xs rounded-xl border border-slate-200 bg-white p-3 shadow-[0_16px_48px_rgba(15,23,42,0.18)]"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <ul className="space-y-2">
+              {issueItems.map((item, itemIndex) => (
+                <li key={itemIndex} className="flex items-start gap-2 text-sm text-slate-700">
+                  <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', item.level === 'error' ? 'bg-red-500' : 'bg-amber-500')} />
+                  <span className="min-w-0">{humanize(item.message)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3 border-t border-slate-200 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIssuesPopover(null)
+                  onClick?.()
+                }}
+                className="text-xs font-semibold text-blue-700 hover:text-blue-900"
+              >
+                Fix in settings
+              </button>
+            </div>
           </div>,
           document.body,
         )}

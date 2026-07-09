@@ -13,6 +13,7 @@ import type { DataField } from '@/lib/flows/datatree'
 import { AdvancedParamsSection } from '@/components/flows/advanced-params'
 import { TokenTextEditor, type TokenTextEditorHandle } from '@/components/flows/token-text-editor'
 import type { TokenLabelContext } from '@/lib/flows/token-text'
+import { cn } from '@/lib/utils'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
@@ -268,6 +269,7 @@ export function StepDrawer({
   toolCatalog,
   dataFields,
   labelCtx,
+  issues,
   onChange,
   onChangeType,
   onAddStep,
@@ -281,6 +283,7 @@ export function StepDrawer({
   toolCatalog: ToolCatalog
   dataFields: DataField[]
   labelCtx: TokenLabelContext
+  issues?: { level: 'error' | 'warning'; message: string }[]
   onChange: (node: FlowNode) => void
   onChangeType: (type: EditableType) => void
   onAddStep?: (type: EditableType) => void
@@ -345,6 +348,26 @@ export function StepDrawer({
       </div>
 
       <div className="flex-1 space-y-5 p-4">
+        {issues && issues.length > 0 && (
+          <div
+            className={cn(
+              'rounded-md border p-3 text-sm',
+              issues.some((issue) => issue.level === 'error') ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50',
+            )}
+          >
+            <p className="font-semibold text-slate-900">This step needs attention</p>
+            <ul className="mt-2 space-y-1.5">
+              {[...issues]
+                .sort((a, b) => (a.level === b.level ? 0 : a.level === 'error' ? -1 : 1))
+                .map((issue, issueIndex) => (
+                  <li key={issueIndex} className="flex items-start gap-2 text-slate-700">
+                    <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', issue.level === 'error' ? 'bg-red-500' : 'bg-amber-500')} />
+                    <span className="min-w-0">{issue.message}</span>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        )}
         {isTrigger ? (
           <TriggerEditor
             flowId={flowId}

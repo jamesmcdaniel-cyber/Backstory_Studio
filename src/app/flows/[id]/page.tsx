@@ -420,13 +420,13 @@ export default function FlowBuilder() {
   )
 
   const issuesByNode = useMemo(() => {
-    const map: Record<string, { errors: number; warnings: number; messages: string[] }> = {}
+    const map: Record<string, { errors: number; warnings: number; items: { level: 'error' | 'warning'; message: string }[] }> = {}
     for (const issue of validation.issues) {
       if (!issue.nodeId) continue
-      const entry = (map[issue.nodeId] ??= { errors: 0, warnings: 0, messages: [] })
+      const entry = (map[issue.nodeId] ??= { errors: 0, warnings: 0, items: [] })
       if (issue.level === 'error') entry.errors += 1
       else entry.warnings += 1
-      entry.messages.push(issue.message)
+      entry.items.push({ level: issue.level, message: issue.message })
     }
     return map
   }, [validation])
@@ -953,6 +953,7 @@ export default function FlowBuilder() {
             <StepDrawer
               node={selectedNode}
               flowId={id}
+              issues={issuesByNode[selectedNode.id]?.items}
               agents={agents}
               toolCatalog={toolCatalog}
               dataFields={dataFields}

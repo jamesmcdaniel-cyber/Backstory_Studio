@@ -140,7 +140,7 @@ export function FlowCanvas({
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
   statusByNode: Record<string, StepStatus>
-  issuesByNode?: Record<string, { errors: number; warnings: number; messages: string[] }>
+  issuesByNode?: Record<string, { errors: number; warnings: number; items: { level: 'error' | 'warning'; message: string }[] }>
   highlightIds?: string[]
   selectedId: string | null
   onSelect: (nodeId: string) => void
