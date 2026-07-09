@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ChevronRight, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/ui/markdown'
+import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import type { StepStatus } from './step-card'
 
 export type RunStep = {
@@ -71,7 +72,7 @@ function StepRow({ step, label }: { step: RunStep; label: string }) {
       <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50">
         <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
         <span className="flex-1 truncate text-sm">{label}</span>
-        <span className={cn('text-xs font-medium capitalize', STATUS_TEXT[step.status] || 'text-muted-foreground')}>{step.status}</span>
+        <span className={cn('text-xs font-medium capitalize', STATUS_TEXT[step.status] || 'text-muted-foreground')}>{step.status === 'running' ? <TypewriterStatus /> : step.status}</span>
       </button>
       {open && (
         <div className="space-y-2 px-3 pb-3 pl-8">
@@ -131,7 +132,7 @@ export function RunPanel({
         ) : (
           <>
             <div className="border-b border-border px-3 py-2">
-              <span className={cn('text-xs font-semibold capitalize', STATUS_TEXT[selected.status])}>{selected.status}</span>
+              <span className={cn('text-xs font-semibold capitalize', STATUS_TEXT[selected.status])}>{selected.status === 'running' ? <TypewriterStatus /> : selected.status}</span>
               {selected.error && <p className="mt-1 text-xs text-red-600">{selected.error}</p>}
             </div>
             {selected.steps.length === 0 ? (

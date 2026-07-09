@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Markdown } from '@/components/ui/markdown'
+import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import type { Activity, Agent } from '@/lib/types'
@@ -87,45 +88,6 @@ export function resultText(activity?: Activity | null) {
   // callers show a status label instead of the string "null".
   if (value == null) return ''
   return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
-}
-
-// Lively "what it's doing" words for a live run, typed out then deleted like a
-// first-party chat assistant. Different rows start on different words.
-const RUNNING_WORDS = [
-  'Working', 'Thinking', 'Reasoning', 'Analyzing', 'Pondering', 'Crunching',
-  'Synthesizing', 'Digging in', 'Computing', 'Percolating', 'Noodling', 'Cooking',
-]
-
-/** Typewriter status: types the current word, holds, deletes, types the next. */
-function TypewriterStatus({ seed = 0 }: { seed?: number }) {
-  const [wordIndex, setWordIndex] = useState(seed % RUNNING_WORDS.length)
-  const [text, setText] = useState('')
-  const [phase, setPhase] = useState<'typing' | 'holding' | 'deleting'>('typing')
-
-  useEffect(() => {
-    const word = RUNNING_WORDS[wordIndex]
-    let timer: number
-    if (phase === 'typing') {
-      if (text.length < word.length) timer = window.setTimeout(() => setText(word.slice(0, text.length + 1)), 55)
-      else timer = window.setTimeout(() => setPhase('holding'), 1100)
-    } else if (phase === 'holding') {
-      timer = window.setTimeout(() => setPhase('deleting'), 350)
-    } else {
-      if (text.length > 0) timer = window.setTimeout(() => setText(word.slice(0, text.length - 1)), 32)
-      else {
-        setWordIndex((i) => (i + 1) % RUNNING_WORDS.length)
-        setPhase('typing')
-      }
-    }
-    return () => window.clearTimeout(timer)
-  }, [text, phase, wordIndex])
-
-  return (
-    <span>
-      {text}
-      <span className="animate-pulse">…</span>
-    </span>
-  )
 }
 
 function stepDuration(step: RunStep): string | null {
