@@ -296,9 +296,10 @@ export default function FlowBuilder() {
     [graph, agentsById],
   )
   const jumpToNode = useCallback((nodeId: string) => {
+    if (viewingVersion) return
     setSelectedId(nodeId)
     document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [])
+  }, [viewingVersion])
   const inputFields = useMemo(() => triggerInputFields(graph), [graph])
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
 
@@ -563,6 +564,10 @@ export default function FlowBuilder() {
   }, [id, save, pollRuns, testInput, validation, inputFields])
 
   const fixWithCopilot = useCallback(async () => {
+    if (viewingVersion) {
+      toast.error('Close the version view before applying fixes.')
+      return
+    }
     setFixing(true)
     try {
       const response = await fetch('/api/flows/copilot', {
@@ -590,7 +595,7 @@ export default function FlowBuilder() {
     } finally {
       setFixing(false)
     }
-  }, [graph, validation, commitGraph])
+  }, [graph, validation, commitGraph, viewingVersion])
 
   const duplicateFlow = useCallback(async () => {
     const flowName = name.trim() || 'Untitled flow'
@@ -897,10 +902,10 @@ export default function FlowBuilder() {
             canvasScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
           }}
           nodes={canvasGraph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
-          onJump={viewingVersion ? () => {} : jumpToNode}
+          onJump={jumpToNode}
         />
 
-        {selectedNode && (
+        {selectedNode && !viewingVersion && (
           <ResizablePanel storageKey="flow.drawerWidth">
             <StepDrawer
               node={selectedNode}
