@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertTriangle, ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +23,7 @@ import { CanvasRail } from '@/components/flows/canvas-rail'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
+import { CheckerPanel } from '@/components/flows/checker-panel'
 import { ResizablePanel } from '@/components/flows/resizable-panel'
 import { TestInputPanel } from '@/components/flows/test-input-panel'
 import type { StepStatus } from '@/components/flows/step-card'
@@ -183,6 +184,7 @@ export default function FlowBuilder() {
   // there; the top-bar toggle can still hide it.
   const [showCopilot, setShowCopilot] = useState(true)
   const [showRuns, setShowRuns] = useState(false)
+  const [showChecker, setShowChecker] = useState(false)
   const [showTestInput, setShowTestInput] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
@@ -292,6 +294,10 @@ export default function FlowBuilder() {
     },
     [graph, agentsById],
   )
+  const jumpToNode = useCallback((nodeId: string) => {
+    setSelectedId(nodeId)
+    document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
   const inputFields = useMemo(() => triggerInputFields(graph), [graph])
   const hasInputFields = inputFields.some((field) => field.name.trim())
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
@@ -745,6 +751,15 @@ export default function FlowBuilder() {
         <Button variant="outline" size="sm" onClick={() => setShowCopilot((v) => !v)}>
           <Sparkles className="mr-1.5 h-4 w-4" /> Copilot
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setShowChecker((v) => !v)}>
+          <ShieldCheck className="mr-1.5 h-4 w-4" /> Checker
+          {validation.errors.length > 0 && (
+            <Badge variant="risk" className="ml-1.5">{validation.errors.length}</Badge>
+          )}
+          {validation.errors.length === 0 && validation.warnings.length > 0 && (
+            <Badge variant="warn" className="ml-1.5">{validation.warnings.length}</Badge>
+          )}
+        </Button>
         <Button variant="outline" size="sm" onClick={save} loading={saving} className="relative">
           <Save className="mr-1.5 h-4 w-4" /> Save
           {dirty && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-400" title="Unsaved changes" />}
@@ -764,30 +779,6 @@ export default function FlowBuilder() {
 
       {hasInputFields && (showTestInput || mode === 'test') && (
         <TestInputPanel fields={inputFields} value={testInput} onChange={setTestInput} />
-      )}
-
-      {(validation.errors.length > 0 || validation.warnings.length > 0) && (
-        <div className="border-b border-border bg-amber-50 px-4 py-2 text-amber-950">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-xs font-semibold">Flow checks</p>
-                {validation.errors.length > 0 && <Badge variant="risk">{validation.errors.length} error{validation.errors.length === 1 ? '' : 's'}</Badge>}
-                {validation.warnings.length > 0 && <Badge variant="warn">{validation.warnings.length} warning{validation.warnings.length === 1 ? '' : 's'}</Badge>}
-              </div>
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-amber-900">
-                {[...validation.errors, ...validation.warnings].slice(0, 4).map((issue) => (
-                  <span key={`${issue.code}-${issue.nodeId ?? 'flow'}-${issue.message}`}>{issue.message}</span>
-                ))}
-                {validation.issues.length > 4 && <span>{validation.issues.length - 4} more checks need attention.</span>}
-              </div>
-            </div>
-            <Button variant="outline" size="sm" className="shrink-0" onClick={fixWithCopilot} loading={fixing} disabled={fixing}>
-              <Sparkles className="mr-1.5 h-4 w-4" /> Fix with Copilot
-            </Button>
-          </div>
-        </div>
       )}
 
       {/* Body: canvas + optional drawer + optional copilot */}
@@ -859,10 +850,7 @@ export default function FlowBuilder() {
             canvasScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
           }}
           nodes={graph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
-          onJump={(nodeId) => {
-            setSelectedId(nodeId)
-            document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          }}
+          onJump={jumpToNode}
         />
 
         {selectedNode && (
@@ -918,6 +906,18 @@ export default function FlowBuilder() {
               onSelectRun={selectRun}
               onClose={() => setShowRuns(false)}
               labelForNode={labelForNode}
+            />
+          </ResizablePanel>
+        )}
+
+        {showChecker && (
+          <ResizablePanel storageKey="flow.checkerWidth">
+            <CheckerPanel
+              validation={validation}
+              fixing={fixing}
+              onFixWithCopilot={fixWithCopilot}
+              onClose={() => setShowChecker(false)}
+              onJump={jumpToNode}
             />
           </ResizablePanel>
         )}
