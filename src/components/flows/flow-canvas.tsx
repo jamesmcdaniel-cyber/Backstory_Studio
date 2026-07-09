@@ -200,22 +200,24 @@ export function FlowCanvas({
   }
 
   const card = (node: FlowNode, index?: number) => (
-    <StepCard
-      node={node}
-      index={index}
-      title={titleFor(node)}
-      subtitle={subtitleFor(node)}
-      status={statusByNode[node.id]}
-      selected={selectedId === node.id}
-      agents={agents}
-      toolCatalog={toolCatalog}
-      dataFields={selectedId === node.id ? dataFields : undefined}
-      onChange={onChangeNode}
-      onClick={() => onSelect(node.id)}
-      onRefreshAgents={onRefreshAgents}
-      onDuplicate={node.type === 'trigger' ? undefined : onDuplicateNode ? () => onDuplicateNode(node.id) : undefined}
-      onDelete={node.type === 'trigger' ? undefined : onDeleteNode ? () => onDeleteNode(node.id) : undefined}
-    />
+    <div data-node-id={node.id} className="w-full">
+      <StepCard
+        node={node}
+        index={index}
+        title={titleFor(node)}
+        subtitle={subtitleFor(node)}
+        status={statusByNode[node.id]}
+        selected={selectedId === node.id}
+        agents={agents}
+        toolCatalog={toolCatalog}
+        dataFields={selectedId === node.id ? dataFields : undefined}
+        onChange={onChangeNode}
+        onClick={() => onSelect(node.id)}
+        onRefreshAgents={onRefreshAgents}
+        onDuplicate={node.type === 'trigger' ? undefined : onDuplicateNode ? () => onDuplicateNode(node.id) : undefined}
+        onDelete={node.type === 'trigger' ? undefined : onDeleteNode ? () => onDeleteNode(node.id) : undefined}
+      />
+    </div>
   )
 
   const nestedCards = (node: FlowNode) => {

@@ -18,6 +18,7 @@ import { validateFlowGraph } from '@/lib/flows/validate'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
+import { CanvasRail } from '@/components/flows/canvas-rail'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
@@ -148,6 +149,10 @@ function sampleLoopItem(loop: Extract<FlowNode, { type: 'loop' }>, lastOutputs: 
   return previewLoopItems(value)[0]
 }
 
+function clampZoom(value: number): number {
+  return Math.min(1.5, Math.max(0.5, value))
+}
+
 function filenameSlug(value: string): string {
   return (value || 'flow')
     .toLowerCase()
@@ -180,6 +185,17 @@ export default function FlowBuilder() {
   const [showTestInput, setShowTestInput] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
+  const [zoom, setZoomState] = useState(() => {
+    if (typeof window === 'undefined') return 1
+    const saved = Number(window.localStorage.getItem('flows.canvasZoom'))
+    return saved ? clampZoom(saved) : 1
+  })
+  const setZoom = useCallback((value: number) => {
+    const clamped = clampZoom(value)
+    setZoomState(clamped)
+    if (typeof window !== 'undefined') window.localStorage.setItem('flows.canvasZoom', String(clamped))
+  }, [])
+  const canvasScrollRef = useRef<HTMLDivElement>(null)
   const [testInput, setTestInput] = useState('')
   const [runs, setRuns] = useState<{ id: string; status: string; startedAt?: string }[]>([])
   const [selectedRun, setSelectedRun] = useState<FlowRunDetail | null>(null)
@@ -279,6 +295,15 @@ export default function FlowBuilder() {
   }, [undo, redo])
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
+  const labelForNode = useCallback(
+    (nodeId: string) => {
+      const node = graph.nodes.find((n) => n.id === nodeId)
+      if (!node) return nodeId
+      if (node.type === 'agent') return node.data.label || agentsById.get(node.data.agentId) || 'Agent step'
+      return node.type.charAt(0).toUpperCase() + node.type.slice(1)
+    },
+    [graph, agentsById],
+  )
   const inputFields = useMemo(() => triggerInputFields(graph), [graph])
   const hasInputFields = inputFields.some((field) => field.name.trim())
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
@@ -724,52 +749,68 @@ export default function FlowBuilder() {
       {/* Body: canvas + optional drawer + optional copilot */}
       <div className="flex min-h-0 flex-1">
         <div
-          className="min-w-0 flex-1 overflow-y-auto bg-white p-8"
+          ref={canvasScrollRef}
+          className="relative min-w-0 flex-1 overflow-y-auto bg-white p-8"
           onClick={() => setSelectedId(null)}
           style={{
             backgroundImage: 'radial-gradient(circle, rgba(15, 23, 42, 0.22) 1px, transparent 1px)',
             backgroundSize: '28px 28px',
           }}
         >
-          <FlowCanvas
-            graph={graph}
-            agentName={(agentId) => agentsById.get(agentId) ?? ''}
-            agents={agents}
-            toolCatalog={toolCatalog}
-            dataFields={dataFields}
-            statusByNode={mode === 'test' ? statusByNode : {}}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onBackgroundClick={() => setSelectedId(null)}
-            onChangeNode={(node) => setGraph((g) => updateNode(g, node))}
-            onInsertAfter={(afterId, type, seed) => {
-              const { graph: inserted, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
-              const next = applyInsertSeed(inserted, nodeId, seed)
-              commitGraph(next)
+          <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', width: `${100 / zoom}%`, marginLeft: `${(1 - 1 / zoom) * 50}%` }}>
+            <FlowCanvas
+              graph={graph}
+              agentName={(agentId) => agentsById.get(agentId) ?? ''}
+              agents={agents}
+              toolCatalog={toolCatalog}
+              dataFields={dataFields}
+              statusByNode={mode === 'test' ? statusByNode : {}}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onBackgroundClick={() => setSelectedId(null)}
+              onChangeNode={(node) => setGraph((g) => updateNode(g, node))}
+              onInsertAfter={(afterId, type, seed) => {
+                const { graph: inserted, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
+                const next = applyInsertSeed(inserted, nodeId, seed)
+                commitGraph(next)
+                setSelectedId(nodeId)
+              }}
+              onAppendBranch={(conditionId, branch, type, seed) => {
+                const { graph: inserted, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
+                const next = applyInsertSeed(inserted, nodeId, seed)
+                commitGraph(next)
+                setSelectedId(nodeId)
+              }}
+              onRefreshAgents={refreshAgents}
+              onDuplicateNode={(nodeId) => {
+                const { graph: next, nodeId: newId } = duplicateNode(graph, nodeId)
+                commitGraph(next)
+                setSelectedId(newId)
+              }}
+              onDeleteNode={(nodeId) => {
+                commitGraph(deleteNode(graph, nodeId))
+                if (selectedId === nodeId) setSelectedId(null)
+              }}
+              onPickTrigger={(type) => {
+                const triggerNode = graph.nodes.find((n) => n.type === 'trigger')
+                if (!triggerNode || triggerNode.type !== 'trigger') return
+                const current = isRecordLike(triggerNode.data.trigger) ? triggerNode.data.trigger : {}
+                commitGraph(updateNode(graph, { ...triggerNode, data: { trigger: { ...current, type } } }))
+                setSelectedId(triggerNode.id)
+              }}
+            />
+          </div>
+          <CanvasRail
+            zoom={zoom}
+            onZoom={setZoom}
+            onFit={() => {
+              setZoom(1)
+              canvasScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
+            nodes={graph.nodes.filter((n) => n.type !== 'trigger').map((n) => ({ id: n.id, title: labelForNode(n.id) }))}
+            onJump={(nodeId) => {
               setSelectedId(nodeId)
-            }}
-            onAppendBranch={(conditionId, branch, type, seed) => {
-              const { graph: inserted, nodeId } = appendToBranch(graph, conditionId, branch, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)
-              const next = applyInsertSeed(inserted, nodeId, seed)
-              commitGraph(next)
-              setSelectedId(nodeId)
-            }}
-            onRefreshAgents={refreshAgents}
-            onDuplicateNode={(nodeId) => {
-              const { graph: next, nodeId: newId } = duplicateNode(graph, nodeId)
-              commitGraph(next)
-              setSelectedId(newId)
-            }}
-            onDeleteNode={(nodeId) => {
-              commitGraph(deleteNode(graph, nodeId))
-              if (selectedId === nodeId) setSelectedId(null)
-            }}
-            onPickTrigger={(type) => {
-              const triggerNode = graph.nodes.find((n) => n.type === 'trigger')
-              if (!triggerNode || triggerNode.type !== 'trigger') return
-              const current = isRecordLike(triggerNode.data.trigger) ? triggerNode.data.trigger : {}
-              commitGraph(updateNode(graph, { ...triggerNode, data: { trigger: { ...current, type } } }))
-              setSelectedId(triggerNode.id)
+              document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
             }}
           />
         </div>
@@ -826,12 +867,7 @@ export default function FlowBuilder() {
               selected={selectedRun}
               onSelectRun={selectRun}
               onClose={() => setShowRuns(false)}
-              labelForNode={(nodeId) => {
-                const node = graph.nodes.find((n) => n.id === nodeId)
-                if (!node) return nodeId
-                if (node.type === 'agent') return node.data.label || agentsById.get(node.data.agentId) || 'Agent step'
-                return node.type.charAt(0).toUpperCase() + node.type.slice(1)
-              }}
+              labelForNode={labelForNode}
             />
           </ResizablePanel>
         )}
