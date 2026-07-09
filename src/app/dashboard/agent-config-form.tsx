@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Loader2, Play, X } from 'lucide-react'
+import { Loader2, Play, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -48,6 +49,31 @@ type AvailableIntegrations = {
   tools: ToolChip[]
   strataTools: ToolChip[]
   connections: ConnectionIntegration[]
+}
+
+type AgentMemory = {
+  id: string
+  kind: string
+  title: string
+  content: string
+  question: string | null
+  status: string
+  timesUsed: number
+  lastUsedAt: string | null
+  sourceExecutionId: string | null
+  createdAt: string
+}
+
+const MEMORY_KIND_LABEL: Record<string, string> = {
+  user_answer: 'Answer',
+  learning: 'Learning',
+  suggestion: 'Suggestion',
+}
+
+const MEMORY_KIND_VARIANT: Record<string, 'info' | 'good' | 'warn'> = {
+  user_answer: 'info',
+  learning: 'good',
+  suggestion: 'warn',
 }
 
 export type AgentDraft = {
@@ -284,6 +310,8 @@ export function AgentConfigForm({
   const [strataQuery, setStrataQuery] = useState('')
   const [runs, setRuns] = useState<any[]>([])
   const [runsLoading, setRunsLoading] = useState(false)
+  const [memories, setMemories] = useState<AgentMemory[]>([])
+  const [memoriesLoading, setMemoriesLoading] = useState(false)
   // Other agents in the workspace, offered as run_agent targets.
   const [orgAgents, setOrgAgents] = useState<{ id: string; title: string }[]>([])
 
@@ -307,6 +335,44 @@ export function AgentConfigForm({
       .catch(() => setRuns([]))
       .finally(() => setRunsLoading(false))
   }, [active, editingAgent])
+
+  // Load this agent's memory when editing. Skipped in create mode — there's no agent id yet.
+  useEffect(() => {
+    if (!active || !editingAgent?.id) { setMemories([]); return }
+    setMemoriesLoading(true)
+    fetch(`/api/agents/${editingAgent.id}/memories`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => setMemories(data.success ? data.memories : []))
+      .catch(() => setMemories([]))
+      .finally(() => setMemoriesLoading(false))
+  }, [active, editingAgent])
+
+  const deleteMemory = async (id: string) => {
+    if (!editingAgent?.id) return
+    setMemories((prev) => prev.filter((m) => m.id !== id))
+    const response = await fetch(`/api/agents/${editingAgent.id}/memories`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    if (!response.ok) toast.error('Could not remove memory.')
+  }
+
+  const clearAllMemory = async () => {
+    if (!editingAgent?.id) return
+    if (!window.confirm('Clear everything this agent has learned? This cannot be undone.')) return
+    const previous = memories
+    setMemories([])
+    const response = await fetch(`/api/agents/${editingAgent.id}/memories`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    })
+    if (!response.ok) {
+      setMemories(previous)
+      toast.error('Could not clear memory.')
+    }
+  }
 
   // Load skill names for compact skills display
   useEffect(() => {
@@ -962,6 +1028,60 @@ export function AgentConfigForm({
                   >
                     <span className="truncate text-gray-700">{run.metadata?.headline || run.error || run.status}</span>
                     <span className="shrink-0 text-xs text-gray-500">{new Date(run.startedAt).toLocaleString()}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {editingAgent?.id && (
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="eyebrow">Memory</p>
+            {memories.length > 0 && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={clearAllMemory}
+                className="text-red-600 hover:text-red-700"
+              >
+                Clear all memory
+              </Button>
+            )}
+          </div>
+          {memoriesLoading ? (
+            <p className="text-sm text-gray-500"><Loader2 className="inline h-3.5 w-3.5 animate-spin" /> Loading…</p>
+          ) : memories.length === 0 ? (
+            <p className="rounded-lg border border-dashed p-3 text-sm text-gray-500">
+              Nothing learned yet — memories appear after runs complete.
+            </p>
+          ) : (
+            <ul className="divide-y rounded-lg border">
+              {memories.map((memory) => (
+                <li key={memory.id} className="group flex items-start gap-3 px-3 py-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-0.5 flex items-center gap-2">
+                      <Badge variant={MEMORY_KIND_VARIANT[memory.kind] ?? 'secondary'}>
+                        {MEMORY_KIND_LABEL[memory.kind] ?? memory.kind}
+                      </Badge>
+                      <span className="truncate font-semibold text-gray-700" title={memory.title}>{memory.title}</span>
+                    </div>
+                    {memory.question && <p className="italic text-gray-500">{memory.question}</p>}
+                    <p className="line-clamp-2 text-gray-500">{memory.content}</p>
+                    {memory.lastUsedAt && (
+                      <p className="mt-0.5 text-xs text-gray-400">Last used {new Date(memory.lastUsedAt).toLocaleDateString()}</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteMemory(memory.id)}
+                    className="shrink-0 text-gray-400 opacity-0 transition-opacity hover:text-red-600 group-hover:opacity-100"
+                    aria-label={`Remove memory ${memory.title}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
                   </button>
                 </li>
               ))}
