@@ -38,7 +38,7 @@ test('buildReflectionPrompt includes goal, objective, summary, log', () => {
 
 test('reflectAndRemember calls generate with the built prompt and tolerates downstream failure', async () => {
   const { reflectAndRemember } = await import('../reflection')
-  let captured: { system: string; user: string } | null = null
+  let captured: { system: string; user: string; model?: string } | null = null
   const result = await reflectAndRemember(
     {
       organizationId: 'org', agentId: 'agent', executionId: 'exec',
@@ -47,11 +47,13 @@ test('reflectAndRemember calls generate with the built prompt and tolerates down
     },
     {
       generate: async (opts) => {
-        captured = { system: opts.system, user: opts.user }
+        captured = { system: opts.system, user: opts.user, model: opts.model }
         throw new Error('stop before DB writes')
       },
     },
   )
   assert.equal(result, null)
   assert.match(captured!.user, /infer one/)
+  assert.equal(typeof captured!.model, 'string')
+  assert.ok(captured!.model && captured!.model.length > 0, 'reflection should request the cheap model tier')
 })

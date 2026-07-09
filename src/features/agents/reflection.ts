@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
-import { generateStructured } from '@/lib/llm/model-runner'
+import { generateStructured, DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
 import { saveAgentMemory } from '@/lib/memory/agent-memory'
 
 const ACTION_TYPES = ['connect', 'config', 'data', 'other'] as const
@@ -107,7 +107,10 @@ export async function reflectAndRemember(
   try {
     const generate = deps.generate ?? generateStructured
     const { system, user } = buildReflectionPrompt(params)
-    const raw = await generate({ system, user, schema: REFLECTION_JSON_SCHEMA, schemaName: 'agent_reflection', maxTokens: 1500 })
+    // Reflection is a background, non-user-facing pass — run it on the cheap
+    // model tier (env-overridable) rather than the full agent model.
+    const model = process.env.AGENT_REFLECTION_MODEL?.trim() || DEFAULT_SUMMARY_MODEL
+    const raw = await generate({ system, user, schema: REFLECTION_JSON_SCHEMA, schemaName: 'agent_reflection', maxTokens: 1500, model })
     const reflection = parseReflection(raw)
     if (!reflection) return null
 
@@ -122,9 +125,11 @@ export async function reflectAndRemember(
       })
     }
 
-    if (reflection.selfCritique.trim()) {
+    const critique = reflection.selfCritique.trim()
+    if (critique || reflection.suggestedGoal) {
       // The latest critique is ALWAYS injected next run — store it on the task
-      // metadata (single slot), not as an accumulating memory row.
+      // metadata (single slot), not as an accumulating memory row. A proposed
+      // goal must persist even when there's no critique this run.
       const agent = await prisma.agentTask.findUnique({ where: { id: params.agentId }, select: { metadata: true, goal: true } })
       const metadata = (agent?.metadata && typeof agent.metadata === 'object' && !Array.isArray(agent.metadata) ? agent.metadata : {}) as Record<string, unknown>
       await prisma.agentTask.update({
@@ -132,7 +137,7 @@ export async function reflectAndRemember(
         data: {
           metadata: {
             ...metadata,
-            lastCritique: reflection.selfCritique.slice(0, 1500),
+            ...(critique ? { lastCritique: critique.slice(0, 1500) } : {}),
             ...(reflection.suggestedGoal && !agent?.goal ? { suggestedGoal: reflection.suggestedGoal.slice(0, 500) } : {}),
           },
         },

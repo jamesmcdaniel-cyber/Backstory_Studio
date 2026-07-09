@@ -319,6 +319,13 @@ type StructuredOpts = {
   schema: Record<string, unknown>
   schemaName: string
   maxTokens?: number
+  /**
+   * Optional model override for this call, e.g. a cheap tier for reflection
+   * passes. Only honored on the Claude path (Qwen resolves its own model via
+   * QWEN_MODEL); falls back to the existing DEFAULT_AGENT_MODEL behavior when
+   * unset or when the override isn't a Claude model.
+   */
+  model?: string
 }
 
 /**
@@ -362,8 +369,10 @@ async function anthropicWireStructured(opts: StructuredOpts, client: Anthropic, 
 }
 
 export async function generateStructured(opts: StructuredOpts): Promise<string> {
+  const overrideModel = opts.model?.trim() || undefined
+  const effectiveDefaultModel = overrideModel || DEFAULT_AGENT_MODEL
   const order = structuredProviderOrder({
-    defaultModel: DEFAULT_AGENT_MODEL,
+    defaultModel: effectiveDefaultModel,
     qwen: hasQwen(),
     anthropic: hasAnthropic(),
   })
@@ -371,12 +380,17 @@ export async function generateStructured(opts: StructuredOpts): Promise<string> 
     throw new Error('No model provider configured — set ANTHROPIC_API_KEY (or QWEN_API_KEY + QWEN_BASE_URL).')
   }
 
+  // The override only threads onto the Claude path — Qwen resolves its own
+  // model via QWEN_MODEL, so an unusable (non-Claude) override falls back to
+  // the pre-existing DEFAULT_AGENT_MODEL selection unchanged.
+  const claudeModel = overrideModel && isClaude(overrideModel) ? overrideModel : isClaude(DEFAULT_AGENT_MODEL) ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL
+
   let lastError: unknown
   for (const target of order) {
     try {
       return target === 'qwen'
         ? await anthropicWireStructured(opts, qwenClient(), qwenModel(FALLBACK_QWEN_MODEL))
-        : await anthropicWireStructured(opts, claudeClient(), isClaude(DEFAULT_AGENT_MODEL) ? DEFAULT_AGENT_MODEL : FALLBACK_CLAUDE_MODEL)
+        : await anthropicWireStructured(opts, claudeClient(), claudeModel)
     } catch (error) {
       lastError = error
       if (!isProviderAvailabilityError(error)) throw error
