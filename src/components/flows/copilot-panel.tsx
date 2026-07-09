@@ -96,7 +96,9 @@ export function CopilotPanel({
   const send = async () => {
     const content = input.trim()
     if (!content || loading) return
-    const history = [...messages.map(({ role, content: text }) => ({ role, content: text })), { role: 'user' as const, content }].slice(-HISTORY_CAP)
+    // Error bubbles stay in the thread for the user, but must not replay to
+    // the model as genuine assistant turns.
+    const history = [...messages.filter((message) => !message.error).map(({ role, content: text }) => ({ role, content: text })), { role: 'user' as const, content }].slice(-HISTORY_CAP)
     setMessages((prev) => [...prev, { role: 'user', content }])
     setInput('')
     setLoading(true)
@@ -135,6 +137,8 @@ export function CopilotPanel({
   }
 
   const onInputKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter during IME composition commits the candidate, not the message.
+    if (event.nativeEvent.isComposing) return
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       send()
