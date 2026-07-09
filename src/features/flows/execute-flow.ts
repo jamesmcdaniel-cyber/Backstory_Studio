@@ -282,7 +282,9 @@ export async function runFlowExecution(
   // matched flows), so a static import here back to signals.ts would be a
   // cycle — this keeps the edge one-directional. Fire-and-forget: a signal
   // emit must never block or fail this run's completion.
-  if (status === 'succeeded') {
+  // PUBLISHED RUNS ONLY: a builder Test/Run of a draft must never chain real
+  // production flows — only scheduled/webhook/signal (published) runs emit.
+  if (status === 'succeeded' && job.usePublished) {
     void import('./signals')
       .then((signals) =>
         signals.emitFlowSignal({
