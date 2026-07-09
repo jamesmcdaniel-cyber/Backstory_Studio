@@ -83,7 +83,7 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
     success: true,
     connections: connections.map(serializeConnection),
   }
-})
+}, { skipBackstoryGate: true })
 
 // ── POST — create a connection ────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   })
 
   return { success: true, connection: serializeConnection(connection) }
-})
+}, { skipBackstoryGate: true })
 
 // ── PUT — update a connection ─────────────────────────────────────────────
 
@@ -172,7 +172,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   }
 
   return { success: true, connection: serializeConnection(connection) }
-})
+}, { skipBackstoryGate: true })
 
 // ── DELETE — remove a connection ──────────────────────────────────────────
 
@@ -199,4 +199,4 @@ export const DELETE = withAuthenticatedApi(async (request, auth) => {
   if (!result.count) throw new ApiError('MCP connection not found', 404, 'NOT_FOUND')
 
   return { success: true }
-})
+}, { skipBackstoryGate: true })

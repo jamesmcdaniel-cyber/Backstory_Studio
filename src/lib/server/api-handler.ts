@@ -23,10 +23,13 @@ type AuthenticatedHandler = (
   auth: AuthContext,
 ) => Promise<Response | Record<string, unknown>>
 
-export function withAuthenticatedApi(handler: AuthenticatedHandler) {
+export function withAuthenticatedApi(
+  handler: AuthenticatedHandler,
+  options?: { skipBackstoryGate?: boolean },
+) {
   return async (request: NextRequest): Promise<Response> => {
     try {
-      const auth = await requireAuthContext()
+      const auth = await requireAuthContext(options)
       const result = await handler(request, auth)
 
       return result instanceof Response ? result : NextResponse.json(result)

@@ -1,5 +1,6 @@
 import { getAuthWithUser } from '@/lib/supabase/auth-utils'
 import { resolveEntitlement } from '@/lib/entitlement'
+import { backstoryGateEnabled, backstoryMcpReady, ensureBackstoryConnection } from '@/lib/mcp/backstory-connection'
 
 type AuthResult = NonNullable<Awaited<ReturnType<typeof getAuthWithUser>>>
 
@@ -45,7 +46,7 @@ export async function assertEntitled(organizationId: string): Promise<void> {
   }
 }
 
-export async function requireAuthContext(): Promise<AuthContext> {
+export async function requireAuthContext(options?: { skipBackstoryGate?: boolean }): Promise<AuthContext> {
   const auth = await getAuthWithUser()
 
   if (!auth?.user || !auth.userId) {
@@ -58,6 +59,20 @@ export async function requireAuthContext(): Promise<AuthContext> {
 
   if (entitlementGateEnabled()) {
     await assertEntitled(auth.organizationId)
+  }
+
+  // Native Backstory MCP: seed the per-user connection row (idempotent, never
+  // throws), then hard-gate the platform until the user has authorized it.
+  await ensureBackstoryConnection(auth.organizationId, auth.dbUser.id)
+  if (!options?.skipBackstoryGate && backstoryGateEnabled()) {
+    const ready = await backstoryMcpReady(auth.organizationId, auth.dbUser.id)
+    if (!ready) {
+      throw new AuthContextError(
+        'Connect your Backstory MCP account to continue.',
+        403,
+        'BACKSTORY_MCP_REQUIRED',
+      )
+    }
   }
 
   return {
