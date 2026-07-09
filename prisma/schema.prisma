@@ -44,6 +44,7 @@ model Organization {
   signalSubscriptions SignalSubscription[]
   auditEvents         AuditEvent[]
   approvalRequests    ApprovalRequest[]
+  agentMemories       AgentMemory[]
 
   @@map("organizations")
 }
@@ -86,6 +87,7 @@ model AgentTask {
   agentType      String    @default("CUSTOM")
   description    String    @db.Text
   objective      String    @db.Text
+  goal           String?   @db.Text
   context        Json      @default("{}")
   schedule       Json      @default("{}")
   status         String    @default("ACTIVE")
@@ -107,6 +109,7 @@ model AgentTask {
   chatMessages AgentChatMessage[]
   chatSessions AgentChatSession[]
   connectors   AgentConnector[]
+  memories     AgentMemory[]
 
   @@index([organizationId, status])
   @@index([userId])
@@ -138,6 +141,32 @@ model AgentConnector {
   @@index([organizationId])
   @@index([mcpConnectionId])
   @@map("agent_connectors")
+}
+
+/// Durable, agent-scoped memory: answers to clarifying questions, learnings
+/// distilled from executions, and proactive suggestions. Retrieved by kind +
+/// status to ground future runs without re-asking or re-deriving.
+model AgentMemory {
+  id                String    @id @default(cuid())
+  organizationId    String    @db.Uuid
+  agentId           String
+  kind              String // 'user_answer' | 'learning' | 'suggestion'
+  title             String
+  content           String    @db.Text
+  question          String?   @db.Text
+  embedding         Json?
+  sourceExecutionId String?
+  status            String    @default("open") // 'open' | 'dismissed' | 'superseded'
+  timesUsed         Int       @default(0)
+  lastUsedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        AgentTask    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, agentId, kind, status])
+  @@map("agent_memories")
 }
 
 // Agent-scoped assistant chat (persistent per agent + user, not per execution).
