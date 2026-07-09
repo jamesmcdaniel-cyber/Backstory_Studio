@@ -141,8 +141,9 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ...(body.subagentIds !== undefined && { subagentIds: body.subagentIds }),
         ...(body.autoAnswerFromMemory !== undefined && { autoAnswerFromMemory: body.autoAnswerFromMemory }),
         ...(body.alwaysStrategize !== undefined && { alwaysStrategize: body.alwaysStrategize }),
-        // A saved goal supersedes any prior AI-suggested one.
-        ...(body.goal !== undefined && { suggestedGoal: undefined }),
+        // A saved NON-EMPTY goal supersedes any prior AI-suggested one; saving
+        // other fields with the goal still blank keeps the proposal visible.
+        ...(typeof body.goal === 'string' && body.goal.trim() ? { suggestedGoal: undefined } : {}),
       },
     },
   })
