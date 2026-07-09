@@ -187,6 +187,15 @@ function conditionClauses(node: Extract<FlowNode, { type: 'condition' | 'filter'
   return []
 }
 
+function isAgentStructured(agent: Extract<FlowNode, { type: 'agent' }> | undefined): boolean {
+  if (!agent) return false
+  if (agent.data.responseFormat === 'structured') {
+    const hasNonBlankField = agent.data.outputFields?.some((field) => typeof field.name === 'string' && field.name.trim())
+    return hasNonBlankField ?? false
+  }
+  return false
+}
+
 function reachableNodeIds(graph: FlowGraph): Set<string> {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const seen = new Set<string>()
@@ -345,6 +354,27 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         if (names.filter((entry) => entry === name).length > 1) {
           add(issues, 'error', 'DUPLICATE_TRANSFORM_FIELD', `${nodeLabel(node)} has duplicate field "${name}".`, node.id)
         }
+      }
+    }
+  }
+
+  const flaggedNodeIds = new Set<string>()
+  for (const node of graph.nodes) {
+    if (node.type === 'agent' || node.type === 'trigger') continue
+    const dataStr = JSON.stringify(node.data)
+    const fieldRefRegex = /\{\{\s*step\.([^.}\s]+)\.output\.([^}\s]+)\s*\}\}/g
+    let match
+    while ((match = fieldRefRegex.exec(dataStr)) !== null) {
+      const agentId = match[1]
+      const fieldName = match[2]
+      if (fieldName === 'output') continue
+      const agentNode = byId.get(agentId)
+      if (agentNode?.type === 'agent' && !isAgentStructured(agentNode as Extract<FlowNode, { type: 'agent' }>)) {
+        if (!flaggedNodeIds.has(node.id)) {
+          add(issues, 'warning', 'TEXT_AGENT_FIELD_REF', `${nodeLabel(node)} maps a field from ${nodeLabel(agentNode)}, but that agent returns plain text — switch its response to Structured.`, node.id)
+          flaggedNodeIds.add(node.id)
+        }
+        break
       }
     }
   }

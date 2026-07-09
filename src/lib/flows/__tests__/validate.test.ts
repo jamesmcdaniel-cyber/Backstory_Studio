@@ -157,3 +157,35 @@ test('validateFlowGraph checks trigger configuration', () => {
   }
   assert.ok(validateFlowGraph(duplicateInputFields, { requireRunnable: false }).errors.some((issue) => issue.code === 'DUPLICATE_INPUT_FIELD'))
 })
+
+test('warns when a step maps fields from a text-only agent', () => {
+  const graph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'agent', data: { agentId: 'agentA' } },
+      { id: 'h1', type: 'http', data: { method: 'POST', url: 'https://x.test', body: 'score: {{step.a1.output.score}}' } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'a1' },
+      { id: 'e2', source: 'a1', target: 'h1' },
+    ],
+  } as FlowGraph
+  const result = validateFlowGraph(graph, { agents: [{ id: 'agentA', title: 'A' }] })
+  assert.ok(result.warnings.some((w) => w.code === 'TEXT_AGENT_FIELD_REF' && w.nodeId === 'h1'))
+})
+
+test('no field-ref warning for structured agents or whole-output references', () => {
+  const graph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'agent', data: { agentId: 'agentA', responseFormat: 'structured', outputFields: [{ name: 'score', type: 'number' }] } },
+      { id: 'h1', type: 'http', data: { method: 'POST', url: 'https://x.test', body: '{{step.a1.output.score}} and {{step.a1.output}}' } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'a1' },
+      { id: 'e2', source: 'a1', target: 'h1' },
+    ],
+  } as FlowGraph
+  const result = validateFlowGraph(graph, { agents: [{ id: 'agentA', title: 'A' }] })
+  assert.equal(result.warnings.some((w) => w.code === 'TEXT_AGENT_FIELD_REF'), false)
+})
