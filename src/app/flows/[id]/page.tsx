@@ -17,6 +17,7 @@ import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 import { validateFlowGraph } from '@/lib/flows/validate'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
+import { stepLabelsOf } from '@/lib/flows/token-text'
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
 import { CanvasRail } from '@/components/flows/canvas-rail'
@@ -292,6 +293,8 @@ export default function FlowBuilder() {
     setSelectedId(null)
   }, [graph])
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
+  // Friendly labels for {{token}} chips in the step drawer's editors.
+  const labelCtx = useMemo(() => ({ stepLabels: stepLabelsOf(graph, agents) }), [graph, agents])
   const labelForNode = useCallback(
     (nodeId: string) => {
       const node = graph.nodes.find((n) => n.id === nodeId)
@@ -947,6 +950,7 @@ export default function FlowBuilder() {
               agents={agents}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
+              labelCtx={labelCtx}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
               onChangeType={(type) => commitGraph(changeNodeType(graph, selectedNode.id, type))}
               onDuplicate={() => {

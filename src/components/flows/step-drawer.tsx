@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { X, Trash2, Plus, Copy, Link2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -10,8 +10,9 @@ import { nextOccurrence, type AgentSchedule } from '@/lib/scheduling/due'
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
-import { insertAtCaret } from '@/components/flows/insert-token'
 import { AdvancedParamsSection } from '@/components/flows/advanced-params'
+import { TokenTextEditor, type TokenTextEditorHandle } from '@/components/flows/token-text-editor'
+import type { TokenLabelContext } from '@/lib/flows/token-text'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
@@ -106,9 +107,11 @@ function KeyValueJsonEditor({
   keyPlaceholder,
   valuePlaceholder,
   helper,
-  onFocusRaw,
-  onFocusValue,
-  onFocusKey,
+  labelCtx,
+  editorKey,
+  registerEditor,
+  focusEditor,
+  clearActive,
 }: {
   label: string
   value: string | undefined
@@ -116,9 +119,11 @@ function KeyValueJsonEditor({
   keyPlaceholder: string
   valuePlaceholder: string
   helper: string
-  onFocusRaw: (event: React.FocusEvent<HTMLTextAreaElement>) => void
-  onFocusValue: (index: number) => (event: React.FocusEvent<HTMLInputElement>) => void
-  onFocusKey: (event: React.FocusEvent<HTMLInputElement>) => void
+  labelCtx: TokenLabelContext
+  editorKey: string
+  registerEditor: (key: string) => (handle: TokenTextEditorHandle | null) => void
+  focusEditor: (key: string) => () => void
+  clearActive: () => void
 }) {
   const parsed = parseKeyValueRows(value)
 
@@ -131,7 +136,7 @@ function KeyValueJsonEditor({
           className={`${areaClass} font-mono text-xs`}
           value={value ?? ''}
           placeholder={'{"name": "value"}'}
-          onFocus={onFocusRaw}
+          onFocus={clearActive}
           onChange={(e) => onChange(e.target.value || undefined)}
         />
         <p className="mt-1 text-[11px] text-amber-600">This saved value is not a JSON object. Fix it here, or clear it to return to key/value rows.</p>
@@ -166,15 +171,18 @@ function KeyValueJsonEditor({
                 className={smallField}
                 value={row.key}
                 placeholder={keyPlaceholder}
-                onFocus={onFocusKey}
+                onFocus={clearActive}
                 onChange={(e) => setRow(index, { key: e.target.value })}
               />
-              <input
-                className={smallField}
+              <TokenTextEditor
+                ref={registerEditor(`${editorKey}.${index}.value`)}
+                className="min-w-0 px-2 py-1.5"
                 value={row.value}
                 placeholder={valuePlaceholder}
-                onFocus={onFocusValue(index)}
-                onChange={(e) => setRow(index, { value: e.target.value })}
+                labelCtx={labelCtx}
+                onFocus={focusEditor(`${editorKey}.${index}.value`)}
+                onChange={(next) => setRow(index, { value: next })}
+                ariaLabel={`${label} value`}
               />
               <button
                 type="button"
@@ -231,12 +239,25 @@ function AddNestedStepMenu({
   )
 }
 
+// Where a datatree click lands when no chip editor has been focused yet: the
+// step type's primary token field (mirrors the old default-accessor behavior).
+const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
+  agent: 'agent.input',
+  loop: 'loop.over',
+  http: 'http.body',
+  transform: 'xf.0',
+  condition: 'cond.0.left',
+  filter: 'filt.0.left',
+  switch: 'sw.0.left',
+}
+
 export function StepDrawer({
   node,
   flowId,
   agents,
   toolCatalog,
   dataFields,
+  labelCtx,
   onChange,
   onChangeType,
   onAddStep,
@@ -249,6 +270,7 @@ export function StepDrawer({
   agents: { id: string; title: string }[]
   toolCatalog: ToolCatalog
   dataFields: DataField[]
+  labelCtx: TokenLabelContext
   onChange: (node: FlowNode) => void
   onChangeType: (type: EditableType) => void
   onAddStep?: (type: EditableType) => void
@@ -257,80 +279,44 @@ export function StepDrawer({
   onClose: () => void
 }) {
   const isTrigger = node.type === 'trigger'
-  // Which text field a datatree click inserts into (tracked on focus), plus the
-  // live DOM element so we can insert at the caret rather than appending.
-  const [activeField, setActiveField] = useState<string>('')
-  const activeElRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
-  const focusField = (key: string) => (e: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    activeElRef.current = e.currentTarget
-    setActiveField(key)
+  // Chip-editor handles keyed by field, so a datatree click inserts a token
+  // chip at the caret of the last-focused editor. Keys are looked up live at
+  // insert time — an unmounted editor's map slot is null, so inserts fall back
+  // to the step's default field instead of vanishing.
+  const editorHandles = useRef<Map<string, TokenTextEditorHandle | null>>(new Map())
+  const editorRefCallbacks = useRef<Map<string, (handle: TokenTextEditorHandle | null) => void>>(new Map())
+  const activeFieldRef = useRef<string | null>(null)
+  const registerEditor = (key: string) => {
+    let callback = editorRefCallbacks.current.get(key)
+    if (!callback) {
+      callback = (handle: TokenTextEditorHandle | null) => {
+        editorHandles.current.set(key, handle)
+      }
+      editorRefCallbacks.current.set(key, callback)
+    }
+    return callback
   }
+  const focusEditor = (key: string) => () => {
+    activeFieldRef.current = key
+  }
+  const clearActive = () => {
+    activeFieldRef.current = null
+  }
+  useEffect(() => {
+    activeFieldRef.current = null
+  }, [node.id])
 
   const setLabel = (label: string) => onChange({ ...node, data: { ...node.data, label } } as FlowNode)
 
-  // Get/set for the currently-active text field, so tokens insert into the
-  // right place regardless of which field was focused.
-  const activeAccessor = (): { get: () => string; set: (value: string) => void } | null => {
-    if (node.type === 'agent') return { get: () => node.data.input ?? '', set: (v) => onChange({ ...node, data: { ...node.data, input: v } }) }
-    if (node.type === 'loop') return { get: () => node.data.over ?? '', set: (v) => onChange({ ...node, data: { ...node.data, over: v } }) }
-    if (node.type === 'tool') return { get: () => node.data.args ?? '', set: (v) => onChange({ ...node, data: { ...node.data, args: v } }) }
-    if (node.type === 'http') {
-      const kv = activeField.match(/^http\.(query|headers)\.(\d+)\.value$/)
-      if (kv) {
-        const field = kv[1] as 'query' | 'headers'
-        const index = Number(kv[2])
-        const rows = parseKeyValueRows(node.data[field]).rows
-        return {
-          get: () => rows[index]?.value ?? '',
-          set: (v) => {
-            const next = [...rows]
-            next[index] = { key: next[index]?.key ?? '', value: v }
-            onChange({ ...node, data: { ...node.data, [field]: serializeKeyValueRows(next) } })
-          },
-        }
-      }
-      const field = activeField === 'http.url' ? 'url' : activeField === 'http.headers.raw' ? 'headers' : activeField === 'http.query.raw' ? 'query' : 'body'
-      return {
-        get: () => (node.data as unknown as Record<string, string | undefined>)[field] ?? '',
-        set: (v) => onChange({ ...node, data: { ...node.data, [field]: v } }),
-      }
-    }
-    if (node.type === 'condition' || node.type === 'filter') {
-      const m = activeField.match(/^(?:cond|filt)\.(\d+)\.(left|right)$/)
-      const i = m ? Number(m[1]) : 0
-      const side = (m ? m[2] : 'left') as 'left' | 'right'
-      const clauses = clausesOf(node.data)
-      return {
-        get: () => clauses[i]?.[side] ?? '',
-        set: (v) => onChange({ ...node, data: { ...node.data, clauses: clauses.map((c, j) => (j === i ? { ...c, [side]: v } : c)) } } as FlowNode),
-      }
-    }
-    if (node.type === 'transform') {
-      const m = activeField.match(/^xf\.(\d+)$/)
-      const i = m ? Number(m[1]) : 0
-      return {
-        get: () => node.data.fields[i]?.value ?? '',
-        set: (v) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, value: v } : f)) } }),
-      }
-    }
-    if (node.type === 'switch') {
-      const m = activeField.match(/^sw\.(\d+)\.(left|right)$/)
-      const i = m ? Number(m[1]) : 0
-      const side = (m ? m[2] : 'left') as 'left' | 'right'
-      return {
-        get: () => node.data.cases[i]?.[side] ?? '',
-        set: (v) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((c, j) => (j === i ? { ...c, [side]: v } : c)) } }),
-      }
-    }
-    return null
-  }
-
-  // Insert a {{token}} at the caret of the focused field (replacing any
-  // selection); append only if nothing is focused.
+  // Insert a token chip at the caret of the last-focused editor; fall back to
+  // the step's primary field when nothing has been focused yet. DataTree emits
+  // braced `{{token}}`s; the chip editor takes the bare path.
   const insertToken = (token: string) => {
-    const acc = activeAccessor()
-    if (!acc) return
-    acc.set(insertAtCaret(acc.get(), token, activeElRef.current))
+    const path = token.startsWith('{{') && token.endsWith('}}') ? token.slice(2, -2).trim() : token
+    const active = activeFieldRef.current ? editorHandles.current.get(activeFieldRef.current) : null
+    const fallbackKey = DEFAULT_EDITOR_KEYS[node.type]
+    const editor = active ?? (fallbackKey ? editorHandles.current.get(fallbackKey) : null)
+    editor?.insertToken(path)
   }
 
   return (
@@ -394,13 +380,16 @@ export function StepDrawer({
             </div>
             <div>
               <label className={labelClass}>Message to agent</label>
-              <textarea
+              <TokenTextEditor
+                ref={registerEditor('agent.input')}
+                multiline
                 rows={6}
-                className={areaClass}
                 value={node.data.input ?? ''}
+                labelCtx={labelCtx}
                 placeholder="Tell the agent what to do. Add flow data from the picker below when needed."
-                onFocus={focusField('agent.input')}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, input: e.target.value } })}
+                onFocus={focusEditor('agent.input')}
+                onChange={(input) => onChange({ ...node, data: { ...node.data, input } })}
+                ariaLabel="Message to agent"
               />
               <div className="mt-2">
                 <DataTree fields={dataFields} onInsert={insertToken} />
@@ -457,12 +446,15 @@ export function StepDrawer({
               const update = (next: ConditionClause[]) => onChange({ ...node, data: { ...node.data, clauses: next, left: undefined, op: undefined, right: undefined } })
               return (
                 <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
-                  <input
-                    className={`${smallField} w-full`}
+                  <TokenTextEditor
+                    ref={registerEditor(`cond.${i}.left`)}
+                    className="px-2 py-1.5"
                     value={clause.left}
+                    labelCtx={labelCtx}
                     placeholder="Choose data from below"
-                    onFocus={focusField(`cond.${i}.left`)}
-                    onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))}
+                    onFocus={focusEditor(`cond.${i}.left`)}
+                    onChange={(left) => update(clauses.map((c, j) => (j === i ? { ...c, left } : c)))}
+                    ariaLabel={`Condition ${i + 1} value`}
                   />
                   <div className="flex gap-1.5">
                     <select className={smallField} value={clause.op} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}>
@@ -472,12 +464,15 @@ export function StepDrawer({
                         </option>
                       ))}
                     </select>
-                    <input
-                      className={`${smallField} flex-1`}
+                    <TokenTextEditor
+                      ref={registerEditor(`cond.${i}.right`)}
+                      className="min-w-0 flex-1 px-2 py-1.5"
                       value={clause.right}
+                      labelCtx={labelCtx}
                       placeholder="80"
-                      onFocus={focusField(`cond.${i}.right`)}
-                      onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, right: e.target.value } : c)))}
+                      onFocus={focusEditor(`cond.${i}.right`)}
+                      onChange={(right) => update(clauses.map((c, j) => (j === i ? { ...c, right } : c)))}
+                      ariaLabel={`Condition ${i + 1} comparison value`}
                     />
                     {clauses.length > 1 && (
                       <button type="button" onClick={() => update(clauses.filter((_, j) => j !== i))} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove condition">
@@ -505,12 +500,14 @@ export function StepDrawer({
           <div className="space-y-3">
             <div>
               <label className={labelClass}>Items to process</label>
-              <input
-                className={fieldClass}
+              <TokenTextEditor
+                ref={registerEditor('loop.over')}
                 value={node.data.over}
+                labelCtx={labelCtx}
                 placeholder="Choose a list from the available data below"
-                onFocus={focusField('loop.over')}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, over: e.target.value } })}
+                onFocus={focusEditor('loop.over')}
+                onChange={(over) => onChange({ ...node, data: { ...node.data, over } })}
+                ariaLabel="Items to process"
               />
               <div className="mt-2">
                 <DataTree fields={dataFields} onInsert={insertToken} />
@@ -586,6 +583,7 @@ export function StepDrawer({
                 args={node.data.args}
                 onChange={(nextArgs) => onChange({ ...node, data: { ...node.data, args: nextArgs } })}
                 dataFields={dataFields}
+                labelCtx={labelCtx}
               />
             ) : (
               <p className="text-xs text-muted-foreground">Pick a tool to configure its inputs.</p>
@@ -609,30 +607,29 @@ export function StepDrawer({
                   </option>
                 ))}
               </select>
-              <input
-                className={`${smallField} flex-1`}
+              <TokenTextEditor
+                ref={registerEditor('http.url')}
+                className="min-w-0 flex-1 px-2 py-1.5"
                 value={node.data.url}
+                labelCtx={labelCtx}
                 placeholder="https://example.com/webhook"
-                onFocus={focusField('http.url')}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, url: e.target.value } })}
+                onFocus={focusEditor('http.url')}
+                onChange={(url) => onChange({ ...node, data: { ...node.data, url } })}
+                ariaLabel="Request URL"
               />
             </div>
             <KeyValueJsonEditor
               label="Query params"
               value={node.data.query}
               keyPlaceholder="account_id"
-              valuePlaceholder="{{trigger.input.accountId}}"
+              valuePlaceholder="Click a value from Available data"
               helper="Added to the URL after ?. Arrays send repeated params; booleans and numbers are preserved."
               onChange={(query) => onChange({ ...node, data: { ...node.data, query } })}
-              onFocusRaw={focusField('http.query.raw')}
-              onFocusKey={() => {
-                activeElRef.current = null
-                setActiveField('')
-              }}
-              onFocusValue={(index) => (e) => {
-                activeElRef.current = e.currentTarget
-                setActiveField(`http.query.${index}.value`)
-              }}
+              labelCtx={labelCtx}
+              editorKey="http.query"
+              registerEditor={registerEditor}
+              focusEditor={focusEditor}
+              clearActive={clearActive}
             />
             <KeyValueJsonEditor
               label="Headers"
@@ -641,27 +638,30 @@ export function StepDrawer({
               valuePlaceholder="Bearer token"
               helper="Sent as request headers. Do not place secrets here unless this flow is allowed to use them."
               onChange={(headers) => onChange({ ...node, data: { ...node.data, headers } })}
-              onFocusRaw={focusField('http.headers.raw')}
-              onFocusKey={() => {
-                activeElRef.current = null
-                setActiveField('')
-              }}
-              onFocusValue={(index) => (e) => {
-                activeElRef.current = e.currentTarget
-                setActiveField(`http.headers.${index}.value`)
-              }}
+              labelCtx={labelCtx}
+              editorKey="http.headers"
+              registerEditor={registerEditor}
+              focusEditor={focusEditor}
+              clearActive={clearActive}
             />
             <div>
               <label className={labelClass}>Body</label>
-              <textarea
-                rows={4}
-                className={`${areaClass} font-mono text-xs`}
-                value={node.data.body ?? ''}
-                disabled={(node.data.bodyMode ?? 'json') === 'none'}
-                placeholder={(node.data.bodyMode ?? 'json') === 'text' ? 'Plain text body, values allowed: {{trigger.input.message}}' : '{"text": "Use a value from Available data"}'}
-                onFocus={focusField('http.body')}
-                onChange={(e) => onChange({ ...node, data: { ...node.data, body: e.target.value || undefined } })}
-              />
+              {(node.data.bodyMode ?? 'json') === 'none' ? (
+                <textarea rows={4} className={`${areaClass} font-mono text-xs`} value={node.data.body ?? ''} disabled />
+              ) : (
+                <TokenTextEditor
+                  ref={registerEditor('http.body')}
+                  multiline
+                  rows={4}
+                  className="font-mono text-xs"
+                  value={node.data.body ?? ''}
+                  labelCtx={labelCtx}
+                  placeholder={(node.data.bodyMode ?? 'json') === 'text' ? 'Plain text body' : '{"text": "Use a value from Available data"}'}
+                  onFocus={focusEditor('http.body')}
+                  onChange={(body) => onChange({ ...node, data: { ...node.data, body: body || undefined } })}
+                  ariaLabel="Request body"
+                />
+              )}
               <div className="mt-2">
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
@@ -687,12 +687,15 @@ export function StepDrawer({
                     <Trash2 className="h-4 w-4" />
                   </button>
                 </div>
-                <input
-                  className={`${smallField} w-full`}
+                <TokenTextEditor
+                  ref={registerEditor(`xf.${i}`)}
+                  className="px-2 py-1.5"
                   value={field.value}
+                  labelCtx={labelCtx}
                   placeholder="Value for this field"
-                  onFocus={focusField(`xf.${i}`)}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, value: e.target.value } : f)) } })}
+                  onFocus={focusEditor(`xf.${i}`)}
+                  onChange={(value) => onChange({ ...node, data: { ...node.data, fields: node.data.fields.map((f, j) => (j === i ? { ...f, value } : f)) } })}
+                  ariaLabel={`Value for field ${field.name || i + 1}`}
                 />
               </div>
             ))}
@@ -717,12 +720,12 @@ export function StepDrawer({
               const update = (next: ConditionClause[]) => onChange({ ...node, data: { ...node.data, clauses: next } })
               return (
                 <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
-                  <input className={`${smallField} w-full`} value={clause.left} placeholder="Choose data from below" onFocus={focusField(`filt.${i}.left`)} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, left: e.target.value } : c)))} />
+                  <TokenTextEditor ref={registerEditor(`filt.${i}.left`)} className="px-2 py-1.5" value={clause.left} labelCtx={labelCtx} placeholder="Choose data from below" onFocus={focusEditor(`filt.${i}.left`)} onChange={(left) => update(clauses.map((c, j) => (j === i ? { ...c, left } : c)))} ariaLabel={`Filter ${i + 1} value`} />
                   <div className="flex gap-1.5">
                     <select className={smallField} value={clause.op} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}>
                       {CONDITION_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
                     </select>
-                    <input className={`${smallField} flex-1`} value={clause.right} placeholder="80" onFocus={focusField(`filt.${i}.right`)} onChange={(e) => update(clauses.map((c, j) => (j === i ? { ...c, right: e.target.value } : c)))} />
+                    <TokenTextEditor ref={registerEditor(`filt.${i}.right`)} className="min-w-0 flex-1 px-2 py-1.5" value={clause.right} labelCtx={labelCtx} placeholder="80" onFocus={focusEditor(`filt.${i}.right`)} onChange={(right) => update(clauses.map((c, j) => (j === i ? { ...c, right } : c)))} ariaLabel={`Filter ${i + 1} comparison value`} />
                     {clauses.length > 1 && (
                       <button type="button" onClick={() => update(clauses.filter((_, j) => j !== i))} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove condition"><Trash2 className="h-4 w-4" /></button>
                     )}
@@ -748,12 +751,12 @@ export function StepDrawer({
                     <button type="button" onClick={() => onChange({ ...node, data: { ...node.data, cases: node.data.cases.filter((_, j) => j !== i) } })} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove case"><Trash2 className="h-4 w-4" /></button>
                   )}
                 </div>
-                <input className={`${smallField} w-full`} value={c.left} placeholder="Choose data from below" onFocus={focusField(`sw.${i}.left`)} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, left: e.target.value } : x)) } })} />
+                <TokenTextEditor ref={registerEditor(`sw.${i}.left`)} className="px-2 py-1.5" value={c.left} labelCtx={labelCtx} placeholder="Choose data from below" onFocus={focusEditor(`sw.${i}.left`)} onChange={(left) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, left } : x)) } })} ariaLabel={`Case ${i + 1} value`} />
                 <div className="flex gap-1.5">
                   <select className={smallField} value={c.op} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, op: e.target.value as ConditionOp } : x)) } })}>
                     {CONDITION_OPS.map((op) => <option key={op} value={op}>{op}</option>)}
                   </select>
-                  <input className={`${smallField} flex-1`} value={c.right} placeholder="enterprise" onFocus={focusField(`sw.${i}.right`)} onChange={(e) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, right: e.target.value } : x)) } })} />
+                  <TokenTextEditor ref={registerEditor(`sw.${i}.right`)} className="min-w-0 flex-1 px-2 py-1.5" value={c.right} labelCtx={labelCtx} placeholder="enterprise" onFocus={focusEditor(`sw.${i}.right`)} onChange={(right) => onChange({ ...node, data: { ...node.data, cases: node.data.cases.map((x, j) => (j === i ? { ...x, right } : x)) } })} ariaLabel={`Case ${i + 1} comparison value`} />
                 </div>
               </div>
             ))}
@@ -1036,7 +1039,7 @@ function TriggerEditor({
             </datalist>
           </div>
           <p className="text-xs text-muted-foreground">
-            Fires when this signal is emitted anywhere in your workspace. The signal payload arrives as {'{{trigger.input}}'}. Runs the published version.
+            Fires when this signal is emitted anywhere in your workspace. The signal payload arrives as the Run input. Runs the published version.
           </p>
         </div>
       )}
