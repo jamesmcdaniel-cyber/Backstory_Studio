@@ -377,7 +377,7 @@ function ExplorePage() {
       <div className="max-w-6xl mx-auto p-6 space-y-6">
         <PageHeader eyebrow="Library" title="Explore" />
 
-        <div className="flex w-full items-center gap-2">
+        <div className="relative w-full">
           <Input
             value={search}
             onChange={(event) => onSearch(event.target.value)}
@@ -385,18 +385,17 @@ function ExplorePage() {
               if (event.key === 'Enter') runAiSearch()
             }}
             placeholder="Describe what you want to accomplish — press Enter for AI matches…"
-            className="flex-1"
+            className="h-11 w-full pr-28"
           />
-          <Button
+          <button
             type="button"
-            size="sm"
-            variant="outline"
             disabled={search.trim().length < 3 || aiLoading}
             onClick={runAiSearch}
+            className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:pointer-events-none disabled:opacity-50"
           >
-            <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            Ask AI
-          </Button>
+            <Sparkles className="h-3.5 w-3.5" />
+            {aiLoading ? 'Asking…' : 'Ask AI'}
+          </button>
         </div>
 
         {aiResults !== null && (
