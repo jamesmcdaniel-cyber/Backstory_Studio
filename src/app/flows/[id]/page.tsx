@@ -260,6 +260,7 @@ export default function FlowBuilder() {
   const redoStack = useRef<FlowGraph[]>([])
   const commitGraph = useCallback(
     (next: FlowGraph) => {
+      if (next === graph) return
       undoStack.current.push(graph)
       if (undoStack.current.length > 50) undoStack.current.shift()
       redoStack.current = []

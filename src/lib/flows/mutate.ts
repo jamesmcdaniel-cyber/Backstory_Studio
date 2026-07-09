@@ -299,11 +299,9 @@ export function moveNodeAfter(graph: FlowGraph, nodeId: string, afterId: string)
   // 1) Detach: heal the chain around the node (deleteNode's edge logic, node kept).
   const incoming = graph.edges.find((edge) => edge.target === nodeId)
   const outgoing = graph.edges.find((edge) => edge.source === nodeId && !edge.branch)
-  let edges = graph.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId)
-  // Branch edges leaving a condition/switch node being moved stay with it —
-  // conditions/switches carry their branch heads, so keep those edges intact.
-  const branchEdges = graph.edges.filter((edge) => edge.source === nodeId && edge.branch)
-  edges = [...edges, ...branchEdges]
+  // Condition/switch nodes are blocked above, so a moved node never owns branch
+  // edges here — no need to re-collect/re-append them.
+  const edges = graph.edges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId)
   if (incoming && outgoing) {
     edges.push({
       id: edgeId(incoming.source, outgoing.target, incoming.branch),

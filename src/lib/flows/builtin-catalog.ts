@@ -66,9 +66,9 @@ export const BUILTIN_GROUPS: PickerGroup[] = [
 ]
 
 /** AI capabilities shown first in action mode. */
+// 'Run a prompt' (inline, no saved agent) and 'Human review' return when prompt-mode / a human-review step exist in the graph schema.
 export const AI_CAPABILITY_LEAVES: PickerLeaf[] = [
   { id: 'ai-run-agent', label: 'Run an agent', description: 'Run one of your agents and pass its response to the next step.', mode: 'action', stepType: 'agent' },
-  { id: 'ai-run-prompt', label: 'Run a prompt', description: 'One-off AI step: give instructions, get a response — no saved agent needed.', mode: 'action', stepType: 'agent', seed: { label: 'Run a prompt' } },
 ]
 
 /** Trigger-mode top level: the four ways a flow can start. */

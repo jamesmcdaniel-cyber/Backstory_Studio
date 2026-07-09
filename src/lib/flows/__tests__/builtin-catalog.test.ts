@@ -19,7 +19,7 @@ test('every leaf id is unique across groups, AI capabilities, and triggers', () 
 })
 
 test('AI capabilities are action-mode agent steps', () => {
-  assert.ok(AI_CAPABILITY_LEAVES.length >= 2)
+  assert.ok(AI_CAPABILITY_LEAVES.length >= 1)
   assert.ok(AI_CAPABILITY_LEAVES.every((l) => l.mode === 'action' && l.stepType === 'agent'))
 })
 

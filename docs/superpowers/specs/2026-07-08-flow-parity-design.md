@@ -142,7 +142,7 @@ One picker component with two modes (`trigger` | `action`), replacing the drawer
 Structure:
 - **Search** — fuzzy across built-ins, AI capabilities, MCP connections, and individual MCP tools; results grouped by source.
 - **Favorites** — starrable items, persisted in localStorage.
-- **AI capabilities** (action mode) — Run an agent (→ `agent` node), Run a prompt (→ `agent` node in a "prompt" mode: inline prompt + model, no saved agent required, executed via the same `runAgentExecution` path), Human review (→ the ask-user pause step).
+- **AI capabilities** (action mode) — Run an agent (→ `agent` node), Run a prompt (→ `agent` node in a "prompt" mode: inline prompt + model, no saved agent required, executed via the same `runAgentExecution` path), Human review (→ the ask-user pause step). (2026-07-09: WS2 shipped "Run an agent" only — "Run a prompt" needs an inline prompt mode in the agent node schema and "Human review" needs a dedicated pause step type; both deferred to the copilot/interpreter workstreams.)
 - **Built-in tools** — drill-in groups:
   - HTTP → HTTP, HTTP Webhook
   - Control → Condition, Switch, Loop, Parallel, Stop
