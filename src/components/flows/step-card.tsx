@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef, useState, type KeyboardEvent } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import {
   Bot,
   CalendarDays,
@@ -197,6 +198,20 @@ function stopEvent(event: React.MouseEvent | React.FocusEvent) {
   event.stopPropagation()
 }
 
+/** The one affordance a collapsed card may keep showing (MS parity). */
+function collapsedAffordance(node: FlowNode): React.ReactNode | null {
+  if (node.type !== 'trigger') return null
+  const trigger = triggerData(node)
+  if ((trigger.type ?? 'manual') !== 'manual') return null
+  const count = triggerInputFieldsFromTrigger(trigger).length
+  return (
+    <span className="pointer-events-none flex items-center gap-3 py-2 text-base font-semibold text-slate-700">
+      <Plus className="h-5 w-5" />
+      {count > 0 ? `${count} input${count === 1 ? '' : 's'} — add another` : 'Add an input'}
+    </span>
+  )
+}
+
 type TokenTarget = {
   el: HTMLInputElement | HTMLTextAreaElement
   read: (node: FlowNode) => string
@@ -276,7 +291,10 @@ export function StepCard({
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
+      onClick={(event) => {
+        event.stopPropagation()
+        onClick?.()
+      }}
       onKeyDown={onRootKeyDown}
       className={cn(
         'w-full rounded-[18px] border bg-white text-left shadow-[0_2px_10px_rgba(15,23,42,0.08)] outline-none transition-all duration-fast',
@@ -384,19 +402,36 @@ export function StepCard({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-        {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget })}
-        {selected && dataFields && dataFields.length > 0 && (
-          <div className="mt-4 border-t border-slate-200 pt-3">
-            <DataTree
-              fields={dataFields}
-              onInsert={insertToken}
-              title="Insert data from previous steps"
-              emptyMessage="No earlier step data is available yet."
-            />
-          </div>
+      <AnimatePresence initial={false}>
+        {selected ? (
+          <motion.div
+            key="body"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="overflow-hidden"
+          >
+            <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
+              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget })}
+              {dataFields && dataFields.length > 0 && (
+                <div className="mt-4 border-t border-slate-200 pt-3">
+                  <DataTree
+                    fields={dataFields}
+                    onInsert={insertToken}
+                    title="Insert data from previous steps"
+                    emptyMessage="No earlier step data is available yet."
+                  />
+                </div>
+              )}
+            </div>
+          </motion.div>
+        ) : (
+          collapsedAffordance(node) && (
+            <div className="border-t border-slate-200 px-5 py-1.5">{collapsedAffordance(node)}</div>
+          )
         )}
-      </div>
+      </AnimatePresence>
       {codeOpen && (
         <div onClick={stopEvent} className="border-t border-slate-200 px-5 py-4">
           <div className="mb-2 flex items-center justify-between">

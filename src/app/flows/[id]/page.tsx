@@ -696,6 +696,7 @@ export default function FlowBuilder() {
             statusByNode={mode === 'test' ? statusByNode : {}}
             selectedId={selectedId}
             onSelect={setSelectedId}
+            onBackgroundClick={() => setSelectedId(null)}
             onChangeNode={(node) => setGraph((g) => updateNode(g, node))}
             onInsertAfter={(afterId, type, seed) => {
               const { graph: inserted, nodeId } = insertNodeAfter(graph, afterId, type, type === 'agent' ? seed?.agentId ?? agents[0]?.id ?? '' : undefined)

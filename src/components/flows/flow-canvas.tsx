@@ -186,7 +186,7 @@ function InsertMenu({
   }
 
   return (
-    <div className={cn('relative flex flex-col items-center', compact && 'items-start')}>
+    <div className={cn('relative flex flex-col items-center', compact && 'items-start')} onClick={(event) => event.stopPropagation()}>
       {!compact && <div className="h-8 w-px bg-slate-300" />}
       <button
         type="button"
@@ -297,6 +297,7 @@ export function FlowCanvas({
   onRefreshAgents,
   onDuplicateNode,
   onDeleteNode,
+  onBackgroundClick,
 }: {
   graph: FlowGraph
   agentName: (agentId: string) => string
@@ -312,6 +313,7 @@ export function FlowCanvas({
   onRefreshAgents?: () => void
   onDuplicateNode?: (id: string) => void
   onDeleteNode?: (id: string) => void
+  onBackgroundClick?: () => void
 }) {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const nextOf = (id: string): FlowNode | undefined => {
@@ -493,7 +495,7 @@ export function FlowCanvas({
   const seen = new Set<string>(trigger ? [trigger.id] : [])
 
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col items-center py-8">
+    <div className="mx-auto flex w-full max-w-[760px] flex-col items-center py-8" onClick={() => onBackgroundClick?.()}>
       <div className="mb-6 flex items-center gap-2 self-start rounded-full border border-blue-100 bg-white/85 px-3 py-1.5 text-xs font-semibold text-blue-700 shadow-sm">
         <Sparkles className="h-3.5 w-3.5" />
         Designer
