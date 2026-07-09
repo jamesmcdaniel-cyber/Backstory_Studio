@@ -3,12 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2 } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/lib/flows/graph'
 import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep, moveNodeAfter, moveContainerStep, pasteNodeAfter } from '@/lib/flows/mutate'
 import { writeFlowClipboard, readFlowClipboard } from '@/lib/flows/clipboard'
@@ -25,7 +24,7 @@ import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import { CheckerPanel } from '@/components/flows/checker-panel'
 import { ResizablePanel } from '@/components/flows/resizable-panel'
-import { TestInputPanel } from '@/components/flows/test-input-panel'
+import { TestPanel } from '@/components/flows/test-panel'
 import type { StepStatus } from '@/components/flows/step-card'
 
 type Agent = { id: string; title: string }
@@ -179,13 +178,12 @@ export default function FlowBuilder() {
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [fixing, setFixing] = useState(false)
-  const [mode, setMode] = useState<'build' | 'test'>('build')
   // Copilot is the workflow-building assistant — open by default so it's always
   // there; the top-bar toggle can still hide it.
   const [showCopilot, setShowCopilot] = useState(true)
   const [showRuns, setShowRuns] = useState(false)
   const [showChecker, setShowChecker] = useState(false)
-  const [showTestInput, setShowTestInput] = useState(false)
+  const [showTest, setShowTest] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
   const [zoom, setZoomState] = useState(() => {
@@ -299,7 +297,6 @@ export default function FlowBuilder() {
     document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [])
   const inputFields = useMemo(() => triggerInputFields(graph), [graph])
-  const hasInputFields = inputFields.some((field) => field.name.trim())
   const selectedNode = graph.nodes.find((n) => n.id === selectedId) ?? null
 
   useEffect(() => {
@@ -496,18 +493,15 @@ export default function FlowBuilder() {
   const run = useCallback(async () => {
     if (!validation.ok) {
       toast.error(validation.errors[0]?.message || 'Fix the flow before running.')
-      setMode('build')
       return
     }
     const missing = missingRequiredInputFields(inputFields, parseFlowInput(testInput))
     if (missing.length) {
       toast.error(`Fill the required input field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`)
-      setShowTestInput(true)
-      setMode('build')
+      setShowTest(true)
       return
     }
     setRunning(true)
-    setMode('test')
     setShowRuns(true)
     setStatusByNode({})
     try {
@@ -687,17 +681,6 @@ export default function FlowBuilder() {
         <Button variant="ghost" size="icon" onClick={redo} aria-label="Redo" title="Redo (⌘⇧Z)">
           <Redo2 className="h-4 w-4" />
         </Button>
-        <div className="flex overflow-hidden rounded-lg border border-border">
-          {(['build', 'test'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={cn('px-3 py-1.5 text-xs font-medium capitalize', mode === m ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:bg-muted')}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
         <select
           value={status}
           onChange={(e) => setStatus(e.target.value)}
@@ -727,24 +710,9 @@ export default function FlowBuilder() {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        {hasInputFields ? (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowTestInput((open) => !open)}
-            title="Fill the values passed to this flow when you click Run"
-          >
-            Test input
-          </Button>
-        ) : (
-          <input
-            value={testInput}
-            onChange={(e) => setTestInput(e.target.value)}
-            placeholder="Run input..."
-            title="Value passed to the flow when you click Run. Lists can be JSON or comma-separated."
-            className="w-40 rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none focus:border-indigo-400"
-          />
-        )}
+        <Button variant="outline" size="sm" onClick={() => setShowTest((v) => !v)}>
+          <FlaskConical className="mr-1.5 h-4 w-4" /> Test
+        </Button>
         <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
           <ListChecks className="mr-1.5 h-4 w-4" /> Runs
         </Button>
@@ -777,10 +745,6 @@ export default function FlowBuilder() {
         </Button>
       </div>
 
-      {hasInputFields && (showTestInput || mode === 'test') && (
-        <TestInputPanel fields={inputFields} value={testInput} onChange={setTestInput} />
-      )}
-
       {/* Body: canvas + optional drawer + optional copilot */}
       <div className="relative flex min-h-0 flex-1">
         <div
@@ -799,7 +763,7 @@ export default function FlowBuilder() {
               agents={agents}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
-              statusByNode={mode === 'test' ? statusByNode : {}}
+              statusByNode={statusByNode}
               issuesByNode={issuesByNode}
               selectedId={selectedId}
               onSelect={setSelectedId}
@@ -894,6 +858,22 @@ export default function FlowBuilder() {
                 setSelectedId(null)
                 // Keep Copilot open so the user can keep iterating on the draft.
               }}
+            />
+          </ResizablePanel>
+        )}
+
+        {showTest && (
+          <ResizablePanel storageKey="flow.testWidth">
+            <TestPanel
+              fields={inputFields}
+              value={testInput}
+              onChange={setTestInput}
+              onRun={run}
+              running={running}
+              steps={(selectedRun?.steps ?? []).map((s) => ({ nodeId: s.nodeId, status: s.status }))}
+              labelForNode={labelForNode}
+              onInspect={() => setShowRuns(true)}
+              onClose={() => setShowTest(false)}
             />
           </ResizablePanel>
         )}

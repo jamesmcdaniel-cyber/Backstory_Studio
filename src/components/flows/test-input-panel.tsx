@@ -3,11 +3,11 @@
 import type { TriggerInputField } from '@/lib/flows/graph'
 import { fieldValuesFromFlowInput, flowInputFromFieldValues } from '@/lib/flows/test-input'
 
-const fieldClass =
+export const fieldClass =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
-const labelClass = 'mb-1 flex items-center gap-1.5 text-xs font-medium text-foreground'
+export const labelClass = 'mb-1 flex items-center gap-1.5 text-xs font-medium text-foreground'
 
-function inputForField({
+export function inputForField({
   field,
   value,
   onChange,
