@@ -1425,6 +1425,207 @@ git commit -m "feat(flows): inline token picker and required markers on canvas s
 
 ---
 
+### Task 8.5: Step-card three-dots context menu
+
+*Added 2026-07-08 mid-execution at user request (reference: Copilot Studio node menus — trigger gets a slimmer menu than action nodes).*
+
+**Files:**
+- Modify: `src/components/flows/step-card.tsx` (three-dots button opens a dropdown menu; rename mode; code view dialog)
+- Modify: `src/components/flows/flow-canvas.tsx` (thread `onDuplicateNode` / `onDeleteNode`)
+- Modify: `src/app/flows/[id]/page.tsx` (pass the two handlers, reusing the drawer's existing duplicate/delete logic)
+
+**Interfaces:**
+- Consumes: `DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger` from `@/components/ui/dropdown-menu` (already used by the builder page), `duplicateNode` / `deleteNode` from `@/lib/flows/mutate` (already imported in the page).
+- Produces: `StepCard` props gain `onDuplicate?: () => void` and `onDelete?: () => void`; `FlowCanvas` props gain `onDuplicateNode?: (id: string) => void` and `onDeleteNode?: (id: string) => void`.
+
+**Menu contents (platform adaptation of the MS menus — no Pin/Send feedback/More):**
+- Trigger node: `Open settings`, `Copy trigger JSON`, `Code view`
+- Every other node: `Delete` (destructive, listed first like MS, hint "Del"), `Copy step JSON` (hint "⌘C"), `Rename`, `Duplicate`, `Open settings`, `Code view`
+- Hints are display-only text; no global keyboard handlers in this task.
+
+- [ ] **Step 1: StepCard menu, rename mode, code view**
+
+In `src/components/flows/step-card.tsx`:
+
+Add imports:
+
+```ts
+import { Check, ClipboardCopy, Code2, PanelRight, Pencil, Settings2 } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+```
+
+(merge the lucide names into the existing lucide import; `PanelRight`, `Trash2`, `Copy` etc. may already be there).
+
+Add props to `StepCard`: `onDuplicate?: () => void` and `onDelete?: () => void`.
+
+Add local state inside `StepCard`:
+
+```ts
+  const [renaming, setRenaming] = useState(false)
+  const [codeOpen, setCodeOpen] = useState(false)
+  const isTrigger = node.type === 'trigger'
+  const label = (node.data as { label?: string }).label ?? ''
+  const setLabel = (value: string) => onChange?.({ ...node, data: { ...node.data, label: value || undefined } } as FlowNode)
+  const copyNodeJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(node, null, 2))
+      toast.success(isTrigger ? 'Trigger JSON copied.' : 'Step JSON copied.')
+    } catch {
+      toast.error('Could not copy to the clipboard.')
+    }
+  }
+```
+
+Replace the existing no-op three-dots `<button>` (the one with `aria-label="More step options"`) with:
+
+```tsx
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              onClick={(event) => event.stopPropagation()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              aria-label="Step options"
+              title="Step options"
+            >
+              <MoreHorizontal className="h-5 w-5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+            {!isTrigger && onDelete && (
+              <>
+                <DropdownMenuItem onSelect={onDelete} className="text-red-600 focus:text-red-700">
+                  <Trash2 className="h-4 w-4" /> Delete
+                  <span className="ml-auto pl-4 text-xs text-slate-400">Del</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem onSelect={copyNodeJson}>
+              <ClipboardCopy className="h-4 w-4" /> {isTrigger ? 'Copy trigger JSON' : 'Copy step JSON'}
+              <span className="ml-auto pl-4 text-xs text-slate-400">⌘C</span>
+            </DropdownMenuItem>
+            {!isTrigger && (
+              <DropdownMenuItem onSelect={() => setRenaming(true)}>
+                <Pencil className="h-4 w-4" /> Rename
+              </DropdownMenuItem>
+            )}
+            {!isTrigger && onDuplicate && (
+              <DropdownMenuItem onSelect={onDuplicate}>
+                <Copy className="h-4 w-4" /> Duplicate
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onClick?.()}>
+              <Settings2 className="h-4 w-4" /> Open settings
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setCodeOpen(true)}>
+              <Code2 className="h-4 w-4" /> Code view
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+```
+
+(`Copy` is the existing lucide import used elsewhere; if it is not imported in this file yet, add it.)
+
+Rename mode — in the header, replace the `<h3>` title with a conditional:
+
+```tsx
+          {renaming ? (
+            <span className="flex items-center gap-1.5" onClick={stopEvent}>
+              <input
+                autoFocus
+                value={label}
+                onChange={(event) => setLabel(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === 'Escape') setRenaming(false)
+                }}
+                onBlur={() => setRenaming(false)}
+                className="h-9 min-w-0 flex-1 rounded-md border border-blue-400 bg-white px-2 text-lg font-semibold text-slate-950 outline-none ring-2 ring-blue-100"
+                placeholder={title}
+                aria-label="Step name"
+              />
+              <button
+                type="button"
+                onClick={() => setRenaming(false)}
+                className="flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                aria-label="Done renaming"
+              >
+                <Check className="h-4 w-4" />
+              </button>
+            </span>
+          ) : (
+            <h3 className="truncate text-lg font-semibold text-slate-950">{title}</h3>
+          )}
+```
+
+Code view — render at the end of the card's root `div` (inside it, after the body section):
+
+```tsx
+      {codeOpen && (
+        <div onClick={stopEvent} className="border-t border-slate-200 px-5 py-4">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Code view</p>
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={copyNodeJson} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
+                Copy
+              </button>
+              <button type="button" onClick={() => setCodeOpen(false)} className="text-xs font-semibold text-slate-500 hover:text-slate-900">
+                Close
+              </button>
+            </div>
+          </div>
+          <pre className="max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-100">{JSON.stringify(node, null, 2)}</pre>
+        </div>
+      )}
+```
+
+- [ ] **Step 2: Thread handlers through FlowCanvas**
+
+In `src/components/flows/flow-canvas.tsx`:
+- Add props `onDuplicateNode?: (id: string) => void` and `onDeleteNode?: (id: string) => void` to `FlowCanvas`.
+- In `card(...)`, pass:
+
+```tsx
+      onDuplicate={node.type === 'trigger' ? undefined : onDuplicateNode ? () => onDuplicateNode(node.id) : undefined}
+      onDelete={node.type === 'trigger' ? undefined : onDeleteNode ? () => onDeleteNode(node.id) : undefined}
+```
+
+- [ ] **Step 3: Wire the page handlers**
+
+In `src/app/flows/[id]/page.tsx`, pass to `<FlowCanvas …/>` (reusing the exact logic the drawer callbacks already use):
+
+```tsx
+            onDuplicateNode={(nodeId) => {
+              const { graph: next, nodeId: newId } = duplicateNode(graph, nodeId)
+              commitGraph(next)
+              setSelectedId(newId)
+            }}
+            onDeleteNode={(nodeId) => {
+              commitGraph(deleteNode(graph, nodeId))
+              if (selectedId === nodeId) setSelectedId(null)
+            }}
+```
+
+- [ ] **Step 4: Verify and commit**
+
+Run: `npm run typecheck && npm run lint && npm test`
+Expected: clean.
+
+```bash
+git add src/components/flows/step-card.tsx src/components/flows/flow-canvas.tsx 'src/app/flows/[id]/page.tsx'
+git commit -m "feat(flows): step-card context menu — delete, copy JSON, rename, duplicate, code view"
+```
+
+---
+
 ### Task 9: Final verification pass
 
 **Files:** none new.
