@@ -942,6 +942,12 @@ export default function FlowBuilder() {
           <ResizablePanel storageKey="flow.copilotWidth">
             <CopilotPanel
               onGraph={(next) => {
+                // Read-only version viewing: never let a generated graph
+                // silently replace the live draft under the read-only banner.
+                if (viewingVersion) {
+                  toast.error('Close the version view before generating a flow.')
+                  return
+                }
                 commitGraph(next as FlowGraph)
                 setSelectedId(null)
                 // Keep Copilot open so the user can keep iterating on the draft.
