@@ -165,6 +165,14 @@ function firstClause(node: Extract<FlowNode, { type: 'condition' | 'filter' }>):
   return { left: '', op: 'contains', right: '' }
 }
 
+function transformFields(node: Extract<FlowNode, { type: 'transform' }>): { name: string; value: string }[] {
+  return node.data.fields.length ? node.data.fields : [{ name: '', value: '' }]
+}
+
+function switchFirstCase(node: Extract<FlowNode, { type: 'switch' }>) {
+  return node.data.cases[0] ?? { id: 'case1', left: '', op: 'contains' as ConditionOp, right: '' }
+}
+
 function selectedTool(connectionId: string, toolName: string, toolCatalog: ToolCatalog) {
   const connection = toolCatalog.find((entry) => entry.id === connectionId)
   const tool = connection?.tools.find((entry) => entry.name === toolName)
@@ -175,10 +183,14 @@ function stopEvent(event: React.MouseEvent | React.FocusEvent) {
   event.stopPropagation()
 }
 
-type TokenTarget = { el: HTMLInputElement | HTMLTextAreaElement; get: () => string; set: (value: string) => void }
+type TokenTarget = {
+  el: HTMLInputElement | HTMLTextAreaElement
+  read: (node: FlowNode) => string
+  write: (node: FlowNode, value: string) => FlowNode
+}
 export type RegisterTokenTarget = (
-  get: () => string,
-  set: (value: string) => void,
+  read: (node: FlowNode) => string,
+  write: (node: FlowNode, value: string) => FlowNode,
 ) => (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => void
 
 export function StepCard({
@@ -216,14 +228,17 @@ export function StepCard({
     event.preventDefault()
     onClick?.()
   }
+  const nodeRef = useRef(node)
+  nodeRef.current = node
   const tokenTargetRef = useRef<TokenTarget | null>(null)
-  const registerTokenTarget: RegisterTokenTarget = (get, set) => (event) => {
-    tokenTargetRef.current = { el: event.currentTarget, get, set }
+  const registerTokenTarget: RegisterTokenTarget = (read, write) => (event) => {
+    tokenTargetRef.current = { el: event.currentTarget, read, write }
   }
   const insertToken = (token: string) => {
     const target = tokenTargetRef.current
     if (!target) return
-    target.set(insertAtCaret(target.get(), token, target.el))
+    const current = target.read(nodeRef.current)
+    onChange?.(target.write(nodeRef.current, insertAtCaret(current, token, target.el)))
   }
 
   return (
@@ -517,8 +532,8 @@ function AgentBody({
           value={isDefaultInput ? '' : node.data.input ?? ''}
           onChange={(event) => update({ ...node, data: { ...node.data, input: event.target.value } })}
           onFocus={registerTokenTarget(
-            () => (isDefaultInput ? '' : node.data.input ?? ''),
-            (v) => update({ ...node, data: { ...node.data, input: v } }),
+            (n) => (n.type === 'agent' ? (defaultAgentInput(n.data.input) ? '' : n.data.input ?? '') : ''),
+            (n, v) => (n.type === 'agent' ? { ...n, data: { ...n.data, input: v } } : n),
           )}
           className={textareaClass}
           placeholder={isDefaultInput ? 'Uses the trigger input by default. Add instructions here if needed.' : 'Tell the agent what to do at this step.'}
@@ -630,8 +645,8 @@ function HttpBody({
             value={node.data.url}
             onChange={(event) => update({ ...node, data: { ...node.data, url: event.target.value } })}
             onFocus={registerTokenTarget(
-              () => node.data.url,
-              (v) => update({ ...node, data: { ...node.data, url: v } }),
+              (n) => (n.type === 'http' ? n.data.url : ''),
+              (n, v) => (n.type === 'http' ? { ...n, data: { ...n.data, url: v } } : n),
             )}
             className={controlClass}
             placeholder="https://api.example.com/endpoint"
@@ -656,13 +671,33 @@ function HttpBody({
         label="Headers"
         value={node.data.headers}
         onChange={(headers) => update({ ...node, data: { ...node.data, headers } })}
-        registerTokenTarget={registerTokenTarget}
+        registerValueFocus={(index) =>
+          registerTokenTarget(
+            (n) => (n.type === 'http' ? parseKeyValueRows(n.data.headers)[index]?.value ?? '' : ''),
+            (n, v) => {
+              if (n.type !== 'http') return n
+              const rows = parseKeyValueRows(n.data.headers)
+              rows[index] = { key: rows[index]?.key ?? '', value: v }
+              return { ...n, data: { ...n.data, headers: serializeKeyValueRows(rows) } }
+            },
+          )
+        }
       />
       <InlineKeyValue
         label="Queries"
         value={node.data.query}
         onChange={(query) => update({ ...node, data: { ...node.data, query } })}
-        registerTokenTarget={registerTokenTarget}
+        registerValueFocus={(index) =>
+          registerTokenTarget(
+            (n) => (n.type === 'http' ? parseKeyValueRows(n.data.query)[index]?.value ?? '' : ''),
+            (n, v) => {
+              if (n.type !== 'http') return n
+              const rows = parseKeyValueRows(n.data.query)
+              rows[index] = { key: rows[index]?.key ?? '', value: v }
+              return { ...n, data: { ...n.data, query: serializeKeyValueRows(rows) } }
+            },
+          )
+        }
       />
       <div className="grid gap-2">
         <label className={labelClass}>Body</label>
@@ -670,8 +705,8 @@ function HttpBody({
           value={node.data.body ?? ''}
           onChange={(event) => update({ ...node, data: { ...node.data, body: event.target.value } })}
           onFocus={registerTokenTarget(
-            () => node.data.body ?? '',
-            (v) => update({ ...node, data: { ...node.data, body: v } }),
+            (n) => (n.type === 'http' ? n.data.body ?? '' : ''),
+            (n, v) => (n.type === 'http' ? { ...n, data: { ...n.data, body: v } } : n),
           )}
           className={textareaClass}
           placeholder="Optional JSON or text body for POST, PUT, and PATCH requests."
@@ -686,12 +721,12 @@ function InlineKeyValue({
   label,
   value,
   onChange,
-  registerTokenTarget,
+  registerValueFocus,
 }: {
   label: string
   value?: string
   onChange: (value: string) => void
-  registerTokenTarget: RegisterTokenTarget
+  registerValueFocus: (index: number) => (event: React.FocusEvent<HTMLInputElement>) => void
 }) {
   const rows = parseKeyValueRows(value)
   const updateRow = (index: number, patch: Partial<KeyValueRow>) => {
@@ -720,10 +755,7 @@ function InlineKeyValue({
             <input
               value={row.value}
               onChange={(event) => updateRow(index, { value: event.target.value })}
-              onFocus={registerTokenTarget(
-                () => rows[index]?.value ?? '',
-                (v) => updateRow(index, { value: v }),
-              )}
+              onFocus={registerValueFocus(index)}
               className={controlClass}
               placeholder="Value"
             />
@@ -817,8 +849,11 @@ function ConditionBody({
           value={clause.left}
           onChange={(event) => setClause({ left: event.target.value })}
           onFocus={registerTokenTarget(
-            () => clause.left,
-            (v) => setClause({ left: v }),
+            (n) => (n.type === 'condition' || n.type === 'filter' ? firstClause(n).left : ''),
+            (n, v) =>
+              n.type === 'condition' || n.type === 'filter'
+                ? ({ ...n, data: { ...n.data, clauses: [{ ...firstClause(n), left: v }], match: n.data.match ?? 'all' } } as FlowNode)
+                : n,
           )}
           className={controlClass}
           placeholder="Field or value"
@@ -834,8 +869,11 @@ function ConditionBody({
           value={clause.right}
           onChange={(event) => setClause({ right: event.target.value })}
           onFocus={registerTokenTarget(
-            () => clause.right,
-            (v) => setClause({ right: v }),
+            (n) => (n.type === 'condition' || n.type === 'filter' ? firstClause(n).right : ''),
+            (n, v) =>
+              n.type === 'condition' || n.type === 'filter'
+                ? ({ ...n, data: { ...n.data, clauses: [{ ...firstClause(n), right: v }], match: n.data.match ?? 'all' } } as FlowNode)
+                : n,
           )}
           className={controlClass}
           placeholder="Compare to"
@@ -854,7 +892,7 @@ function TransformBody({
   update: (node: FlowNode) => void
   registerTokenTarget: RegisterTokenTarget
 }) {
-  const fields = node.data.fields.length ? node.data.fields : [{ name: '', value: '' }]
+  const fields = transformFields(node)
   const setFields = (next: typeof fields) => update({ ...node, data: { ...node.data, fields: next } })
   return (
     <div className="space-y-3">
@@ -871,8 +909,11 @@ function TransformBody({
             value={field.value}
             onChange={(event) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: event.target.value } : entry)))}
             onFocus={registerTokenTarget(
-              () => fields[index]?.value ?? '',
-              (v) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: v } : entry))),
+              (n) => (n.type === 'transform' ? transformFields(n)[index]?.value ?? '' : ''),
+              (n, v) =>
+                n.type === 'transform'
+                  ? { ...n, data: { ...n.data, fields: transformFields(n).map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: v } : entry)) } }
+                  : n,
             )}
             className={controlClass}
             placeholder="Value"
@@ -920,8 +961,8 @@ function LoopBody({
           value={usesTriggerInput ? '' : node.data.over}
           onChange={(event) => update({ ...node, data: { ...node.data, over: event.target.value } })}
           onFocus={registerTokenTarget(
-            () => (usesTriggerInput ? '' : node.data.over),
-            (v) => update({ ...node, data: { ...node.data, over: v } }),
+            (n) => (n.type === 'loop' ? (n.data.over === '{{trigger.input}}' ? '' : n.data.over) : ''),
+            (n, v) => (n.type === 'loop' ? { ...n, data: { ...n.data, over: v } } : n),
           )}
           className={controlClass}
           placeholder={usesTriggerInput ? 'Uses trigger input' : 'Comma-separated list, JSON array, or mapped list'}
@@ -942,7 +983,7 @@ function SwitchBody({
   update: (node: FlowNode) => void
   registerTokenTarget: RegisterTokenTarget
 }) {
-  const first = node.data.cases[0] ?? { id: 'case1', left: '', op: 'contains' as ConditionOp, right: '' }
+  const first = switchFirstCase(node)
   const setFirst = (patch: Partial<typeof first>) => update({ ...node, data: { ...node.data, cases: [{ ...first, ...patch }] } })
   return (
     <div className="space-y-3">
@@ -952,8 +993,8 @@ function SwitchBody({
           value={first.left}
           onChange={(event) => setFirst({ left: event.target.value })}
           onFocus={registerTokenTarget(
-            () => first.left,
-            (v) => setFirst({ left: v }),
+            (n) => (n.type === 'switch' ? switchFirstCase(n).left : ''),
+            (n, v) => (n.type === 'switch' ? { ...n, data: { ...n.data, cases: [{ ...switchFirstCase(n), left: v }] } } : n),
           )}
           className={controlClass}
           placeholder="Field or value"
@@ -969,8 +1010,8 @@ function SwitchBody({
           value={first.right}
           onChange={(event) => setFirst({ right: event.target.value })}
           onFocus={registerTokenTarget(
-            () => first.right,
-            (v) => setFirst({ right: v }),
+            (n) => (n.type === 'switch' ? switchFirstCase(n).right : ''),
+            (n, v) => (n.type === 'switch' ? { ...n, data: { ...n.data, cases: [{ ...switchFirstCase(n), right: v }] } } : n),
           )}
           className={controlClass}
           placeholder="Compare to"
