@@ -1,0 +1,70 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { insertNodeAfter } from '../mutate'
+import { emptyGraph } from '../graph'
+import { applyCopilotOps, copilotOpSchema, type CopilotOp } from '../copilot-ops'
+
+test('add inserts after target with merged data and validates', () => {
+  const g = emptyGraph()
+  const result = applyCopilotOps(g, [{ op: 'add', type: 'http', afterId: 'trigger', data: { url: 'https://x.test', method: 'GET' } }] as CopilotOp[])
+  assert.equal(result.applied, 1)
+  const node = result.graph.nodes.find((n) => n.type === 'http')!
+  assert.equal((node.data as { url: string }).url, 'https://x.test')
+  assert.deepEqual(result.touchedIds, [node.id])
+})
+
+test('add with data that breaks the node schema is skipped, graph unchanged', () => {
+  const g = emptyGraph()
+  const result = applyCopilotOps(g, [{ op: 'add', type: 'http', afterId: 'trigger', data: { method: 'TELEPORT' } }] as CopilotOp[])
+  assert.equal(result.applied, 0)
+  assert.equal(result.skipped.length, 1)
+  assert.match(result.skipped[0].reason, /schema|invalid/i)
+  assert.equal(result.graph, g)
+})
+
+test('update merges node data; unknown id skipped; trigger update rejected', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'stop').graph
+  const stop = g.nodes.find((n) => n.type === 'stop')!.id
+  const ok = applyCopilotOps(g, [{ op: 'update', id: stop, data: { reason: 'done' } }] as CopilotOp[])
+  assert.equal(ok.applied, 1)
+  const missing = applyCopilotOps(g, [{ op: 'update', id: 'nope', data: {} }] as CopilotOp[])
+  assert.equal(missing.skipped[0].reason.includes('not found'), true)
+  const trig = applyCopilotOps(g, [{ op: 'update', id: 'trigger', data: {} }] as CopilotOp[])
+  assert.equal(trig.applied, 0)
+})
+
+test('delete and move route through mutate helpers; sequential ops see prior results', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'http').graph
+  const a = g.nodes.find((n) => n.type === 'http')!.id
+  const result = applyCopilotOps(g, [
+    { op: 'add', type: 'stop', afterId: a },
+    { op: 'delete', id: a },
+  ] as CopilotOp[])
+  assert.equal(result.applied, 2)
+  assert.equal(result.graph.nodes.some((n) => n.id === a), false)
+  assert.equal(result.graph.nodes.some((n) => n.type === 'stop'), true)
+})
+
+test('setTrigger merges trigger data; replace applies only server-sanitized graphs', () => {
+  const g = emptyGraph()
+  const trig = applyCopilotOps(g, [{ op: 'setTrigger', trigger: { type: 'schedule', schedule: { type: 'daily', time: '09:00' } } }] as CopilotOp[])
+  assert.equal(trig.applied, 1)
+  const t = trig.graph.nodes.find((n) => n.type === 'trigger')!
+  assert.equal(((t.data as { trigger: { type: string } }).trigger).type, 'schedule')
+  const unsanitized = applyCopilotOps(g, [{ op: 'replace', graphJson: '{"nodes":[],"edges":[]}' }] as CopilotOp[])
+  assert.equal(unsanitized.applied, 0)
+  const sane = applyCopilotOps(g, [{ op: 'replace', graphJson: '', graph: insertNodeAfter(emptyGraph(), 'trigger', 'stop').graph } as CopilotOp])
+  assert.equal(sane.applied, 1)
+  assert.equal(sane.graph.nodes.some((n) => n.type === 'stop'), true)
+})
+
+test('copilotOpSchema parses model-shaped ops and tolerates extra keys', () => {
+  const parsed = copilotOpSchema.safeParse({ op: 'add', type: 'http', afterId: 'trigger', data: { url: 'https://x.test' }, note: 'why not' })
+  assert.equal(parsed.success, true)
+  const badOp = copilotOpSchema.safeParse({ op: 'teleport', id: 'n2' })
+  assert.equal(badOp.success, false)
+  const replace = copilotOpSchema.safeParse({ op: 'replace', graphJson: '{"nodes":[],"edges":[]}' })
+  assert.equal(replace.success, true)
+})
