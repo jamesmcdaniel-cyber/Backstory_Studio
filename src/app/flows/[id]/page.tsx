@@ -11,6 +11,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/lib/flows/graph'
 import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep, moveNodeAfter, moveContainerStep, pasteNodeAfter } from '@/lib/flows/mutate'
 import { writeFlowClipboard, readFlowClipboard } from '@/lib/flows/clipboard'
+import { applyCopilotOps, type CopilotOp } from '@/lib/flows/copilot-ops'
 import { buildDataTree } from '@/lib/flows/datatree'
 import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
@@ -189,6 +190,9 @@ export default function FlowBuilder() {
   const [viewingVersion, setViewingVersion] = useState<{ version: number; graph: FlowGraph } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
+  // Nodes the copilot just touched — pulsed on the canvas, cleared after 2.5s.
+  const [highlightIds, setHighlightIds] = useState<string[]>([])
+  const highlightTimer = useRef<number | undefined>(undefined)
   const [zoom, setZoomState] = useState(() => {
     if (typeof window === 'undefined') return 1
     const saved = Number(window.localStorage.getItem('flows.canvasZoom'))
@@ -248,6 +252,8 @@ export default function FlowBuilder() {
   }, [id])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  useEffect(() => () => window.clearTimeout(highlightTimer.current), [])
 
   // Warn before leaving with unsaved edits.
   useEffect(() => {
@@ -602,6 +608,25 @@ export default function FlowBuilder() {
     }
   }, [graph, validation, commitGraph, viewingVersion])
 
+  const onCopilotOps = useCallback(
+    (ops: CopilotOp[]) => {
+      if (viewingVersion) {
+        toast.error('Close the version view before applying copilot changes.')
+        return { applied: 0, skipped: ops.map(() => ({ reason: 'read-only version view' })) }
+      }
+      const result = applyCopilotOps(graph, ops)
+      if (result.applied > 0) {
+        commitGraph(result.graph)
+        setSelectedId(null)
+        setHighlightIds(result.touchedIds)
+        window.clearTimeout(highlightTimer.current)
+        highlightTimer.current = window.setTimeout(() => setHighlightIds([]), 2500)
+      }
+      return { applied: result.applied, skipped: result.skipped.map((s) => ({ reason: s.reason })) }
+    },
+    [viewingVersion, graph, commitGraph],
+  )
+
   const duplicateFlow = useCallback(async () => {
     const flowName = name.trim() || 'Untitled flow'
     const response = await fetch('/api/flows', {
@@ -839,6 +864,7 @@ export default function FlowBuilder() {
               dataFields={dataFields}
               statusByNode={viewingVersion ? {} : statusByNode}
               issuesByNode={viewingVersion ? undefined : issuesByNode}
+              highlightIds={highlightIds}
               selectedId={selectedId}
               onSelect={viewingVersion ? () => {} : setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}
@@ -949,6 +975,9 @@ export default function FlowBuilder() {
         {showCopilot && (
           <ResizablePanel storageKey="flow.copilotWidth">
             <CopilotPanel
+              graph={graph}
+              onOps={onCopilotOps}
+              onJump={jumpToNode}
               onGraph={(next) => {
                 // Read-only version viewing: never let a generated graph
                 // silently replace the live draft under the read-only banner.

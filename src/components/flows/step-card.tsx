@@ -232,6 +232,7 @@ export function StepCard({
   status,
   issues,
   selected,
+  highlighted,
   agents,
   toolCatalog,
   dataFields,
@@ -251,6 +252,7 @@ export function StepCard({
   status?: StepStatus
   issues?: { errors: number; warnings: number; messages: string[] }
   selected?: boolean
+  highlighted?: boolean
   agents: Agent[]
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
@@ -350,11 +352,13 @@ export function StepCard({
         'hover:border-slate-300 hover:shadow-[0_8px_24px_rgba(15,23,42,0.12)] focus-visible:ring-2 focus-visible:ring-blue-200',
         selected
           ? 'border-blue-500 ring-2 ring-blue-100'
-          : issues?.errors
-            ? 'border-red-400 ring-2 ring-red-100'
-            : issues?.warnings
-              ? 'border-amber-300'
-              : 'border-slate-200',
+          : highlighted
+            ? 'border-indigo-400 ring-2 ring-indigo-200 animate-pulse'
+            : issues?.errors
+              ? 'border-red-400 ring-2 ring-red-100'
+              : issues?.warnings
+                ? 'border-amber-300'
+                : 'border-slate-200',
       )}
     >
       <div className="flex items-center gap-5 px-5 py-5">
