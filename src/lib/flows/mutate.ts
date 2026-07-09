@@ -150,6 +150,46 @@ export function addContainerStep(graph: FlowGraph, containerId: string, type: St
   return { graph: { ...graph, nodes: [...nodes, bodyNode, ...extraNodes] }, nodeId: bodyNode.id }
 }
 
+/** Locate the container list holding `id`: which container node, which branch
+ *  (for parallel), and the index within that list. Null for main-chain ids. */
+function containerPositionOf(graph: FlowGraph, id: string): { containerId: string; branchIndex?: number; index: number } | null {
+  for (const node of graph.nodes) {
+    if (node.type === 'loop') {
+      const index = node.data.body.indexOf(id)
+      if (index >= 0) return { containerId: node.id, index }
+    }
+    if (node.type === 'parallel') {
+      for (let branchIndex = 0; branchIndex < node.data.branches.length; branchIndex += 1) {
+        const index = node.data.branches[branchIndex].indexOf(id)
+        if (index >= 0) return { containerId: node.id, branchIndex, index }
+      }
+    }
+  }
+  return null
+}
+
+/** Insert `insertedId` into the container list right after `position`. */
+function insertIntoContainer(graph: FlowGraph, position: { containerId: string; branchIndex?: number; index: number }, insertedId: string): FlowNode[] {
+  return graph.nodes.map((entry) => {
+    if (entry.id !== position.containerId) return entry
+    if (entry.type === 'loop') {
+      const body = [...entry.data.body]
+      body.splice(position.index + 1, 0, insertedId)
+      return { ...entry, data: { ...entry.data, body } }
+    }
+    if (entry.type === 'parallel' && position.branchIndex !== undefined) {
+      const branches = entry.data.branches.map((branch, i) => {
+        if (i !== position.branchIndex) return branch
+        const next = [...branch]
+        next.splice(position.index + 1, 0, insertedId)
+        return next
+      })
+      return { ...entry, data: { ...entry.data, branches } }
+    }
+    return entry
+  })
+}
+
 /** Duplicate a step in place: the copy is inserted right after the original. */
 export function duplicateNode(graph: FlowGraph, id: string): { graph: FlowGraph; nodeId: string } {
   const original = graph.nodes.find((node) => node.id === id)
@@ -160,6 +200,11 @@ export function duplicateNode(graph: FlowGraph, id: string): { graph: FlowGraph;
   // and must not be shared between two containers.
   if (copy.type === 'loop') copy.data = { ...copy.data, body: [] }
   if (copy.type === 'parallel') copy.data = { ...copy.data, branches: [] }
+  const position = containerPositionOf(graph, id)
+  if (position) {
+    const nodes = insertIntoContainer(graph, position, copyId)
+    return { graph: { nodes: [...nodes, copy], edges: graph.edges }, nodeId: copyId }
+  }
   const edges = [...graph.edges]
   const idx = edges.findIndex((edge) => edge.source === id && !edge.branch)
   if (idx >= 0) {
@@ -319,6 +364,11 @@ export function sanitizeCopiedNode(raw: unknown): FlowNode | null {
 export function pasteNodeAfter(graph: FlowGraph, afterId: string, copied: FlowNode): { graph: FlowGraph; nodeId: string } {
   const copyId = newNodeId(graph)
   const copy = { id: copyId, type: copied.type, data: JSON.parse(JSON.stringify(copied.data)) } as FlowNode
+  const position = containerPositionOf(graph, afterId)
+  if (position) {
+    const nodes = insertIntoContainer(graph, position, copyId)
+    return { graph: { nodes: [...nodes, copy], edges: graph.edges }, nodeId: copyId }
+  }
   const edges = [...graph.edges]
   const idx = edges.findIndex((edge) => edge.source === afterId && !edge.branch)
   if (idx >= 0) {

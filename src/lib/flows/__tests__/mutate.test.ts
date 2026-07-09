@@ -200,3 +200,26 @@ test('pasteNodeAfter splices a fresh-id copy into the chain', () => {
   assert.equal(node.type, 'stop')
   assert.equal((node.data as { reason?: string }).reason, 'done')
 })
+
+test('pasteNodeAfter targets a loop-body step by inserting into the body list', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'loop').graph
+  const loop = g.nodes.find((n) => n.type === 'loop') as Extract<FlowNode, { type: 'loop' }>
+  const bodyId = loop.data.body[0]
+  const copied = sanitizeCopiedNode({ id: 'z', type: 'stop', data: { reason: 'done' } })!
+  const { graph: pasted, nodeId } = pasteNodeAfter(g, bodyId, copied)
+  const after = pasted.nodes.find((n) => n.id === loop.id) as Extract<FlowNode, { type: 'loop' }>
+  assert.deepEqual(after.data.body, [bodyId, nodeId])
+  assert.equal(pasted.edges.some((e) => e.source === bodyId || e.target === nodeId), false)
+})
+
+test('duplicateNode inside a loop body inserts the copy into the body list', () => {
+  let g = emptyGraph()
+  g = insertNodeAfter(g, 'trigger', 'loop').graph
+  const loop = g.nodes.find((n) => n.type === 'loop') as Extract<FlowNode, { type: 'loop' }>
+  const bodyId = loop.data.body[0]
+  const { graph: duped, nodeId } = duplicateNode(g, bodyId)
+  const after = duped.nodes.find((n) => n.id === loop.id) as Extract<FlowNode, { type: 'loop' }>
+  assert.deepEqual(after.data.body, [bodyId, nodeId])
+  assert.equal(duped.edges.some((e) => e.source === bodyId), false)
+})
