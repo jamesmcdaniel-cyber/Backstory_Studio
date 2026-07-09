@@ -79,13 +79,22 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     const reply = parseCopilotChatReply(raw)
     const { ops, discarded } = sanitizeCopilotOps(reply.candidates, { agents: roster, toolCatalog })
     const totalDiscarded = discarded + (reply.opsUnreadable ? 1 : 0)
-    const baseMessage =
-      reply.message || (ops.length ? 'I applied the requested changes.' : 'I could not work out a change to make — could you rephrase?')
-    const message = totalDiscarded > 0 ? baseMessage + discardNotice(totalDiscarded) : baseMessage
 
     // Apply the sanitized ops server-side so needsAttention reflects the
-    // post-edit state the client will land on.
+    // post-edit state the client will land on — and so the fallback message
+    // is honest about whether anything actually applied.
     const applied = applyCopilotOps(graph, ops)
+    const baseMessage =
+      reply.message ||
+      (ops.length === 0
+        ? 'I could not work out a change to make — could you rephrase?'
+        : applied.applied === 0
+          ? 'I could not apply those changes — the targets may no longer exist.'
+          : 'I applied the requested changes.')
+    let message = totalDiscarded > 0 ? baseMessage + discardNotice(totalDiscarded) : baseMessage
+    if (applied.applied > 0 && applied.skipped.length > 0) {
+      message += ` (${applied.skipped.length} change${applied.skipped.length === 1 ? '' : 's'} could not be applied.)`
+    }
     const validation = validateFlowGraph(applied.graph, {
       agents: roster.map((agent) => ({ id: agent.id, title: agent.name })),
       toolCatalog,

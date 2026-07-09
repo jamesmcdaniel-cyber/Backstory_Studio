@@ -61,6 +61,8 @@ test('sanitizeCopilotOps attaches a server-sanitized graph to replace ops', () =
   if (replace.op !== 'replace') return
   assert.ok(replace.graph)
   assert.ok(replace.graph!.nodes.some((node) => node.id === 'trigger'))
+  // The echoed graphJson is the canonical serialization of the attached graph.
+  assert.equal(replace.graphJson, JSON.stringify(replace.graph))
 })
 
 test('sanitizeCopilotOps ignores a model-supplied graph and drops bad graphJson', () => {
@@ -68,6 +70,7 @@ test('sanitizeCopilotOps ignores a model-supplied graph and drops bad graphJson'
   const good = sanitizeCopilotOps([{ op: 'replace', graphJson: JSON.stringify(emptyGraph()), graph: fake }], context)
   assert.equal(good.ops.length, 1)
   const replace = good.ops[0]
+  assert.equal(replace.op, 'replace')
   if (replace.op !== 'replace') return
   // The wire schema strips the hallucinated graph; the attached one is server-built.
   assert.notEqual(replace.graph, fake)
@@ -88,6 +91,7 @@ test('sanitizeCopilotOps replace repair drops unknown agents from the graph', ()
   })
   const { ops } = sanitizeCopilotOps([{ op: 'replace', graphJson }], context)
   const replace = ops[0]
+  assert.equal(replace.op, 'replace')
   if (replace.op !== 'replace') return
   assert.ok(!replace.graph!.nodes.some((node) => node.id === 'a1'))
 })

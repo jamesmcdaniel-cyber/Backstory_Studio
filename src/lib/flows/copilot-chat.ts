@@ -86,7 +86,9 @@ export function sanitizeCopilotOps(
         flowGraphSchema.parse(normalizeGeneratedFlowGraphInput(JSON.parse(stripFences(parsed.data.graphJson)))),
         context,
       )
-      ops.push({ op: 'replace', graphJson: parsed.data.graphJson, graph })
+      // Echo the CANONICAL serialization, not the model's original (possibly
+      // fenced, pre-repair) string, so graphJson and graph always agree.
+      ops.push({ op: 'replace', graphJson: JSON.stringify(graph), graph })
     } catch {
       discarded += 1
     }

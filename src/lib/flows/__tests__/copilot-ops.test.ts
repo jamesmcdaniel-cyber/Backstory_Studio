@@ -100,3 +100,23 @@ test('copilotOpSchema parses model-shaped ops and tolerates extra keys', () => {
   const replace = copilotOpSchema.safeParse({ op: 'replace', graphJson: '{"nodes":[],"edges":[]}' })
   assert.equal(replace.success, true)
 })
+
+test('copilotOpSchema strips unknown keys from every op kind, keeping free-form payloads intact', () => {
+  const parsed = copilotOpSchema.safeParse({ op: 'delete', id: 'n1', graph: { nodes: [], edges: [] }, note: '<script>alert(1)</script>' })
+  assert.equal(parsed.success, true)
+  if (!parsed.success) return
+  assert.equal('graph' in parsed.data, false)
+  assert.equal('note' in parsed.data, false)
+  assert.deepEqual(parsed.data, { op: 'delete', id: 'n1' })
+  // The nested data/trigger payloads stay free-form: arbitrary keys survive.
+  const add = copilotOpSchema.safeParse({ op: 'add', type: 'http', afterId: 'trigger', data: { url: 'https://x.test', custom: 1 }, junk: true })
+  assert.equal(add.success, true)
+  if (!add.success || add.data.op !== 'add') return
+  assert.equal('junk' in add.data, false)
+  assert.deepEqual(add.data.data, { url: 'https://x.test', custom: 1 })
+  const trig = copilotOpSchema.safeParse({ op: 'setTrigger', trigger: { type: 'manual', extra: 'kept' }, junk: true })
+  assert.equal(trig.success, true)
+  if (!trig.success || trig.data.op !== 'setTrigger') return
+  assert.equal('junk' in trig.data, false)
+  assert.deepEqual(trig.data.trigger, { type: 'manual', extra: 'kept' })
+})

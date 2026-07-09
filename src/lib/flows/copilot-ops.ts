@@ -11,26 +11,31 @@ import { deleteNode, insertNodeAfter, moveNodeAfter, updateNode, type StepType }
 /** Step types the copilot may add (everything but the trigger). */
 const STEP_TYPES = ['agent', 'condition', 'loop', 'parallel', 'stop', 'tool', 'http', 'transform', 'filter', 'switch'] as const satisfies readonly StepType[]
 
-// Model-emitted payloads: arbitrary objects, extra keys tolerated. Merging is a
-// shallow spread over the node's defaults — arrays/objects replace wholesale.
+// Model-emitted payloads: arbitrary objects, extra keys tolerated INSIDE the
+// payload (z.record keeps every key). Merging is a shallow spread over the
+// node's defaults — arrays/objects replace wholesale.
 const looseData = z.record(z.unknown())
 
+// Every op object runs in zod's default STRIP mode: unknown OP-LEVEL keys the
+// model invents (e.g. a hallucinated `graph` or `note`) are dropped at parse
+// time and never echoed back to the client. Only the declared fields survive;
+// the free-form `data`/`trigger` payloads above still accept arbitrary keys.
 const addOp = z.object({
   op: z.literal('add'),
   type: z.enum(STEP_TYPES),
   afterId: z.string(),
   agentId: z.string().optional(),
   data: looseData.optional(),
-}).passthrough()
-const updateOp = z.object({ op: z.literal('update'), id: z.string(), data: looseData }).passthrough()
-const deleteOp = z.object({ op: z.literal('delete'), id: z.string() }).passthrough()
-const moveOp = z.object({ op: z.literal('move'), id: z.string(), afterId: z.string() }).passthrough()
-const setTriggerOp = z.object({ op: z.literal('setTrigger'), trigger: looseData }).passthrough()
-// The wire shape accepts ONLY `graphJson` — deliberately strip mode (no
-// `.passthrough()`), so a model-hallucinated `graph` key is dropped at parse
-// time and can never masquerade as server-sanitized. The server parses and
-// sanitizes `graphJson`, then attaches the trusted `graph` itself; the engine
-// only ever applies `op.graph` and never parses `graphJson`.
+})
+const updateOp = z.object({ op: z.literal('update'), id: z.string(), data: looseData })
+const deleteOp = z.object({ op: z.literal('delete'), id: z.string() })
+const moveOp = z.object({ op: z.literal('move'), id: z.string(), afterId: z.string() })
+const setTriggerOp = z.object({ op: z.literal('setTrigger'), trigger: looseData })
+// The wire shape accepts ONLY `graphJson` — strip mode also drops a
+// model-hallucinated `graph` key, so it can never masquerade as
+// server-sanitized. The server parses and sanitizes `graphJson`, then attaches
+// the trusted `graph` itself; the engine only ever applies `op.graph` and
+// never parses `graphJson`.
 const replaceOp = z.object({ op: z.literal('replace'), graphJson: z.string() })
 
 export const copilotOpSchema = z.discriminatedUnion('op', [addOp, updateOp, deleteOp, moveOp, setTriggerOp, replaceOp])
