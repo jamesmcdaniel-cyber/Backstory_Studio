@@ -135,6 +135,8 @@ The broader "not as user-friendly as MS" gap is carried by the already-planned w
 
 ## 2. Picker / catalog UX
 
+*Scope addition (2026-07-08, parity gap review):* WS2 also absorbs these observed behavior gaps: **canvas nav rail** (zoom ±, fit view, search-in-flow; minimap optional), **drag-to-reorder steps**, **dynamic-content popover** (token picker floats beside the focused field instead of below the body), **inline required-field validation** (red outlines on touch + per-node error badges tied to checker issues), **keyboard shortcuts** (Del deletes the selected step, ⌘C copies step JSON — the context menu already advertises them), and **copy/paste steps**. WS3 additionally absorbs an **Activity page** (run table with filtering — the MS Activity-tab equivalent). Expression support (`fx` formulas beyond `{{tokens}}`) is a separate future workstream.
+
 One picker component with two modes (`trigger` | `action`), replacing the drawer's current type selection. Rendered centered on empty canvas ("Add a trigger") and anchored near the insert caret mid-flow ("Add an action").
 
 Structure:
