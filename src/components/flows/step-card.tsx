@@ -1,6 +1,7 @@
 'use client'
 
-import { useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import {
   Bot,
@@ -286,8 +287,20 @@ export function StepCard({
   const nodeRef = useRef(node)
   nodeRef.current = node
   const tokenTargetRef = useRef<TokenTarget | null>(null)
+  const tokenPopoverRef = useRef<HTMLDivElement | null>(null)
+  const [tokenPopover, setTokenPopover] = useState<{ top: number; left: number; width: number } | null>(null)
   const registerTokenTarget: RegisterTokenTarget = (read, write) => (event) => {
     tokenTargetRef.current = { el: event.currentTarget, read, write }
+    if (selected && dataFields && dataFields.length > 0) {
+      // getBoundingClientRect() already returns post-transform (zoomed) coordinates, so the
+      // popover lines up with the field regardless of the canvas zoom level — no scale compensation needed.
+      const rect = event.currentTarget.getBoundingClientRect()
+      setTokenPopover({
+        top: rect.bottom + 6,
+        left: Math.min(rect.left, window.innerWidth - 380),
+        width: Math.max(320, Math.min(rect.width, 420)),
+      })
+    }
   }
   const insertToken = (token: string) => {
     const target = tokenTargetRef.current
@@ -296,6 +309,32 @@ export function StepCard({
     onChange?.(target.write(nodeRef.current, insertAtCaret(current, token, target.el)))
   }
   const showErrors = Boolean(issues?.errors)
+
+  useEffect(() => {
+    if (!selected) setTokenPopover(null)
+  }, [selected])
+
+  useEffect(() => {
+    if (!tokenPopover) return
+    const close = () => setTokenPopover(null)
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (tokenPopoverRef.current?.contains(target)) return
+      if (tokenTargetRef.current?.el === target) return
+      close()
+    }
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('scroll', close, true)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('scroll', close, true)
+    }
+  }, [tokenPopover])
 
   return (
     <div
@@ -455,16 +494,6 @@ export function StepCard({
           >
             <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
               {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget, showErrors })}
-              {dataFields && dataFields.length > 0 && (
-                <div className="mt-4 border-t border-slate-200 pt-3">
-                  <DataTree
-                    fields={dataFields}
-                    onInsert={insertToken}
-                    title="Insert data from previous steps"
-                    emptyMessage="No earlier step data is available yet."
-                  />
-                </div>
-              )}
             </div>
           </motion.div>
         ) : (
@@ -489,6 +518,18 @@ export function StepCard({
           <pre className="max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-100">{JSON.stringify(node, null, 2)}</pre>
         </div>
       )}
+      {selected && tokenPopover && dataFields && dataFields.length > 0 &&
+        createPortal(
+          <div
+            ref={tokenPopoverRef}
+            style={{ position: 'fixed', top: tokenPopover.top, left: tokenPopover.left, width: tokenPopover.width, zIndex: 60 }}
+            className="max-h-72 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_16px_48px_rgba(15,23,42,0.18)]"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <DataTree fields={dataFields} onInsert={insertToken} title="Insert data" emptyMessage="No earlier step data is available yet." />
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
