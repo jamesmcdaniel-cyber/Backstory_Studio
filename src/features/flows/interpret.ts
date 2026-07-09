@@ -256,7 +256,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
         return { kind: 'fail', error: res.error }
       }
-      let output = asStructured(res.output)
+      let output: unknown
       if (structured) {
         const parsed = parseStructuredAgentOutput(res.output, outputFields)
         if (parsed.error) {
@@ -265,6 +265,8 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
           return { kind: 'fail', error: parsed.error }
         }
         output = parsed.output
+      } else {
+        output = asStructured(res.output)
       }
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'succeeded', output })

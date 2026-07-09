@@ -656,6 +656,7 @@ function AgentBody({
           type="button"
           role="switch"
           aria-checked={node.data.humanAssistance !== false}
+          aria-label="Request human assistance when unsure"
           onClick={() => update({ ...node, data: { ...node.data, humanAssistance: node.data.humanAssistance === false ? undefined : false } })}
           className={cn(
             'relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors',
