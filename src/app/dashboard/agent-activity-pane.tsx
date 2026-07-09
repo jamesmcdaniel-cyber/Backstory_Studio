@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { toast } from 'sonner'
 import {
   AlertCircle,
   Brain,
@@ -489,14 +490,30 @@ function SuggestionsCard({
   const dismiss = async (memoryId: string) => {
     setDismissedIds((current) => new Set(current).add(memoryId))
     try {
-      await fetch(`/api/agents/${agentId}/memories`, {
+      const res = await fetch(`/api/agents/${agentId}/memories`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: memoryId, status: 'dismissed' }),
       })
-    } finally {
-      onChanged()
+      if (!res.ok) {
+        setDismissedIds((current) => {
+          const next = new Set(current)
+          next.delete(memoryId)
+          return next
+        })
+        toast.error('Could not dismiss the suggestion.')
+        return
+      }
+    } catch {
+      setDismissedIds((current) => {
+        const next = new Set(current)
+        next.delete(memoryId)
+        return next
+      })
+      toast.error('Could not dismiss the suggestion.')
+      return
     }
+    onChanged()
   }
 
   return (

@@ -89,6 +89,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       status: 'ACTIVE',
       folder: data.folder || null,
       visibility: data.visibility,
+      goal: data.goal?.trim() ? data.goal.trim() : null,
       organizationId: auth.organizationId,
       userId: auth.dbUser.id,
       metadata: {

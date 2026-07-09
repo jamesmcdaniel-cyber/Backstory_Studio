@@ -25,9 +25,12 @@ async function tryEmbed(text: string): Promise<number[] | null> {
 }
 
 /**
- * Persist one agent memory. Suggestions are deduped against open suggestions
- * (>= threshold cosine bumps timesUsed on the survivor instead of inserting).
- * Enforces the per-agent cap by superseding the oldest learnings. Never throws.
+ * Persist one agent memory. Suggestions are deduped against open OR dismissed
+ * suggestions (>= threshold cosine bumps timesUsed on the survivor instead of
+ * inserting). A dismissed match keeps its 'dismissed' status — dismissing a
+ * suggestion is durable and must not be undone by a later run re-proposing
+ * the same thing. Enforces the per-agent cap by superseding the oldest
+ * learnings. Never throws.
  */
 export async function saveAgentMemory(params: {
   organizationId: string
@@ -43,14 +46,15 @@ export async function saveAgentMemory(params: {
     const embedding = await tryEmbed(embedText)
 
     if (params.kind === 'suggestion' && embedding) {
-      const open = await prisma.agentMemory.findMany({
-        where: { organizationId: params.organizationId, agentId: params.agentId, kind: 'suggestion', status: 'open' },
+      const existing = await prisma.agentMemory.findMany({
+        where: { organizationId: params.organizationId, agentId: params.agentId, kind: 'suggestion', status: { in: ['open', 'dismissed'] } },
         select: { id: true, embedding: true },
         take: 100,
       })
-      for (const candidate of open) {
+      for (const candidate of existing) {
         const vec = embeddingOf(candidate.embedding)
         if (vec && cosine(embedding, vec) >= MEMORY_SIMILARITY_THRESHOLD) {
+          // Do NOT touch status here: a dismissed suggestion must stay dismissed.
           await prisma.agentMemory.update({
             where: { id: candidate.id },
             data: { timesUsed: { increment: 1 }, lastUsedAt: new Date() },
