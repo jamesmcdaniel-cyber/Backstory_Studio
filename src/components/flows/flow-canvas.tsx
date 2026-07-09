@@ -173,6 +173,7 @@ export function FlowCanvas({
         const type = (node.data.trigger as { type?: string } | undefined)?.type ?? 'manual'
         if (type === 'schedule') return 'Schedule trigger'
         if (type === 'webhook') return 'Webhook trigger'
+        if (type === 'signal') return 'Signal trigger'
         return 'Manually trigger a flow'
       }
       case 'agent':
@@ -204,8 +205,19 @@ export function FlowCanvas({
   const subtitleFor = (node: FlowNode): string | undefined => {
     switch (node.type) {
       case 'trigger': {
-        const inputCount = ((node.data.trigger as { inputFields?: unknown[] } | undefined)?.inputFields ?? []).length
-        return inputCount ? `${inputCount} input${inputCount === 1 ? '' : 's'}` : 'Add fields users fill in before the flow runs.'
+        const trigger = (node.data.trigger as
+          | { type?: string; schedule?: { type?: string; time?: string; timezone?: string }; signal?: string; inputFields?: unknown[] }
+          | undefined) ?? {}
+        const type = trigger.type ?? 'manual'
+        const inputCount = (trigger.inputFields ?? []).length
+        const inputLine = inputCount ? `${inputCount} input${inputCount === 1 ? '' : 's'}` : 'Add fields users fill in before the flow runs.'
+        if (type === 'schedule') {
+          const schedule = trigger.schedule ?? {}
+          return `Runs ${schedule.type ?? 'daily'}${schedule.time ? ` at ${schedule.time}` : ''} (${schedule.timezone || 'UTC'})`
+        }
+        if (type === 'signal') return `Listens for "${trigger.signal || 'unnamed signal'}"`
+        // webhook and manual keep the original input-count line.
+        return inputLine
       }
       case 'agent':
         return agentName(node.data.agentId) || 'Choose an agent'

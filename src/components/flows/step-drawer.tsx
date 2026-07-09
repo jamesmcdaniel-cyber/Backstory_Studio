@@ -1,10 +1,12 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { X, Trash2, Plus, Copy, Link2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
+import { KNOWN_SIGNALS } from '@/lib/flows/trigger'
+import { nextOccurrence, type AgentSchedule } from '@/lib/scheduling/due'
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
@@ -37,10 +39,11 @@ const FREQUENCIES = [
 ] as const
 
 type TriggerData = {
-  type?: 'manual' | 'schedule' | 'webhook'
+  type?: 'manual' | 'schedule' | 'webhook' | 'signal'
   schedule?: { type?: string; time?: string; cron?: string; timezone?: string; runAt?: string; isActive?: boolean }
   input?: string
   inputFields?: TriggerInputField[]
+  signal?: string
 }
 
 const fieldClass =
@@ -898,6 +901,25 @@ function TriggerEditor({
   const setSchedule = (patch: Partial<NonNullable<TriggerData['schedule']>>) =>
     onChange({ ...trigger, type: 'schedule', schedule: { ...schedule, ...patch, isActive: true } })
 
+  // "Next run" preview for the schedule editor. IMPORTANT: nextOccurrence's cron
+  // path does a minute-by-minute scan and has measured up to ~13s worst case —
+  // far too slow to call on every render/keystroke. So this memo only ever
+  // calls nextOccurrence for the fast schedule types (hourly/daily/weekly/once);
+  // cron gets a static, non-computed label below instead.
+  const nextRunLabel = useMemo(() => {
+    if (schedule.type === 'cron') return null
+    const merged: AgentSchedule = {
+      type: (schedule.type as AgentSchedule['type']) ?? 'daily',
+      time: schedule.time ?? '09:00',
+      cron: schedule.cron ?? '',
+      timezone: schedule.timezone ?? 'UTC',
+      runAt: schedule.runAt,
+      isActive: true,
+    }
+    const next = nextOccurrence(merged, new Date())
+    return next ? next.toLocaleString() : 'Not scheduled'
+  }, [schedule.type, schedule.time, schedule.timezone, schedule.runAt, schedule.cron])
+
   const copyText = async (value: string, label: string) => {
     try {
       await navigator.clipboard.writeText(value)
@@ -935,13 +957,14 @@ function TriggerEditor({
           className={fieldClass}
           value={type}
           onChange={(e) => {
-            const next = e.target.value as 'manual' | 'schedule' | 'webhook'
+            const next = e.target.value as 'manual' | 'schedule' | 'webhook' | 'signal'
             onChange(next === 'schedule' ? { ...trigger, type: next, schedule: { ...schedule, isActive: true } } : { ...trigger, type: next })
           }}
         >
           <option value="manual">Manual / on run</option>
           <option value="schedule">Schedule</option>
           <option value="webhook">Webhook (external)</option>
+          <option value="signal">Signal (in-platform event)</option>
         </select>
       </div>
 
@@ -988,7 +1011,33 @@ function TriggerEditor({
             <label className={labelClass}>Run input for scheduled runs (optional)</label>
             <textarea rows={2} className={fieldClass} value={trigger.input ?? ''} placeholder="Text or JSON passed to the flow each time it runs" onChange={(e) => onChange({ ...trigger, input: e.target.value || undefined })} />
           </div>
+          <p className="text-xs text-muted-foreground">
+            {schedule.type === 'cron' ? `Next run: per cron "${schedule.cron ?? ''}"` : `Next run: ${nextRunLabel}`}
+          </p>
           <p className="text-xs text-muted-foreground">Scheduled runs execute the <strong>published</strong> version — publish the flow to arm the schedule.</p>
+        </div>
+      )}
+
+      {type === 'signal' && (
+        <div className="space-y-3">
+          <div>
+            <label className={labelClass}>Signal name</label>
+            <input
+              className={fieldClass}
+              list="known-signals"
+              value={trigger.signal ?? ''}
+              placeholder="flow.completed"
+              onChange={(e) => onChange({ ...trigger, signal: e.target.value || undefined })}
+            />
+            <datalist id="known-signals">
+              {KNOWN_SIGNALS.map((signal) => (
+                <option key={signal} value={signal} />
+              ))}
+            </datalist>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Fires when this signal is emitted anywhere in your workspace. The signal payload arrives as {'{{trigger.input}}'}. Runs the published version.
+          </p>
         </div>
       )}
 
