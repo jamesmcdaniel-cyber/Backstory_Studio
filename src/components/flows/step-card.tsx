@@ -28,6 +28,7 @@ import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import { CONDITION_OPS, type ConditionClause, type ConditionOp, type FlowNode, type OutputField } from '@/lib/flows/graph'
 import type { ToolCatalog } from './step-drawer'
+import { AdvancedParamsSection } from './advanced-params'
 
 export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped'
 
@@ -447,6 +448,7 @@ function AgentBody({ node, agents, update }: { node: Extract<FlowNode, { type: '
         />
         <p className="text-xs text-slate-500">Use the settings panel for advanced data mapping from previous steps.</p>
       </div>
+      <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )
 }
@@ -498,6 +500,7 @@ function HttpBody({ node, update }: { node: Extract<FlowNode, { type: 'http' }>;
           placeholder="Optional JSON or text body for POST, PUT, and PATCH requests."
         />
       </div>
+      <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )
 }
@@ -597,6 +600,7 @@ function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { typ
       ) : (
         <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Connectors available on this workspace will show here.</p>
       )}
+      <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )
 }
@@ -683,6 +687,7 @@ function LoopBody({ node, update }: { node: Extract<FlowNode, { type: 'loop' }>;
           disabled={usesTriggerInput}
         />
       </div>
+      <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )
 }

@@ -8,7 +8,7 @@ import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type Condi
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
-import { AGENT_RUN_MAX_DURATION_SECONDS } from '@/lib/agents/timeouts'
+import { AdvancedParamsSection } from '@/components/flows/advanced-params'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
@@ -419,45 +419,7 @@ export function StepDrawer({
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelClass}>On error</label>
-                <select
-                  className={`${smallField} w-full`}
-                  value={node.data.onError ?? 'stop'}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
-                >
-                  <option value="stop">Stop flow</option>
-                  <option value="continue">Continue</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Retries</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={5}
-                  className={`${smallField} w-full`}
-                  value={node.data.retries ?? 0}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, retries: Math.max(0, Math.min(5, Number(e.target.value) || 0)) } })}
-                />
-              </div>
-            </div>
-            <div>
-              <label className={labelClass}>Timeout (seconds, optional)</label>
-              <input
-                type="number"
-                min={1}
-                max={AGENT_RUN_MAX_DURATION_SECONDS}
-                className={fieldClass}
-                value={node.data.timeoutMs ? Math.round(node.data.timeoutMs / 1000) : ''}
-                placeholder="No timeout"
-                onChange={(e) => {
-                  const secs = Number(e.target.value)
-                  onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? Math.max(1, Math.min(AGENT_RUN_MAX_DURATION_SECONDS, secs)) * 1000 : undefined } })
-                }}
-              />
-            </div>
+            <AdvancedParamsSection node={node} onChange={onChange} defaultOpen />
             <OutputFieldsEditor
               fields={node.data.outputFields ?? []}
               onChange={(outputFields) => onChange({ ...node, data: { ...node.data, outputFields: outputFields.length ? outputFields : undefined } })}
@@ -616,45 +578,7 @@ export function StepDrawer({
             ) : (
               <p className="text-xs text-muted-foreground">Pick a tool to configure its inputs.</p>
             )}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelClass}>On error</label>
-                <select
-                  className={fieldClass}
-                  value={node.data.onError ?? 'stop'}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
-                >
-                  <option value="stop">Stop flow</option>
-                  <option value="continue">Continue</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Retries</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={5}
-                  className={fieldClass}
-                  value={node.data.retries ?? 0}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, retries: Math.max(0, Math.min(5, Number(e.target.value) || 0)) } })}
-                />
-              </div>
-            </div>
-            <div>
-              <label className={labelClass}>Timeout (seconds, optional)</label>
-              <input
-                type="number"
-                min={1}
-                max={120}
-                className={fieldClass}
-                value={node.data.timeoutMs ? Math.round(node.data.timeoutMs / 1000) : ''}
-                placeholder="30"
-                onChange={(e) => {
-                  const secs = Number(e.target.value)
-                  onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? Math.max(1, Math.min(120, secs)) * 1000 : undefined } })
-                }}
-              />
-            </div>
+            <AdvancedParamsSection node={node} onChange={onChange} defaultOpen />
             <p className="text-xs text-muted-foreground">Runs this exact tool with these arguments — deterministic, retryable, and no agent in the loop.</p>
           </div>
         )}
@@ -715,32 +639,6 @@ export function StepDrawer({
                 setActiveField(`http.headers.${index}.value`)
               }}
             />
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelClass}>Body type</label>
-                <select
-                  className={fieldClass}
-                  value={node.data.bodyMode ?? 'json'}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, bodyMode: e.target.value as typeof node.data.bodyMode } })}
-                >
-                  <option value="json">JSON</option>
-                  <option value="text">Text</option>
-                  <option value="none">No body</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Parse response as</label>
-                <select
-                  className={fieldClass}
-                  value={node.data.responseType ?? 'auto'}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, responseType: e.target.value as typeof node.data.responseType } })}
-                >
-                  <option value="auto">Auto</option>
-                  <option value="json">JSON</option>
-                  <option value="text">Text</option>
-                </select>
-              </div>
-            </div>
             <div>
               <label className={labelClass}>Body</label>
               <textarea
@@ -756,58 +654,7 @@ export function StepDrawer({
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelClass}>Fail on HTTP error</label>
-                <select
-                  className={fieldClass}
-                  value={node.data.failOnHttpError === false ? 'false' : 'true'}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, failOnHttpError: e.target.value !== 'false' } })}
-                >
-                  <option value="true">Yes, fail on 4xx/5xx</option>
-                  <option value="false">No, return the response</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Timeout (seconds)</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={120}
-                  className={fieldClass}
-                  value={node.data.timeoutMs ? Math.round(node.data.timeoutMs / 1000) : ''}
-                  placeholder="30"
-                  onChange={(e) => {
-                    const secs = Number(e.target.value)
-                    onChange({ ...node, data: { ...node.data, timeoutMs: secs > 0 ? Math.max(1, Math.min(120, secs)) * 1000 : undefined } })
-                  }}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className={labelClass}>On error</label>
-                <select
-                  className={fieldClass}
-                  value={node.data.onError ?? 'stop'}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, onError: e.target.value as 'stop' | 'continue' } })}
-                >
-                  <option value="stop">Stop flow</option>
-                  <option value="continue">Continue</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClass}>Retries</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={5}
-                  className={fieldClass}
-                  value={node.data.retries ?? 0}
-                  onChange={(e) => onChange({ ...node, data: { ...node.data, retries: Math.max(0, Math.min(5, Number(e.target.value) || 0)) } })}
-                />
-              </div>
-            </div>
+            <AdvancedParamsSection node={node} onChange={onChange} defaultOpen />
             <p className="text-xs text-muted-foreground">Calls a public HTTPS URL. Output includes status, headers, parsed body, and raw bodyText. Retries re-send the request.</p>
           </div>
         )}
