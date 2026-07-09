@@ -29,7 +29,14 @@ Gaps vs. the Microsoft reference: trigger/action picker browsing UX, typed manua
 1. Step wiring core
 1.5. Backstory MCP native connection + onboarding gate (added 2026-07-08)
 1.75. Canvas UX parity (added 2026-07-08)
-1.9. Agent input memory (added 2026-07-08 — needs its own design pass): when an agent pauses with "needs your input" and the user answers, persist the question/answer pair (per user+agent) and store it in the knowledge graph (existing graph-RAG store / indexExecution path). On later runs the answer is retrieved as correlated context so the agent doesn't re-ask the same question, and other tasks/agents can reuse it. Open design questions: answer keying/matching (same question phrased differently), staleness/expiry, scope (user vs org), and opt-out for genuinely run-specific questions.
+1.9. Agent memory & intelligence (added 2026-07-08, expanded same day — needs its own design pass; likely decomposes into sub-workstreams):
+   - **Input memory:** when an agent pauses with "needs your input" and the user answers, persist the question/answer pair (per user+agent) and store it in the knowledge graph (existing graph-RAG store / indexExecution path) so later runs don't re-ask and other tasks/agents can reuse it.
+   - **Run-to-run memory:** agents retain distilled learnings from previous runs (what worked, data found, decisions made), retrieved as context on the next run.
+   - **Goal understanding:** agents understand the larger goal behind a task (goal object or inferred), evaluate output against it, and self-optimize each run (e.g. carry forward a self-critique note).
+   - **Proactive suggestions:** surface suggestions to the user on what would help accomplish the goal better (missing connections, data gaps, prompt improvements) — likely rendered in the activity pane and/or flow checker warnings.
+   - **Strategize mode:** for complicated tasks, an explicit plan-then-execute phase (think-through visible in the process log).
+   - **Deeper graph-RAG leverage:** raise retrieval quality/recall in `retrieveContext`/`getGraphRagStore` usage — entity-linking run outputs, richer correlated-context injection, and feedback of run results into the graph.
+   - Open design questions: memory schema + decay, per-user vs org scope, token budget for injected context, opt-outs, and how suggestions are actioned.
 1.95. AI template finder (added 2026-07-08 — needs its own design pass): replace the Explore page's "Search templates and skills…" text search with an AI assistant search — the user describes what they want to accomplish and it suggests the closest-matching templates, or says none match. Likely build: embed template name/description/category (existing embeddings infra: `embedQuery`/`embedTexts`/`cosineSimilarity` in `src/lib/rag/embeddings.ts`), rank by similarity with a floor, LLM re-rank/explanation on top. Open design questions: keep plain-text filter as fallback, latency budget, and whether skills are included in the match set.
 2. Picker/catalog UX
 3. Toolbar surfaces (checker, test, versions)
