@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Code2, Eye } from 'lucide-react'
+import { Check, Code2, Copy, Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 /**
@@ -64,20 +64,42 @@ function toDocument(html: string): string {
 export function HtmlPreview({ html, className }: { html: string; className?: string }) {
   const [expanded, setExpanded] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
+  const [copied, setCopied] = useState(false)
   const height = expanded ? 1000 : 320
+
+  const copyHtml = async () => {
+    try {
+      await navigator.clipboard.writeText(html)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
 
   return (
     <div className={cn('min-h-[120px] w-full', className)}>
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <span className="mono-label text-gray-400">Rendered output</span>
-        <button
-          type="button"
-          onClick={() => setShowRaw((value) => !value)}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          {showRaw ? <Eye className="h-3 w-3" /> : <Code2 className="h-3 w-3" />}
-          {showRaw ? 'Rendered' : 'Raw'}
-        </button>
+        <span className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={copyHtml}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Copy the HTML source"
+          >
+            {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+            {copied ? 'Copied' : 'Copy HTML'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowRaw((value) => !value)}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            {showRaw ? <Eye className="h-3 w-3" /> : <Code2 className="h-3 w-3" />}
+            {showRaw ? 'Rendered' : 'Raw'}
+          </button>
+        </span>
       </div>
 
       {showRaw ? (
