@@ -4,7 +4,11 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import {
   Bot,
   CalendarDays,
+  Check,
   CircleStop,
+  ClipboardCopy,
+  Code2,
+  Copy,
   FileText,
   Filter,
   GitBranch,
@@ -13,10 +17,12 @@ import {
   Mail,
   MoreHorizontal,
   PanelRight,
+  Pencil,
   Plus,
   RefreshCw,
   Repeat,
   Rows3,
+  Settings2,
   SlidersHorizontal,
   Split,
   ToggleLeft,
@@ -25,6 +31,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import { CONDITION_OPS, FIELD_TYPES, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
@@ -34,6 +41,13 @@ import { AdvancedParamsSection } from './advanced-params'
 import { DataTree } from './data-tree'
 import { insertAtCaret } from './insert-token'
 import type { DataField } from '@/lib/flows/datatree'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped'
 
@@ -206,6 +220,8 @@ export function StepCard({
   onChange,
   onClick,
   onRefreshAgents,
+  onDuplicate,
+  onDelete,
 }: {
   node: FlowNode
   index?: number
@@ -219,9 +235,24 @@ export function StepCard({
   onChange?: (node: FlowNode) => void
   onClick?: () => void
   onRefreshAgents?: () => void
+  onDuplicate?: () => void
+  onDelete?: () => void
 }) {
   const Icon = NODE_ICON[node.type]
   const update = (updated: FlowNode) => onChange?.(updated)
+  const [renaming, setRenaming] = useState(false)
+  const [codeOpen, setCodeOpen] = useState(false)
+  const isTrigger = node.type === 'trigger'
+  const label = (node.data as { label?: string }).label ?? ''
+  const setLabel = (value: string) => onChange?.({ ...node, data: { ...node.data, label: value || undefined } } as FlowNode)
+  const copyNodeJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(node, null, 2))
+      toast.success(isTrigger ? 'Trigger JSON copied.' : 'Step JSON copied.')
+    } catch {
+      toast.error('Could not copy to the clipboard.')
+    }
+  }
   const onRootKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return
     if (event.key !== 'Enter' && event.key !== ' ') return
@@ -260,7 +291,32 @@ export function StepCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             {typeof index === 'number' && <span className="text-xs font-semibold text-slate-400">{index}</span>}
-            <h3 className="truncate text-lg font-semibold text-slate-950">{title}</h3>
+            {renaming ? (
+              <span className="flex items-center gap-1.5" onClick={stopEvent}>
+                <input
+                  autoFocus
+                  value={label}
+                  onChange={(event) => setLabel(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === 'Escape') setRenaming(false)
+                  }}
+                  onBlur={() => setRenaming(false)}
+                  className="h-9 min-w-0 flex-1 rounded-md border border-blue-400 bg-white px-2 text-lg font-semibold text-slate-950 outline-none ring-2 ring-blue-100"
+                  placeholder={title}
+                  aria-label="Step name"
+                />
+                <button
+                  type="button"
+                  onClick={() => setRenaming(false)}
+                  className="flex h-9 w-9 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                  aria-label="Done renaming"
+                >
+                  <Check className="h-4 w-4" />
+                </button>
+              </span>
+            ) : (
+              <h3 className="truncate text-lg font-semibold text-slate-950">{title}</h3>
+            )}
           </div>
           {subtitle && <p className="mt-0.5 truncate text-sm text-slate-500">{subtitle}</p>}
         </div>
@@ -282,15 +338,51 @@ export function StepCard({
         >
           <PanelRight className="h-5 w-5" />
         </button>
-        <button
-          type="button"
-          onClick={(event) => event.stopPropagation()}
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-          aria-label="More step options"
-          title="More options are in the settings panel"
-        >
-          <MoreHorizontal className="h-5 w-5" />
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              onClick={(event) => event.stopPropagation()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              aria-label="Step options"
+              title="Step options"
+            >
+              <MoreHorizontal className="h-5 w-5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onClick={(event) => event.stopPropagation()}>
+            {!isTrigger && onDelete && (
+              <>
+                <DropdownMenuItem onSelect={onDelete} className="text-red-600 focus:text-red-700">
+                  <Trash2 className="h-4 w-4" /> Delete
+                  <span className="ml-auto pl-4 text-xs text-slate-400">Del</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem onSelect={copyNodeJson}>
+              <ClipboardCopy className="h-4 w-4" /> {isTrigger ? 'Copy trigger JSON' : 'Copy step JSON'}
+              <span className="ml-auto pl-4 text-xs text-slate-400">⌘C</span>
+            </DropdownMenuItem>
+            {!isTrigger && (
+              <DropdownMenuItem onSelect={() => setRenaming(true)}>
+                <Pencil className="h-4 w-4" /> Rename
+              </DropdownMenuItem>
+            )}
+            {!isTrigger && onDuplicate && (
+              <DropdownMenuItem onSelect={onDuplicate}>
+                <Copy className="h-4 w-4" /> Duplicate
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => onClick?.()}>
+              <Settings2 className="h-4 w-4" /> Open settings
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setCodeOpen(true)}>
+              <Code2 className="h-4 w-4" /> Code view
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
         {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget })}
@@ -305,6 +397,22 @@ export function StepCard({
           </div>
         )}
       </div>
+      {codeOpen && (
+        <div onClick={stopEvent} className="border-t border-slate-200 px-5 py-4">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Code view</p>
+            <div className="flex items-center gap-3">
+              <button type="button" onClick={copyNodeJson} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
+                Copy
+              </button>
+              <button type="button" onClick={() => setCodeOpen(false)} className="text-xs font-semibold text-slate-500 hover:text-slate-900">
+                Close
+              </button>
+            </div>
+          </div>
+          <pre className="max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-100">{JSON.stringify(node, null, 2)}</pre>
+        </div>
+      )}
     </div>
   )
 }

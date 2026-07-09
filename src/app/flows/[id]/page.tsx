@@ -710,6 +710,15 @@ export default function FlowBuilder() {
               setSelectedId(nodeId)
             }}
             onRefreshAgents={refreshAgents}
+            onDuplicateNode={(nodeId) => {
+              const { graph: next, nodeId: newId } = duplicateNode(graph, nodeId)
+              commitGraph(next)
+              setSelectedId(newId)
+            }}
+            onDeleteNode={(nodeId) => {
+              commitGraph(deleteNode(graph, nodeId))
+              if (selectedId === nodeId) setSelectedId(null)
+            }}
           />
         </div>
 
