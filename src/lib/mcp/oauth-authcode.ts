@@ -17,6 +17,22 @@
 import crypto from 'crypto'
 
 // ---------------------------------------------------------------------------
+// Redirect safety
+// ---------------------------------------------------------------------------
+
+/**
+ * Accept only same-origin path redirects: must start with exactly one '/',
+ * and never contain a backslash (WHATWG URL normalizes '\' to '/' for http(s),
+ * so '/\evil.com' would resolve off-origin — CWE-601).
+ */
+export function safeReturnToPath(value: string | undefined | null): string | undefined {
+  if (!value) return undefined
+  if (value.includes('\\')) return undefined
+  if (!/^\/(?!\/)/.test(value)) return undefined
+  return value
+}
+
+// ---------------------------------------------------------------------------
 // Discovery
 // ---------------------------------------------------------------------------
 

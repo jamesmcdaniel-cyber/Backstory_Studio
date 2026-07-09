@@ -20,7 +20,7 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { decryptSecret, encryptSecret } from '@/lib/crypto/secrets'
-import { exchangeCode } from '@/lib/mcp/oauth-authcode'
+import { exchangeCode, safeReturnToPath } from '@/lib/mcp/oauth-authcode'
 import { bustBackstoryReadyCache } from '@/lib/mcp/backstory-connection'
 import { OAUTH_COOKIE } from '../start/route'
 
@@ -95,8 +95,8 @@ export async function GET(request: NextRequest) {
     }
 
     if (payload.connectionId) {
-      await prisma.mcpConnection.update({
-        where: { id: payload.connectionId },
+      const updated = await prisma.mcpConnection.updateMany({
+        where: { id: payload.connectionId, organizationId: payload.organizationId },
         data: {
           authType: 'oauth2',
           authConfig: authConfig as Prisma.InputJsonValue,
@@ -104,6 +104,7 @@ export async function GET(request: NextRequest) {
           lastVerifiedAt: new Date(),
         },
       })
+      if (updated.count !== 1) throw new Error('Connection to re-authorize was not found')
       if (payload.userId) bustBackstoryReadyCache(payload.organizationId, payload.userId)
     } else {
       await prisma.mcpConnection.create({
@@ -118,8 +119,9 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const successPath = payload.returnTo && payload.returnTo.startsWith('/') && !payload.returnTo.startsWith('//')
-      ? `${payload.returnTo}${payload.returnTo.includes('?') ? '&' : '?'}connected=1`
+    const safeReturnTo = safeReturnToPath(payload.returnTo)
+    const successPath = safeReturnTo
+      ? `${safeReturnTo}${safeReturnTo.includes('?') ? '&' : '?'}connected=1`
       : '/connections?connected=1'
     const response = NextResponse.redirect(new URL(successPath, request.nextUrl.origin))
     response.cookies.set(OAUTH_COOKIE, '', { path: '/', maxAge: 0 })
@@ -129,8 +131,9 @@ export async function GET(request: NextRequest) {
     apiLogger.error('OAuth callback failed', {
       error: error instanceof Error ? error.message : String(error),
     })
-    if (payload?.returnTo && payload.returnTo.startsWith('/') && !payload.returnTo.startsWith('//')) {
-      const errorPath = `${payload.returnTo}${payload.returnTo.includes('?') ? '&' : '?'}error=oauth`
+    const safeReturnTo = safeReturnToPath(payload?.returnTo)
+    if (safeReturnTo) {
+      const errorPath = `${safeReturnTo}${safeReturnTo.includes('?') ? '&' : '?'}error=oauth`
       const response = NextResponse.redirect(new URL(errorPath, request.nextUrl.origin))
       response.cookies.set(OAUTH_COOKIE, '', { path: '/', maxAge: 0 })
       return response

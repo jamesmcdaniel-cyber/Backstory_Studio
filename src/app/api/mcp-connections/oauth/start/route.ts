@@ -23,6 +23,7 @@ import {
   generatePkce,
   generateState,
   registerClient,
+  safeReturnToPath,
 } from '@/lib/mcp/oauth-authcode'
 
 export const OAUTH_COOKIE = 'bmcp_oauth'
@@ -34,7 +35,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   const connectionId = request.nextUrl.searchParams.get('connectionId')?.trim() || undefined
   const returnToRaw = request.nextUrl.searchParams.get('returnTo')?.trim() || undefined
   // Same-origin paths only — never an absolute URL.
-  const returnTo = returnToRaw && returnToRaw.startsWith('/') && !returnToRaw.startsWith('//') ? returnToRaw : undefined
+  const returnTo = safeReturnToPath(returnToRaw)
   const scope = request.nextUrl.searchParams.get('scope')?.trim() || 'claudeai'
 
   let effectiveServerUrl = serverUrl
