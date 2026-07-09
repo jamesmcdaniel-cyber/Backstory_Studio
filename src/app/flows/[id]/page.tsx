@@ -294,8 +294,12 @@ export default function FlowBuilder() {
   }, [graph])
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a.title])), [agents])
   // Friendly labels for {{token}} chips in the drawer's editors and for the
-  // humanized read-only summaries on canvas step cards.
-  const labelCtx = useMemo(() => ({ stepLabels: stepLabelsOf(graph, agents) }), [graph, agents])
+  // humanized read-only summaries on canvas step cards. Version view labels
+  // from the viewed snapshot so deleted/renamed steps read as they did then.
+  const labelCtx = useMemo(
+    () => ({ stepLabels: stepLabelsOf(viewingVersion ? viewingVersion.graph : graph, agents) }),
+    [graph, agents, viewingVersion],
+  )
   const labelForNode = useCallback(
     (nodeId: string) => {
       const node = graph.nodes.find((n) => n.id === nodeId)
