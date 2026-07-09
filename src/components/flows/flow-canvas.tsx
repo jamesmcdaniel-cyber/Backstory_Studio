@@ -201,7 +201,7 @@ function InsertMenu({
             : 'h-8 w-8 rounded-full border-slate-300',
         )}
       >
-        <Plus className={cn('h-4 w-4', compact && 'h-4 w-4')} />
+        <Plus className="h-4 w-4" />
         {compact && 'Add a step'}
       </button>
       {!compact && !tail && (
@@ -513,7 +513,8 @@ export function FlowCanvas({
         {trigger && card(trigger)}
         {trigger && !first && (
           <div className="flex flex-col items-center">
-            <InsertMenu agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)} />
+            <div className="h-6 w-px bg-slate-300" />
+            <InsertMenu tail agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)} />
           </div>
         )}
         {trigger && first && <InsertMenu agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)} />}
