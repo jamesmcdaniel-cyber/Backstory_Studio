@@ -26,14 +26,15 @@ import {
 } from 'lucide-react'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
-import { CONDITION_OPS, type ConditionClause, type ConditionOp, type FlowNode, type OutputField } from '@/lib/flows/graph'
+import { CONDITION_OPS, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
+import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import type { ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
 
 export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped'
 
 type Agent = { id: string; title: string }
-type TriggerData = { type?: 'manual' | 'schedule' | 'webhook' | 'signal'; inputFields?: OutputField[]; input?: string }
+type TriggerData = { type?: 'manual' | 'schedule' | 'webhook' | 'signal'; inputFields?: TriggerInputField[]; input?: string }
 type KeyValueRow = { key: string; value: string }
 type InputKind = 'text' | 'yesno' | 'file' | 'email' | 'number' | 'date'
 
@@ -104,18 +105,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function triggerData(node: Extract<FlowNode, { type: 'trigger' }>): TriggerData {
   return isRecord(node.data.trigger) ? (node.data.trigger as TriggerData) : { type: 'manual' }
-}
-
-function triggerFields(trigger: TriggerData): OutputField[] {
-  return Array.isArray(trigger.inputFields)
-    ? trigger.inputFields
-        .filter(isRecord)
-        .map((field) => ({
-          name: typeof field.name === 'string' ? field.name : '',
-          type: ['string', 'number', 'boolean', 'object', 'array', 'any'].includes(String(field.type)) ? (field.type as OutputField['type']) : 'any',
-          description: typeof field.description === 'string' ? field.description : undefined,
-        }))
-    : []
 }
 
 function inputTypeForField(field: OutputField) {
@@ -312,7 +301,7 @@ function renderNodeBody({
 function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigger' }>; update: (node: FlowNode) => void }) {
   const [choosingInput, setChoosingInput] = useState(false)
   const trigger = triggerData(node)
-  const fields = triggerFields(trigger)
+  const fields = triggerInputFieldsFromTrigger(trigger)
   const setTrigger = (next: TriggerData) => update({ ...node, data: { ...node.data, trigger: next } })
   const addField = (kind: InputKind) => {
     const option = INPUT_TYPES.find((type) => type.id === kind) ?? INPUT_TYPES[0]
@@ -330,7 +319,7 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
     })
     setChoosingInput(false)
   }
-  const updateField = (index: number, patch: Partial<OutputField>) => {
+  const updateField = (index: number, patch: Partial<TriggerInputField>) => {
     setTrigger({
       ...trigger,
       type: 'manual',
@@ -349,7 +338,7 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
             const inputType = inputTypeForField(field)
             const InputIcon = inputType.icon
             return (
-              <div key={`${field.name}-${fieldIndex}`} className="grid gap-3 border-b border-slate-200 pb-3 sm:grid-cols-[42px_minmax(120px,0.7fr)_minmax(180px,1fr)_36px]">
+              <div key={`${field.name}-${fieldIndex}`} className="grid gap-3 border-b border-slate-200 pb-3 sm:grid-cols-[42px_minmax(120px,0.7fr)_minmax(150px,1fr)_auto_36px]">
                 <span className={cn('flex h-10 w-10 items-center justify-center rounded-full', inputType.tone)}>
                   <InputIcon className="h-5 w-5" />
                 </span>
@@ -367,6 +356,15 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
                   placeholder={inputType.description}
                   aria-label="Prompt shown for input"
                 />
+                <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600" title="The run must supply this value">
+                  <input
+                    type="checkbox"
+                    checked={field.required === true}
+                    onChange={(event) => updateField(fieldIndex, { required: event.target.checked || undefined })}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                  />
+                  Required
+                </label>
                 <button
                   type="button"
                   onClick={() => removeField(fieldIndex)}

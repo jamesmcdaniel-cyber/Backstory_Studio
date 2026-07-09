@@ -15,6 +15,8 @@ import { buildDataTree } from '@/lib/flows/datatree'
 import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 import { validateFlowGraph } from '@/lib/flows/validate'
+import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
+import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
@@ -84,19 +86,9 @@ function storedRunInput(input: unknown): unknown {
   return input
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
-}
-
-function triggerInputFields(graph: FlowGraph): OutputField[] {
+function triggerInputFields(graph: FlowGraph) {
   const triggerNode = graph.nodes.find((node): node is Extract<FlowNode, { type: 'trigger' }> => node.type === 'trigger')
-  const trigger = triggerNode?.data.trigger
-  if (!isRecord(trigger) || !Array.isArray(trigger.inputFields)) return []
-  return trigger.inputFields.filter(isRecord).map((field) => ({
-    name: typeof field.name === 'string' ? field.name : '',
-    type: ['string', 'number', 'boolean', 'object', 'array', 'any'].includes(String(field.type)) ? field.type as OutputField['type'] : 'any',
-    description: typeof field.description === 'string' ? field.description : undefined,
-  }))
+  return triggerInputFieldsFromTrigger(triggerNode?.data.trigger)
 }
 
 function outputFieldsForNode(node: FlowNode | undefined, toolCatalog: ToolCatalog): OutputField[] | undefined {
@@ -427,6 +419,13 @@ export default function FlowBuilder() {
       setMode('build')
       return
     }
+    const missing = missingRequiredInputFields(inputFields, parseFlowInput(testInput))
+    if (missing.length) {
+      toast.error(`Fill the required input field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`)
+      setShowTestInput(true)
+      setMode('build')
+      return
+    }
     setRunning(true)
     setMode('test')
     setShowRuns(true)
@@ -448,7 +447,7 @@ export default function FlowBuilder() {
     } finally {
       setRunning(false)
     }
-  }, [id, save, pollRuns, testInput, validation])
+  }, [id, save, pollRuns, testInput, validation, inputFields])
 
   const duplicateFlow = useCallback(async () => {
     const flowName = name.trim() || 'Untitled flow'

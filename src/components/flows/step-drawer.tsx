@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { X, Trash2, Plus, Copy, Link2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField } from '@/lib/flows/graph'
+import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
@@ -39,7 +39,7 @@ type TriggerData = {
   type?: 'manual' | 'schedule' | 'webhook'
   schedule?: { type?: string; time?: string; cron?: string; timezone?: string; runAt?: string; isActive?: boolean }
   input?: string
-  inputFields?: OutputField[]
+  inputFields?: TriggerInputField[]
 }
 
 const fieldClass =
@@ -813,7 +813,7 @@ function OutputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onCha
 }
 
 /** Declare the payload fields a manual/scheduled/webhook trigger expects. */
-function InputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onChange: (fields: OutputField[]) => void }) {
+function InputFieldsEditor({ fields, onChange }: { fields: TriggerInputField[]; onChange: (fields: TriggerInputField[]) => void }) {
   return (
     <div className="rounded-lg border border-border/70 bg-muted/30 p-3">
       <label className={labelClass}>Expected input fields</label>
@@ -847,6 +847,15 @@ function InputFieldsEditor({ fields, onChange }: { fields: OutputField[]; onChan
               placeholder="What should the user or webhook send here?"
               onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, description: e.target.value || undefined } : f)))}
             />
+            <label className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={field.required === true}
+                onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, required: e.target.checked || undefined } : f)))}
+                className="h-3.5 w-3.5 rounded border-border"
+              />
+              Required — the run must supply this value
+            </label>
           </div>
         ))}
       </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import type { OutputField } from '@/lib/flows/graph'
+import type { TriggerInputField } from '@/lib/flows/graph'
 import { fieldValuesFromFlowInput, flowInputFromFieldValues } from '@/lib/flows/test-input'
 
 const fieldClass =
@@ -12,7 +12,7 @@ function inputForField({
   value,
   onChange,
 }: {
-  field: OutputField
+  field: TriggerInputField
   value: string
   onChange: (value: string) => void
 }) {
@@ -52,7 +52,7 @@ export function TestInputPanel({
   value,
   onChange,
 }: {
-  fields: OutputField[]
+  fields: TriggerInputField[]
   value: string
   onChange: (value: string) => void
 }) {
@@ -86,6 +86,7 @@ export function TestInputPanel({
                 <label className={labelClass}>
                   <span className="font-mono">{name}</span>
                   <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase text-muted-foreground">{field.type}</span>
+                  {field.required && <span className="text-red-500" title="Required">*</span>}
                 </label>
                 {field.description && <p className="mb-1.5 text-[11px] leading-4 text-muted-foreground">{field.description}</p>}
                 {inputForField({ field, value: values[name] ?? '', onChange: (next) => setField(name, next) })}
