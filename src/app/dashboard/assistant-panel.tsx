@@ -6,6 +6,7 @@ import { Check, Clock, Loader2, MessageSquare, Plus, Send } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { HtmlPreview, looksLikeHtml } from '@/components/ui/html-preview'
 import { Markdown } from '@/components/ui/markdown'
 import { notifyAgentsChanged } from '@/components/layout/sidebar'
 import { cn } from '@/lib/utils'
@@ -443,7 +444,11 @@ export function AssistantPanel({
                   <span className="shrink-0 text-xs text-gray-400">{new Date(runOutput.at).toLocaleString()}</span>
                 </div>
                 <div className={cn('text-sm', runOutput.status === 'failed' && 'whitespace-pre-wrap text-red-700')}>
-                  {runOutput.status === 'failed' ? runOutput.text : <Markdown>{runOutput.text}</Markdown>}
+                  {runOutput.status === 'failed'
+                    ? runOutput.text
+                    : looksLikeHtml(runOutput.text)
+                      ? <HtmlPreview html={runOutput.text} />
+                      : <Markdown>{runOutput.text}</Markdown>}
                 </div>
               </div>
             )}
@@ -457,7 +462,9 @@ export function AssistantPanel({
               >
                 {message.role === 'user'
                   ? <p className="whitespace-pre-wrap">{message.content}</p>
-                  : <Markdown>{message.content}</Markdown>}
+                  : looksLikeHtml(message.content)
+                    ? <HtmlPreview html={message.content} />
+                    : <Markdown>{message.content}</Markdown>}
                 {message.role !== 'user' && message.proposal && (
                   <ProposalCard
                     message={message}
