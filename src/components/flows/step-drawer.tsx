@@ -8,6 +8,7 @@ import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type Condi
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
 import type { DataField } from '@/lib/flows/datatree'
+import { insertAtCaret } from '@/components/flows/insert-token'
 import { AdvancedParamsSection } from '@/components/flows/advanced-params'
 
 type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch'>
@@ -326,24 +327,7 @@ export function StepDrawer({
   const insertToken = (token: string) => {
     const acc = activeAccessor()
     if (!acc) return
-    const el = activeElRef.current
-    const value = acc.get()
-    if (el && typeof el.selectionStart === 'number') {
-      const start = el.selectionStart
-      const end = el.selectionEnd ?? start
-      acc.set(value.slice(0, start) + token + value.slice(end))
-      const pos = start + token.length
-      requestAnimationFrame(() => {
-        try {
-          el.focus()
-          el.setSelectionRange(pos, pos)
-        } catch {
-          /* element unmounted */
-        }
-      })
-    } else {
-      acc.set(value ? `${value} ${token}` : token)
-    }
+    acc.set(insertAtCaret(acc.get(), token, activeElRef.current))
   }
 
   return (

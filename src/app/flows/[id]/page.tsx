@@ -692,6 +692,7 @@ export default function FlowBuilder() {
             agentName={(agentId) => agentsById.get(agentId) ?? ''}
             agents={agents}
             toolCatalog={toolCatalog}
+            dataFields={dataFields}
             statusByNode={mode === 'test' ? statusByNode : {}}
             selectedId={selectedId}
             onSelect={setSelectedId}

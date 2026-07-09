@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type KeyboardEvent } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 import {
   Bot,
   CalendarDays,
@@ -31,6 +31,9 @@ import { CONDITION_OPS, FIELD_TYPES, type ConditionClause, type ConditionOp, typ
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import type { ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
+import { DataTree } from './data-tree'
+import { insertAtCaret } from './insert-token'
+import type { DataField } from '@/lib/flows/datatree'
 
 export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped'
 
@@ -172,6 +175,12 @@ function stopEvent(event: React.MouseEvent | React.FocusEvent) {
   event.stopPropagation()
 }
 
+type TokenTarget = { el: HTMLInputElement | HTMLTextAreaElement; get: () => string; set: (value: string) => void }
+export type RegisterTokenTarget = (
+  get: () => string,
+  set: (value: string) => void,
+) => (event: React.FocusEvent<HTMLInputElement | HTMLTextAreaElement>) => void
+
 export function StepCard({
   node,
   index,
@@ -181,6 +190,7 @@ export function StepCard({
   selected,
   agents,
   toolCatalog,
+  dataFields,
   onChange,
   onClick,
   onRefreshAgents,
@@ -193,6 +203,7 @@ export function StepCard({
   selected?: boolean
   agents: Agent[]
   toolCatalog: ToolCatalog
+  dataFields?: DataField[]
   onChange?: (node: FlowNode) => void
   onClick?: () => void
   onRefreshAgents?: () => void
@@ -204,6 +215,15 @@ export function StepCard({
     if (event.key !== 'Enter' && event.key !== ' ') return
     event.preventDefault()
     onClick?.()
+  }
+  const tokenTargetRef = useRef<TokenTarget | null>(null)
+  const registerTokenTarget: RegisterTokenTarget = (get, set) => (event) => {
+    tokenTargetRef.current = { el: event.currentTarget, get, set }
+  }
+  const insertToken = (token: string) => {
+    const target = tokenTargetRef.current
+    if (!target) return
+    target.set(insertAtCaret(target.get(), token, target.el))
   }
 
   return (
@@ -258,7 +278,17 @@ export function StepCard({
         </button>
       </div>
       <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-        {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents })}
+        {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, registerTokenTarget })}
+        {selected && dataFields && dataFields.length > 0 && (
+          <div className="mt-4 border-t border-slate-200 pt-3">
+            <DataTree
+              fields={dataFields}
+              onInsert={insertToken}
+              title="Insert data from previous steps"
+              emptyMessage="No earlier step data is available yet."
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -270,34 +300,36 @@ function renderNodeBody({
   toolCatalog,
   update,
   onRefreshAgents,
+  registerTokenTarget,
 }: {
   node: FlowNode
   agents: Agent[]
   toolCatalog: ToolCatalog
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
+  registerTokenTarget: RegisterTokenTarget
 }) {
   switch (node.type) {
     case 'trigger':
       return <TriggerBody node={node} update={update} />
     case 'agent':
-      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} />
+      return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} registerTokenTarget={registerTokenTarget} />
     case 'http':
-      return <HttpBody node={node} update={update} />
+      return <HttpBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'tool':
       return <ToolBody node={node} toolCatalog={toolCatalog} update={update} />
     case 'condition':
-      return <ConditionBody node={node} update={update} />
+      return <ConditionBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'filter':
-      return <ConditionBody node={node} update={update} />
+      return <ConditionBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'transform':
-      return <TransformBody node={node} update={update} />
+      return <TransformBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'loop':
-      return <LoopBody node={node} update={update} />
+      return <LoopBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'parallel':
       return <p className="text-sm text-slate-600">Runs {node.data.branches.length || 0} branches side by side. Add and configure branch steps from the settings panel.</p>
     case 'switch':
-      return <SwitchBody node={node} update={update} />
+      return <SwitchBody node={node} update={update} registerTokenTarget={registerTokenTarget} />
     case 'stop':
       return <StopBody node={node} update={update} />
   }
@@ -427,11 +459,13 @@ function AgentBody({
   agents,
   update,
   onRefreshAgents,
+  registerTokenTarget,
 }: {
   node: Extract<FlowNode, { type: 'agent' }>
   agents: Agent[]
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
+  registerTokenTarget: RegisterTokenTarget
 }) {
   const isDefaultInput = defaultAgentInput(node.data.input)
   const responseFormat = node.data.responseFormat ?? 'text'
@@ -482,6 +516,10 @@ function AgentBody({
         <textarea
           value={isDefaultInput ? '' : node.data.input ?? ''}
           onChange={(event) => update({ ...node, data: { ...node.data, input: event.target.value } })}
+          onFocus={registerTokenTarget(
+            () => (isDefaultInput ? '' : node.data.input ?? ''),
+            (v) => update({ ...node, data: { ...node.data, input: v } }),
+          )}
           className={textareaClass}
           placeholder={isDefaultInput ? 'Uses the trigger input by default. Add instructions here if needed.' : 'Tell the agent what to do at this step.'}
         />
@@ -574,21 +612,33 @@ function AgentBody({
   )
 }
 
-function HttpBody({ node, update }: { node: Extract<FlowNode, { type: 'http' }>; update: (node: FlowNode) => void }) {
+function HttpBody({
+  node,
+  update,
+  registerTokenTarget,
+}: {
+  node: Extract<FlowNode, { type: 'http' }>
+  update: (node: FlowNode) => void
+  registerTokenTarget: RegisterTokenTarget
+}) {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-[1fr_150px]">
         <div className="grid gap-2">
-          <label className={labelClass}>URI</label>
+          <label className={labelClass}>URI <span className="text-red-500">*</span></label>
           <input
             value={node.data.url}
             onChange={(event) => update({ ...node, data: { ...node.data, url: event.target.value } })}
+            onFocus={registerTokenTarget(
+              () => node.data.url,
+              (v) => update({ ...node, data: { ...node.data, url: v } }),
+            )}
             className={controlClass}
             placeholder="https://api.example.com/endpoint"
           />
         </div>
         <div className="grid gap-2">
-          <label className={labelClass}>Method</label>
+          <label className={labelClass}>Method <span className="text-red-500">*</span></label>
           <select
             value={node.data.method}
             onChange={(event) => update({ ...node, data: { ...node.data, method: event.target.value as typeof node.data.method } })}
@@ -606,17 +656,23 @@ function HttpBody({ node, update }: { node: Extract<FlowNode, { type: 'http' }>;
         label="Headers"
         value={node.data.headers}
         onChange={(headers) => update({ ...node, data: { ...node.data, headers } })}
+        registerTokenTarget={registerTokenTarget}
       />
       <InlineKeyValue
         label="Queries"
         value={node.data.query}
         onChange={(query) => update({ ...node, data: { ...node.data, query } })}
+        registerTokenTarget={registerTokenTarget}
       />
       <div className="grid gap-2">
         <label className={labelClass}>Body</label>
         <textarea
           value={node.data.body ?? ''}
           onChange={(event) => update({ ...node, data: { ...node.data, body: event.target.value } })}
+          onFocus={registerTokenTarget(
+            () => node.data.body ?? '',
+            (v) => update({ ...node, data: { ...node.data, body: v } }),
+          )}
           className={textareaClass}
           placeholder="Optional JSON or text body for POST, PUT, and PATCH requests."
         />
@@ -626,7 +682,17 @@ function HttpBody({ node, update }: { node: Extract<FlowNode, { type: 'http' }>;
   )
 }
 
-function InlineKeyValue({ label, value, onChange }: { label: string; value?: string; onChange: (value: string) => void }) {
+function InlineKeyValue({
+  label,
+  value,
+  onChange,
+  registerTokenTarget,
+}: {
+  label: string
+  value?: string
+  onChange: (value: string) => void
+  registerTokenTarget: RegisterTokenTarget
+}) {
   const rows = parseKeyValueRows(value)
   const updateRow = (index: number, patch: Partial<KeyValueRow>) => {
     onChange(serializeKeyValueRows(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row))))
@@ -654,6 +720,10 @@ function InlineKeyValue({ label, value, onChange }: { label: string; value?: str
             <input
               value={row.value}
               onChange={(event) => updateRow(index, { value: event.target.value })}
+              onFocus={registerTokenTarget(
+                () => rows[index]?.value ?? '',
+                (v) => updateRow(index, { value: v }),
+              )}
               className={controlClass}
               placeholder="Value"
             />
@@ -677,7 +747,7 @@ function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { typ
   return (
     <div className="space-y-4">
       <div className="grid gap-2">
-        <label className={labelClass}>Connection</label>
+        <label className={labelClass}>Connection <span className="text-red-500">*</span></label>
         <select
           value={node.data.connectionId}
           onChange={(event) => {
@@ -696,7 +766,7 @@ function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { typ
       </div>
       {connection && (
         <div className="grid gap-2">
-          <label className={labelClass}>Action</label>
+          <label className={labelClass}>Action <span className="text-red-500">*</span></label>
           <select
             value={node.data.toolName}
             onChange={(event) => update({ ...node, data: { ...node.data, toolName: event.target.value } })}
@@ -726,7 +796,15 @@ function ToolBody({ node, toolCatalog, update }: { node: Extract<FlowNode, { typ
   )
 }
 
-function ConditionBody({ node, update }: { node: Extract<FlowNode, { type: 'condition' | 'filter' }>; update: (node: FlowNode) => void }) {
+function ConditionBody({
+  node,
+  update,
+  registerTokenTarget,
+}: {
+  node: Extract<FlowNode, { type: 'condition' | 'filter' }>
+  update: (node: FlowNode) => void
+  registerTokenTarget: RegisterTokenTarget
+}) {
   const clause = firstClause(node)
   const setClause = (patch: Partial<ConditionClause>) => {
     update({ ...node, data: { ...node.data, clauses: [{ ...clause, ...patch }], match: node.data.match ?? 'all' } } as FlowNode)
@@ -735,7 +813,16 @@ function ConditionBody({ node, update }: { node: Extract<FlowNode, { type: 'cond
     <div className="space-y-3">
       <p className="text-sm text-slate-600">{node.type === 'condition' ? 'Route the flow based on a rule.' : 'Continue only when this rule is true.'}</p>
       <div className="grid gap-2 sm:grid-cols-[1fr_150px_1fr]">
-        <input value={clause.left} onChange={(event) => setClause({ left: event.target.value })} className={controlClass} placeholder="Field or value" />
+        <input
+          value={clause.left}
+          onChange={(event) => setClause({ left: event.target.value })}
+          onFocus={registerTokenTarget(
+            () => clause.left,
+            (v) => setClause({ left: v }),
+          )}
+          className={controlClass}
+          placeholder="Field or value"
+        />
         <select value={clause.op} onChange={(event) => setClause({ op: event.target.value as ConditionOp })} className={controlClass}>
           {CONDITION_OPS.map((op) => (
             <option key={op} value={op}>
@@ -743,13 +830,30 @@ function ConditionBody({ node, update }: { node: Extract<FlowNode, { type: 'cond
             </option>
           ))}
         </select>
-        <input value={clause.right} onChange={(event) => setClause({ right: event.target.value })} className={controlClass} placeholder="Compare to" />
+        <input
+          value={clause.right}
+          onChange={(event) => setClause({ right: event.target.value })}
+          onFocus={registerTokenTarget(
+            () => clause.right,
+            (v) => setClause({ right: v }),
+          )}
+          className={controlClass}
+          placeholder="Compare to"
+        />
       </div>
     </div>
   )
 }
 
-function TransformBody({ node, update }: { node: Extract<FlowNode, { type: 'transform' }>; update: (node: FlowNode) => void }) {
+function TransformBody({
+  node,
+  update,
+  registerTokenTarget,
+}: {
+  node: Extract<FlowNode, { type: 'transform' }>
+  update: (node: FlowNode) => void
+  registerTokenTarget: RegisterTokenTarget
+}) {
   const fields = node.data.fields.length ? node.data.fields : [{ name: '', value: '' }]
   const setFields = (next: typeof fields) => update({ ...node, data: { ...node.data, fields: next } })
   return (
@@ -766,6 +870,10 @@ function TransformBody({ node, update }: { node: Extract<FlowNode, { type: 'tran
           <input
             value={field.value}
             onChange={(event) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: event.target.value } : entry)))}
+            onFocus={registerTokenTarget(
+              () => fields[index]?.value ?? '',
+              (v) => setFields(fields.map((entry, fieldIndex) => (fieldIndex === index ? { ...entry, value: v } : entry))),
+            )}
             className={controlClass}
             placeholder="Value"
           />
@@ -786,7 +894,15 @@ function TransformBody({ node, update }: { node: Extract<FlowNode, { type: 'tran
   )
 }
 
-function LoopBody({ node, update }: { node: Extract<FlowNode, { type: 'loop' }>; update: (node: FlowNode) => void }) {
+function LoopBody({
+  node,
+  update,
+  registerTokenTarget,
+}: {
+  node: Extract<FlowNode, { type: 'loop' }>
+  update: (node: FlowNode) => void
+  registerTokenTarget: RegisterTokenTarget
+}) {
   const usesTriggerInput = node.data.over === '{{trigger.input}}'
   return (
     <div className="space-y-3">
@@ -803,6 +919,10 @@ function LoopBody({ node, update }: { node: Extract<FlowNode, { type: 'loop' }>;
         <input
           value={usesTriggerInput ? '' : node.data.over}
           onChange={(event) => update({ ...node, data: { ...node.data, over: event.target.value } })}
+          onFocus={registerTokenTarget(
+            () => (usesTriggerInput ? '' : node.data.over),
+            (v) => update({ ...node, data: { ...node.data, over: v } }),
+          )}
           className={controlClass}
           placeholder={usesTriggerInput ? 'Uses trigger input' : 'Comma-separated list, JSON array, or mapped list'}
           disabled={usesTriggerInput}
@@ -813,14 +933,31 @@ function LoopBody({ node, update }: { node: Extract<FlowNode, { type: 'loop' }>;
   )
 }
 
-function SwitchBody({ node, update }: { node: Extract<FlowNode, { type: 'switch' }>; update: (node: FlowNode) => void }) {
+function SwitchBody({
+  node,
+  update,
+  registerTokenTarget,
+}: {
+  node: Extract<FlowNode, { type: 'switch' }>
+  update: (node: FlowNode) => void
+  registerTokenTarget: RegisterTokenTarget
+}) {
   const first = node.data.cases[0] ?? { id: 'case1', left: '', op: 'contains' as ConditionOp, right: '' }
   const setFirst = (patch: Partial<typeof first>) => update({ ...node, data: { ...node.data, cases: [{ ...first, ...patch }] } })
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-600">Route to the first matching case, otherwise use the default path.</p>
       <div className="grid gap-2 sm:grid-cols-[1fr_150px_1fr]">
-        <input value={first.left} onChange={(event) => setFirst({ left: event.target.value })} className={controlClass} placeholder="Field or value" />
+        <input
+          value={first.left}
+          onChange={(event) => setFirst({ left: event.target.value })}
+          onFocus={registerTokenTarget(
+            () => first.left,
+            (v) => setFirst({ left: v }),
+          )}
+          className={controlClass}
+          placeholder="Field or value"
+        />
         <select value={first.op} onChange={(event) => setFirst({ op: event.target.value as ConditionOp })} className={controlClass}>
           {CONDITION_OPS.map((op) => (
             <option key={op} value={op}>
@@ -828,7 +965,16 @@ function SwitchBody({ node, update }: { node: Extract<FlowNode, { type: 'switch'
             </option>
           ))}
         </select>
-        <input value={first.right} onChange={(event) => setFirst({ right: event.target.value })} className={controlClass} placeholder="Compare to" />
+        <input
+          value={first.right}
+          onChange={(event) => setFirst({ right: event.target.value })}
+          onFocus={registerTokenTarget(
+            () => first.right,
+            (v) => setFirst({ right: v }),
+          )}
+          className={controlClass}
+          placeholder="Compare to"
+        />
       </div>
     </div>
   )

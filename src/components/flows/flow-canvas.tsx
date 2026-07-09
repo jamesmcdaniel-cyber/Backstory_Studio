@@ -20,6 +20,7 @@ import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import type { FlowGraph, FlowNode } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
+import type { DataField } from '@/lib/flows/datatree'
 import { StepCard, type StepStatus } from './step-card'
 import type { ToolCatalog } from './step-drawer'
 
@@ -286,6 +287,7 @@ export function FlowCanvas({
   agentName,
   agents,
   toolCatalog,
+  dataFields,
   statusByNode,
   selectedId,
   onSelect,
@@ -298,6 +300,7 @@ export function FlowCanvas({
   agentName: (agentId: string) => string
   agents: Agent[]
   toolCatalog: ToolCatalog
+  dataFields?: DataField[]
   statusByNode: Record<string, StepStatus>
   selectedId: string | null
   onSelect: (nodeId: string) => void
@@ -394,6 +397,7 @@ export function FlowCanvas({
       selected={selectedId === node.id}
       agents={agents}
       toolCatalog={toolCatalog}
+      dataFields={selectedId === node.id ? dataFields : undefined}
       onChange={onChangeNode}
       onClick={() => onSelect(node.id)}
       onRefreshAgents={onRefreshAgents}
