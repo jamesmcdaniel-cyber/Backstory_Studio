@@ -73,6 +73,7 @@ model User {
   mcpAgents    MCPAgent[]
   ownedAgents  AgentTask[]
   peopleAiConnections PeopleAiConnection[]
+  mcpConnections      McpConnection[]
 
   @@index([organizationId])
   @@map("users")
@@ -514,21 +515,29 @@ model PeopleAiConnection {
 }
 
 model McpConnection {
-  id             String   @id @default(cuid())
-  organizationId String   @db.Uuid
+  id             String    @id @default(cuid())
+  organizationId String    @db.Uuid
+  // Personal connection when set (e.g. the per-user Backstory MCP row);
+  // null = org-shared server added via the connections page.
+  userId         String?
+  // Platform-managed provider slug ('backstory'); null = user-added server.
+  provider       String?
   name           String
   description    String?
   serverUrl      String
-  authType       String   @default("none")   // 'none' | 'api_key' | 'oauth2'
-  authConfig     Json     @default("{}")     // encrypted secret blob + non-secret fields
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  authType       String    @default("none")   // 'none' | 'api_key' | 'oauth2'
+  authConfig     Json      @default("{}")     // encrypted secret blob + non-secret fields
+  isActive       Boolean   @default(true)
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization  Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user          User?            @relation(fields: [userId], references: [id], onDelete: Cascade)
   agentBindings AgentConnector[]
 
   @@index([organizationId, isActive])
+  @@index([organizationId, userId, provider])
   @@map("mcp_connections")
 }
 
