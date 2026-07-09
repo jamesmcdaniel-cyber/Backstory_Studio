@@ -25,17 +25,39 @@ function InsertMenu({
   toolCatalog,
   compact,
   tail,
+  dropAfterId,
+  onDropNode,
+  dragging,
 }: {
   onPick: (type: StepType, seed?: FlowInsertSeed) => void
   agents: Agent[]
   toolCatalog: ToolCatalog
   compact?: boolean
   tail?: boolean
+  dropAfterId?: string
+  onDropNode?: (draggedId: string, afterId: string) => void
+  dragging?: boolean
 }) {
   const [open, setOpen] = useState(false)
 
   return (
-    <div className={cn('relative flex flex-col items-center', compact && 'items-start')} onClick={(event) => event.stopPropagation()}>
+    <div
+      className={cn('relative flex flex-col items-center', compact && 'items-start')}
+      onClick={(event) => event.stopPropagation()}
+      onDragOver={(event) => {
+        if (dropAfterId) {
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+        }
+      }}
+      onDrop={(event) => {
+        const id = event.dataTransfer.getData('text/flow-node-id')
+        if (id && dropAfterId && onDropNode) {
+          event.preventDefault()
+          onDropNode(id, dropAfterId)
+        }
+      }}
+    >
       {!compact && !tail && <div className="h-6 w-px bg-slate-300" />}
       <button
         type="button"
@@ -46,6 +68,7 @@ function InsertMenu({
           compact
             ? 'gap-2 rounded-lg border-dashed px-3 py-2 text-sm font-semibold'
             : 'h-8 w-8 rounded-full border-slate-300',
+          dragging && dropAfterId && 'ring-2 ring-indigo-300 rounded-full',
         )}
       >
         <Plus className="h-4 w-4" />
@@ -103,6 +126,8 @@ export function FlowCanvas({
   onDeleteNode,
   onBackgroundClick,
   onPickTrigger,
+  onMoveAfter,
+  onReorderContainer,
 }: {
   graph: FlowGraph
   agentName: (agentId: string) => string
@@ -120,7 +145,11 @@ export function FlowCanvas({
   onDeleteNode?: (id: string) => void
   onBackgroundClick?: () => void
   onPickTrigger?: (triggerType: 'manual' | 'schedule' | 'webhook' | 'signal') => void
+  onMoveAfter?: (nodeId: string, afterId: string) => void
+  onReorderContainer?: (containerId: string, from: number, to: number, branchIndex?: number) => void
 }) {
+  const [dragId, setDragId] = useState<string | null>(null)
+  const onDropNode = (draggedId: string, afterId: string) => onMoveAfter?.(draggedId, afterId)
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const nextOf = (id: string): FlowNode | undefined => {
     const edge = graph.edges.find((e) => e.source === id && !e.branch)
@@ -216,6 +245,9 @@ export function FlowCanvas({
         onRefreshAgents={onRefreshAgents}
         onDuplicate={node.type === 'trigger' ? undefined : onDuplicateNode ? () => onDuplicateNode(node.id) : undefined}
         onDelete={node.type === 'trigger' ? undefined : onDeleteNode ? () => onDeleteNode(node.id) : undefined}
+        draggable={node.type !== 'trigger' && node.type !== 'condition' && node.type !== 'switch'}
+        onDragStartNode={setDragId}
+        onDragEndNode={() => setDragId(null)}
       />
     </div>
   )
@@ -224,11 +256,41 @@ export function FlowCanvas({
     const ids = node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : []
     const nodes = ids.map((id) => byId.get(id)).filter((n): n is FlowNode => Boolean(n))
     if (!nodes.length) return null
+    // Sibling list a given contained id can be reordered within — the loop
+    // body, or (for parallel) whichever single branch array holds it.
+    const siblingsOf = (id: string): { list: string[]; branchIndex?: number } => {
+      if (node.type === 'loop') return { list: node.data.body }
+      if (node.type === 'parallel') {
+        const branchIndex = node.data.branches.findIndex((branch) => branch.includes(id))
+        return { list: branchIndex >= 0 ? node.data.branches[branchIndex] : [], branchIndex: branchIndex >= 0 ? branchIndex : undefined }
+      }
+      return { list: [] }
+    }
     return (
       <div className="my-3 ml-10 space-y-3 border-l-2 border-dashed border-slate-300 pl-4">
-        {nodes.map((body, bodyIndex) => (
-          <Fragment key={body.id}>{card(body, bodyIndex + 1)}</Fragment>
-        ))}
+        {nodes.map((body, bodyIndex) => {
+          const { list, branchIndex } = siblingsOf(body.id)
+          return (
+            <div
+              key={body.id}
+              onDragOver={(event) => {
+                if (dragId && dragId !== body.id && list.includes(dragId)) {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                }
+              }}
+              onDrop={(event) => {
+                const draggedId = event.dataTransfer.getData('text/flow-node-id')
+                if (draggedId && draggedId !== body.id && list.includes(draggedId)) {
+                  event.preventDefault()
+                  onReorderContainer?.(node.id, list.indexOf(draggedId), list.indexOf(body.id), branchIndex)
+                }
+              }}
+            >
+              {card(body, bodyIndex + 1)}
+            </div>
+          )
+        })}
       </div>
     )
   }
@@ -283,13 +345,29 @@ export function FlowCanvas({
       const next = nextOf(node.id)
       if (next && !contained.has(next.id) && !seen.has(next.id)) {
         parts.push(
-          <InsertMenu key={`${node.id}-insert`} agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(node.id, type, seed)} />,
+          <InsertMenu
+            key={`${node.id}-insert`}
+            agents={agents}
+            toolCatalog={toolCatalog}
+            onPick={(type, seed) => onInsertAfter(node.id, type, seed)}
+            dropAfterId={node.id}
+            onDropNode={onDropNode}
+            dragging={Boolean(dragId)}
+          />,
         )
       } else {
         parts.push(
           <div key={`${node.id}-tail`} className="flex flex-col items-center">
             <div className="h-6 w-px bg-slate-300" />
-            <InsertMenu tail agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(node.id, type, seed)} />
+            <InsertMenu
+              tail
+              agents={agents}
+              toolCatalog={toolCatalog}
+              onPick={(type, seed) => onInsertAfter(node.id, type, seed)}
+              dropAfterId={node.id}
+              onDropNode={onDropNode}
+              dragging={Boolean(dragId)}
+            />
           </div>,
         )
       }
@@ -321,10 +399,27 @@ export function FlowCanvas({
         {trigger && !first && (
           <div className="flex flex-col items-center">
             <div className="h-6 w-px bg-slate-300" />
-            <InsertMenu tail agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)} />
+            <InsertMenu
+              tail
+              agents={agents}
+              toolCatalog={toolCatalog}
+              onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)}
+              dropAfterId={trigger.id}
+              onDropNode={onDropNode}
+              dragging={Boolean(dragId)}
+            />
           </div>
         )}
-        {trigger && first && <InsertMenu agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)} />}
+        {trigger && first && (
+          <InsertMenu
+            agents={agents}
+            toolCatalog={toolCatalog}
+            onPick={(type, seed) => onInsertAfter(trigger.id, type, seed)}
+            dropAfterId={trigger.id}
+            onDropNode={onDropNode}
+            dragging={Boolean(dragId)}
+          />
+        )}
         {renderChain(first, seen)}
       </div>
     </div>

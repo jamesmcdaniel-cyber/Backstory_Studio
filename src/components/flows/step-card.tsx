@@ -238,6 +238,9 @@ export function StepCard({
   onRefreshAgents,
   onDuplicate,
   onDelete,
+  draggable,
+  onDragStartNode,
+  onDragEndNode,
 }: {
   node: FlowNode
   index?: number
@@ -253,6 +256,9 @@ export function StepCard({
   onRefreshAgents?: () => void
   onDuplicate?: () => void
   onDelete?: () => void
+  draggable?: boolean
+  onDragStartNode?: (id: string) => void
+  onDragEndNode?: () => void
 }) {
   const Icon = NODE_ICON[node.type]
   const update = (updated: FlowNode) => onChange?.(updated)
@@ -304,7 +310,21 @@ export function StepCard({
       )}
     >
       <div className="flex items-center gap-5 px-5 py-5">
-        <span className={cn('flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-lg', NODE_TONE[node.type])}>
+        <span
+          draggable={draggable}
+          onDragStart={(event) => {
+            event.dataTransfer.setData('text/flow-node-id', node.id)
+            event.dataTransfer.effectAllowed = 'move'
+            onDragStartNode?.(node.id)
+          }}
+          onDragEnd={() => onDragEndNode?.()}
+          title="Drag to reorder"
+          className={cn(
+            'flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-lg',
+            NODE_TONE[node.type],
+            draggable && 'cursor-grab active:cursor-grabbing',
+          )}
+        >
           <Icon className="h-6 w-6" />
         </span>
         <div className="min-w-0 flex-1">

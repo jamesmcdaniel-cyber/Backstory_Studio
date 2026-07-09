@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { emptyGraph, type FlowGraph, type FlowNode, type OutputField } from '@/lib/flows/graph'
-import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep } from '@/lib/flows/mutate'
+import { insertNodeAfter, appendToBranch, duplicateNode, updateNode, deleteNode, changeNodeType, addContainerStep, moveNodeAfter, moveContainerStep } from '@/lib/flows/mutate'
 import { buildDataTree } from '@/lib/flows/datatree'
 import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
@@ -798,6 +798,10 @@ export default function FlowBuilder() {
                 commitGraph(updateNode(graph, { ...triggerNode, data: { trigger: { ...current, type } } }))
                 setSelectedId(triggerNode.id)
               }}
+              onMoveAfter={(nodeId, afterId) => commitGraph(moveNodeAfter(graph, nodeId, afterId))}
+              onReorderContainer={(containerId, from, to, branchIndex) =>
+                commitGraph(moveContainerStep(graph, containerId, from, to, branchIndex))
+              }
             />
           </div>
         </div>
