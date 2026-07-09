@@ -53,25 +53,27 @@ export async function ensureBackstoryConnection(organizationId: string, userId: 
   const key = cacheKey(organizationId, userId)
   if (seededMemo.has(key)) return
   try {
-    const existing = await prisma.mcpConnection.findFirst({
-      where: { organizationId, userId, provider: BACKSTORY_PROVIDER },
-      select: { id: true },
-    })
-    if (!existing) {
-      await prisma.mcpConnection.create({
-        data: {
+    await prisma.mcpConnection.upsert({
+      where: {
+        organizationId_userId_provider: {
           organizationId,
           userId,
           provider: BACKSTORY_PROVIDER,
-          name: 'Backstory MCP',
-          description: 'Native Backstory tools',
-          serverUrl: backstoryServerUrl(),
-          authType: 'oauth2',
-          authConfig: {},
-          isActive: false,
         },
-      })
-    }
+      },
+      update: {},
+      create: {
+        organizationId,
+        userId,
+        provider: BACKSTORY_PROVIDER,
+        name: 'Backstory MCP',
+        description: 'Native Backstory tools',
+        serverUrl: backstoryServerUrl(),
+        authType: 'oauth2',
+        authConfig: {},
+        isActive: false,
+      },
+    })
     seededMemo.add(key)
   } catch (error) {
     apiLogger.warn('Backstory MCP seeding failed; will retry next request', {

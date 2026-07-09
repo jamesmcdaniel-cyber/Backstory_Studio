@@ -89,7 +89,7 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
     success: true,
     connections: connections.map(serializeConnection),
   }
-}, { skipBackstoryGate: true })
+})
 
 // ── POST — create a connection ────────────────────────────────────────────
 
@@ -121,7 +121,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   })
 
   return { success: true, connection: serializeConnection(connection) }
-}, { skipBackstoryGate: true })
+})
 
 // ── PUT — update a connection ─────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   }
 
   return { success: true, connection: serializeConnection(connection) }
-}, { skipBackstoryGate: true })
+})
 
 // ── DELETE — remove a connection ──────────────────────────────────────────
 
@@ -212,4 +212,4 @@ export const DELETE = withAuthenticatedApi(async (request, auth) => {
   await prisma.mcpConnection.delete({ where: { id: existing.id } })
 
   return { success: true }
-}, { skipBackstoryGate: true })
+})

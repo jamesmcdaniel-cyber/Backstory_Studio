@@ -25,7 +25,7 @@ type AuthenticatedHandler = (
 
 export function withAuthenticatedApi(
   handler: AuthenticatedHandler,
-  options?: { skipBackstoryGate?: boolean },
+  options?: { skipBackstoryGate?: boolean; skipEntitlementGate?: boolean },
 ) {
   return async (request: NextRequest): Promise<Response> => {
     try {

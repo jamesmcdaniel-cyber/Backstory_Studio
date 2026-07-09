@@ -537,7 +537,7 @@ model McpConnection {
   agentBindings AgentConnector[]
 
   @@index([organizationId, isActive])
-  @@index([organizationId, userId, provider])
+  @@unique([organizationId, userId, provider])
   @@map("mcp_connections")
 }
 

@@ -46,7 +46,9 @@ export async function assertEntitled(organizationId: string): Promise<void> {
   }
 }
 
-export async function requireAuthContext(options?: { skipBackstoryGate?: boolean }): Promise<AuthContext> {
+export async function requireAuthContext(
+  options?: { skipBackstoryGate?: boolean; skipEntitlementGate?: boolean },
+): Promise<AuthContext> {
   const auth = await getAuthWithUser()
 
   if (!auth?.user || !auth.userId) {
@@ -57,13 +59,14 @@ export async function requireAuthContext(options?: { skipBackstoryGate?: boolean
     throw new AuthContextError('Organization access required', 403)
   }
 
-  if (entitlementGateEnabled()) {
-    await assertEntitled(auth.organizationId)
-  }
-
   // Native Backstory MCP: seed the per-user connection row (idempotent, never
   // throws), then hard-gate the platform until the user has authorized it.
   await ensureBackstoryConnection(auth.organizationId, auth.dbUser.id)
+
+  if (!options?.skipEntitlementGate && entitlementGateEnabled()) {
+    await assertEntitled(auth.organizationId)
+  }
+
   if (!options?.skipBackstoryGate && backstoryGateEnabled()) {
     const ready = await backstoryMcpReady(auth.organizationId, auth.dbUser.id)
     if (!ready) {
