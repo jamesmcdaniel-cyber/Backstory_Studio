@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { AlertCircle, FileText, List, Loader2, Play, Plus, Settings2, Sparkles, X } from 'lucide-react'
@@ -28,6 +28,16 @@ type GranolaNote = {
 /** Sentinel selection meaning "setting up a brand-new agent". */
 const NEW_AGENT = 'new'
 
+// Right-pane (assistant) width — user-resizable on desktop, persisted per browser.
+const ASSISTANT_WIDTH_KEY = 'dashboard.assistantWidth'
+const ASSISTANT_WIDTH_DEFAULT = 480
+const ASSISTANT_WIDTH_MIN = 360
+const ASSISTANT_WIDTH_MAX = 800
+
+function clampAssistantWidth(width: number) {
+  return Math.min(ASSISTANT_WIDTH_MAX, Math.max(ASSISTANT_WIDTH_MIN, width))
+}
+
 function isConfigured(agent: Agent) {
   return agent.status === 'active' && Boolean(agent.instructions?.trim())
 }
@@ -53,6 +63,51 @@ function AgentHQ() {
   const [granolaFetchingList, setGranolaFetchingList] = useState(false)
   const [granolaFetchingNote, setGranolaFetchingNote] = useState(false)
   const [granolaNotes, setGranolaNotes] = useState<GranolaNote[]>([])
+  const [assistantWidth, setAssistantWidth] = useState<number>(() => {
+    if (typeof window === 'undefined') return ASSISTANT_WIDTH_DEFAULT
+    const saved = Number(window.localStorage.getItem(ASSISTANT_WIDTH_KEY))
+    return saved ? clampAssistantWidth(saved) : ASSISTANT_WIDTH_DEFAULT
+  })
+  const assistantWidthRef = useRef(assistantWidth)
+
+  // Drag-to-resize for the assistant pane's left edge. Grid layout (not the
+  // flex row `ResizablePanel` assumes), so the drag math is inlined here and
+  // drives `assistantWidth`, which the grid's gridTemplateColumns reads.
+  const onAssistantResizeStart = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = assistantWidthRef.current
+    const onMove = (moveEvent: MouseEvent) => {
+      // Right pane, so dragging LEFT (smaller clientX) widens it.
+      const next = clampAssistantWidth(startWidth + (startX - moveEvent.clientX))
+      assistantWidthRef.current = next
+      setAssistantWidth(next)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      try {
+        window.localStorage.setItem(ASSISTANT_WIDTH_KEY, String(assistantWidthRef.current))
+      } catch {
+        /* storage unavailable */
+      }
+    }
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
+  const resetAssistantWidth = useCallback(() => {
+    assistantWidthRef.current = ASSISTANT_WIDTH_DEFAULT
+    setAssistantWidth(ASSISTANT_WIDTH_DEFAULT)
+    try {
+      window.localStorage.setItem(ASSISTANT_WIDTH_KEY, String(ASSISTANT_WIDTH_DEFAULT))
+    } catch {
+      /* storage unavailable */
+    }
+  }, [])
 
   const load = useCallback(async (force = false) => {
     try {
@@ -328,7 +383,10 @@ function AgentHQ() {
       {/* lg: rows locked to the viewport (minmax(0,1fr)) — an implicit auto row
           would grow with content and clip each pane's bottom (form buttons,
           chat composer) behind the grid's overflow-hidden. */}
-      <div className="flex flex-col lg:grid lg:h-screen lg:grid-cols-[minmax(420px,1fr)_minmax(400px,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
+      <div
+        className="flex flex-col lg:grid lg:h-screen lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden"
+        style={{ gridTemplateColumns: `minmax(420px,1fr) ${assistantWidth}px` }}
+      >
         {/* ── Left pane: activity for the selected agent, or the setup flow ── */}
         <section className="min-w-0 border-b bg-white lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <div className="sticky top-0 z-10 border-b bg-white p-4">
@@ -532,7 +590,16 @@ function AgentHQ() {
         </section>
 
         {/* ── Right pane: persistent assistant chat for the selected agent ── */}
-        <section className="flex h-[70vh] min-w-0 flex-col bg-white lg:h-auto lg:min-h-0">
+        <section className="relative flex h-[70vh] min-w-0 flex-col bg-white lg:h-auto lg:min-h-0">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize assistant panel"
+            onMouseDown={onAssistantResizeStart}
+            onDoubleClick={resetAssistantWidth}
+            title="Drag to resize · double-click to reset"
+            className="absolute left-0 top-0 z-20 hidden h-full w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-indigo-200 lg:block"
+          />
           <AssistantPanel
             key={selectedAgent?.id ?? 'none'}
             agent={selectedAgent}
