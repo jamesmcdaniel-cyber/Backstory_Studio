@@ -36,8 +36,14 @@ function toolOutputHint(schema: unknown): string {
   return fields.map((field) => `${field.name}:${field.type}`).join(', ')
 }
 
+const requestSchema = z.object({
+  description: z.string().min(1),
+  currentGraph: z.unknown().optional(),
+  issues: z.array(z.string()).max(50).optional(),
+})
+
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  const { description } = z.object({ description: z.string().min(1) }).parse(await request.json())
+  const { description, currentGraph, issues } = requestSchema.parse(await request.json())
   const [agents, toolCatalog] = await Promise.all([
     prisma.agentTask.findMany({
       where: { organizationId: auth.organizationId, status: 'ACTIVE', ...agentVisibilityScope(auth.dbUser.id) },
@@ -73,13 +79,28 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     'Use data references only when needed: {{trigger.input}}, {{step.<nodeId>.output}}, {{step.<nodeId>.output.field}}, {{item}}, {{item.field}}, {{loop.index}}. ' +
     'For loops, data.over should point at a list and data.body should contain nested node ids. For condition/filter, use data.clauses with left/op/right. ' +
     'Edges connect node ids; condition edges use branch "true"/"false"; switch edges use case ids or "default".'
-  const user = [
-    `Build a flow that: ${description}`,
-    '',
+  const contextBlock = [
     `Agents:\n${roster.map((entry) => `- ${entry.name} (id: ${entry.id})`).join('\n') || '- None available'}`,
     '',
     `Tools:\n${tools.map((tool) => `- ${tool.connectionName}: ${tool.name} (connectionId: ${tool.connectionId})${tool.inputHint ? ` args: ${tool.inputHint}` : ''}${tool.outputHint ? ` outputs: ${tool.outputHint}` : ''}${tool.description ? ` — ${tool.description}` : ''}`).join('\n') || '- None available'}`,
   ].join('\n')
+
+  // REPAIR MODE: an existing graph plus checker issues to fix in place, rather
+  // than describing a brand-new flow. Falls back to generate mode when the
+  // graph is missing/invalid or no issues were supplied.
+  const parsedCurrentGraph = currentGraph !== undefined ? flowGraphSchema.safeParse(currentGraph) : undefined
+  const isRepairMode = Boolean(parsedCurrentGraph?.success && issues?.length)
+
+  const user = isRepairMode
+    ? [
+        `Current flow graph JSON:\n${JSON.stringify(parsedCurrentGraph!.data)}`,
+        '',
+        `This existing flow has these validation problems:\n${issues!.map((issue) => `- ${issue}`).join('\n')}`,
+        'Return the SAME flow with the minimal changes needed to fix every problem. Keep node ids, structure, and configured values wherever possible; do not redesign the flow.',
+        '',
+        contextBlock,
+      ].join('\n')
+    : [`Build a flow that: ${description}`, '', contextBlock].join('\n')
 
   try {
     const validationContext = {

@@ -167,6 +167,7 @@ export default function FlowBuilder() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
+  const [fixing, setFixing] = useState(false)
   const [mode, setMode] = useState<'build' | 'test'>('build')
   // Copilot is the workflow-building assistant — open by default so it's always
   // there; the top-bar toggle can still hide it.
@@ -449,6 +450,36 @@ export default function FlowBuilder() {
     }
   }, [id, save, pollRuns, testInput, validation, inputFields])
 
+  const fixWithCopilot = useCallback(async () => {
+    setFixing(true)
+    try {
+      const response = await fetch('/api/flows/copilot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: 'Fix the validation problems in this flow.',
+          currentGraph: graph,
+          issues: [...validation.errors, ...validation.warnings].map((issue) => issue.message),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data.success && data.graph) {
+        commitGraph(data.graph)
+        setSelectedId(null)
+        const remainingErrors = data.validation?.errors?.length ?? 0
+        if (remainingErrors) {
+          toast.warning(`Copilot applied fixes — ${remainingErrors} check${remainingErrors === 1 ? '' : 's'} still need attention.`)
+        } else {
+          toast.success('Copilot applied fixes — review the changes.')
+        }
+      } else {
+        toast.error(data.error || 'Could not fix the flow.')
+      }
+    } finally {
+      setFixing(false)
+    }
+  }, [graph, validation, commitGraph])
+
   const duplicateFlow = useCallback(async () => {
     const flowName = name.trim() || 'Untitled flow'
     const response = await fetch('/api/flows', {
@@ -674,6 +705,9 @@ export default function FlowBuilder() {
                 {validation.issues.length > 4 && <span>{validation.issues.length - 4} more checks need attention.</span>}
               </div>
             </div>
+            <Button variant="outline" size="sm" className="shrink-0" onClick={fixWithCopilot} loading={fixing} disabled={fixing}>
+              <Sparkles className="mr-1.5 h-4 w-4" /> Fix with Copilot
+            </Button>
           </div>
         </div>
       )}
