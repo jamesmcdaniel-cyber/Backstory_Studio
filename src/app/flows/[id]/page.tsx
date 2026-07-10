@@ -213,6 +213,9 @@ function FlowBuilder() {
   // Serialized snapshot of the last-saved state, for the unsaved-changes dot.
   const [savedSnapshot, setSavedSnapshot] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Run the user explicitly picked (dropdown or ?run= deep-link). While set,
+  // the poll tick refreshes that run's details instead of stealing selection.
+  const pinnedRunId = useRef<string | null>(null)
   const dirty = savedSnapshot !== '' && JSON.stringify({ name, description, graph, status }) !== savedSnapshot
 
   useEffect(() => {
@@ -270,7 +273,10 @@ function FlowBuilder() {
         if (!data?.runs) return
         setRuns(data.runs.map((r: { id: string; status: string; startedAt?: string }) => ({ id: r.id, status: r.status, startedAt: r.startedAt })))
         const found = (data.runs as FlowRunDetail[]).find((r) => r.id === runId)
-        if (found) setSelectedRun(found)
+        if (found) {
+          pinnedRunId.current = found.id
+          setSelectedRun(found)
+        }
       })
       .catch(() => undefined)
   }, [id, searchParams])
@@ -507,14 +513,22 @@ function FlowBuilder() {
   const pollRuns = useCallback(() => {
     const tick = async () => {
       const data = await fetch(`/api/flows/${id}/runs`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
-      if (data?.runs) setRuns(data.runs.map((r: { id: string; status: string; startedAt?: string }) => ({ id: r.id, status: r.status, startedAt: r.startedAt })))
+      const allRuns = data?.runs as FlowRunDetail[] | undefined
+      if (allRuns) setRuns(allRuns.map((r) => ({ id: r.id, status: r.status, startedAt: r.startedAt })))
       const latest = data?.latest as FlowRunDetail | null
       if (!latest) return
-      setSelectedRun(latest)
+      // Respect a pinned run: refresh its details (so a waiting banner clears
+      // when it resumes) instead of stealing selection back to the latest run.
+      const pinned = pinnedRunId.current && pinnedRunId.current !== latest.id
+        ? allRuns?.find((r) => r.id === pinnedRunId.current) ?? null
+        : null
+      const target = pinned ?? latest
+      setSelectedRun(target)
       const map: Record<string, StepStatus> = {}
-      for (const step of latest.steps as { nodeId: string; status: StepStatus }[]) map[step.nodeId] = step.status
+      for (const step of target.steps as { nodeId: string; status: StepStatus }[]) map[step.nodeId] = step.status
       setStatusByNode(map)
-      if (['succeeded', 'failed'].includes(latest.status) && pollRef.current) {
+      const done = (r: FlowRunDetail) => ['succeeded', 'failed'].includes(r.status)
+      if (done(latest) && (!pinned || done(pinned)) && pollRef.current) {
         clearInterval(pollRef.current)
         pollRef.current = null
       }
@@ -526,6 +540,7 @@ function FlowBuilder() {
 
   const selectRun = useCallback(
     async (runId: string) => {
+      pinnedRunId.current = runId
       const data = await fetch(`/api/flows/${id}/runs`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null)
       const found = (data?.runs as FlowRunDetail[] | undefined)?.find((r) => r.id === runId)
       if (found) setSelectedRun(found)
@@ -536,7 +551,6 @@ function FlowBuilder() {
   // Answer a paused run's agent question — the execute route resumes it.
   const replyToRun = useCallback(
     async (flowRunId: string, reply: string) => {
-      pollRuns()
       const response = await fetch(`/api/flows/${id}/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -607,6 +621,8 @@ function FlowBuilder() {
     setRunning(true)
     setShowRuns(true)
     setStatusByNode({})
+    // A fresh run should be followed — drop any pin on an older run.
+    pinnedRunId.current = null
     try {
       if (!(await save())) return
       pollRuns()
