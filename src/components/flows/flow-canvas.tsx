@@ -212,6 +212,8 @@ export function FlowCanvas({
         return node.data.label || 'Variable'
       case 'data':
         return node.data.label || 'Data operation'
+      case 'humanReview':
+        return node.data.label || 'Request information'
     }
   }
 

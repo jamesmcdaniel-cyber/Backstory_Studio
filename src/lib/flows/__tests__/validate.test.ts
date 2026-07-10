@@ -400,3 +400,34 @@ test('validateFlowGraph requires clauses on filter array and fields on select', 
   assert.ok(result.errors.some((issue) => issue.code === 'EMPTY_DATA_FIELDS' && issue.nodeId === 'd2'))
   assert.ok(result.errors.some((issue) => issue.code === 'MISSING_DATA_FIELD_NAME' && issue.nodeId === 'd3'))
 })
+
+test('validateFlowGraph requires a reviewer message on humanReview steps', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'hr', type: 'humanReview', data: { message: '   ' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'hr' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(
+    result.errors.some(
+      (issue) =>
+        issue.code === 'MISSING_REVIEW_MESSAGE' &&
+        issue.nodeId === 'hr' &&
+        issue.message === 'Request information needs a message for the reviewer.',
+    ),
+  )
+})
+
+test('validateFlowGraph accepts a humanReview step with a message and optional assignee', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'hr', type: 'humanReview', data: { message: 'What segment should we target?', assigneeUserId: 'user-1' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'hr' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.deepEqual(result.errors, [])
+})

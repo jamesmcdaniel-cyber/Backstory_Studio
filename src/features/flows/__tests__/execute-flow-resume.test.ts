@@ -124,4 +124,44 @@ if (TEST_DB) {
     assert.equal(rejected.length, 1)
     assert.equal((rejected[0] as PromiseRejectedResult).reason.code, 'FLOW_RUN_NOT_WAITING')
   })
+
+  test('a humanReview step pauses the run, notifies the owner, and the reply becomes its output on resume', async () => {
+    const graph = {
+      nodes: [
+        ...emptyGraph.nodes,
+        { id: 'hr', type: 'humanReview', position: { x: 0, y: 0 }, data: { message: 'What segment should we target?' } },
+      ],
+      edges: [{ id: 'e-hr', source: 'trigger', target: 'hr' }],
+    }
+    const flow = await prisma.flow.create({
+      data: { name: 'request-info', organizationId: ids.org, status: 'ACTIVE', graph, publishedGraph: graph },
+    })
+    const paused = await runFlowExecution({ flowId: flow.id, organizationId: ids.org, userId: ids.user, input: 'go' })
+    assert.equal(paused.status, 'waiting')
+
+    // The waiting row is interpreter-persisted with the WS8 'input' shape and,
+    // unlike an agent pause, has NO agentExecutionId — the flow reply path
+    // (execute route -> runFlowExecution) targets the node via this row alone.
+    const steps: any[] = await prisma.flowRunStep.findMany({ where: { flowRunId: paused.flowRunId }, orderBy: { order: 'asc' } })
+    const waitingRow = steps.find((step) => step.nodeId === 'hr' && step.status === 'waiting')
+    assert.ok(waitingRow, 'the humanReview pause must persist a waiting step row')
+    assert.equal(waitingRow.agentExecutionId, null)
+    assert.deepEqual(waitingRow.output, { waiting: { kind: 'input', question: 'What segment should we target?' } })
+
+    // No assignee configured -> the run owner is notified.
+    const note = await prisma.notification.findFirst({ where: { organizationId: ids.org, type: 'flow.needs_input' } })
+    assert.ok(note, 'the pause must create a flow.needs_input notification')
+    assert.equal(note.userId, ids.user)
+    assert.equal(note.level, 'action')
+
+    const resumed = await runFlowExecution({ flowId: flow.id, organizationId: ids.org, userId: ids.user, flowRunId: paused.flowRunId, reply: 'Mid-market' })
+    assert.equal(resumed.status, 'succeeded')
+    assert.equal(resumed.output, 'Mid-market')
+    const after3: any[] = await prisma.flowRunStep.findMany({ where: { flowRunId: paused.flowRunId }, orderBy: { order: 'asc' } })
+    const finished = after3.filter((step) => step.nodeId === 'hr').at(-1)
+    assert.equal(finished.status, 'succeeded')
+    assert.equal(finished.output, 'Mid-market')
+    // The original waiting row was resolved by the resume, never left dangling.
+    assert.ok(!after3.some((step) => step.status === 'waiting'))
+  })
 }

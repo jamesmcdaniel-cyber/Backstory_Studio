@@ -1182,3 +1182,56 @@ test('data compose passes trigger input structure through to later steps', async
   assert.equal(result.status, 'succeeded')
   assert.equal(result.output, 'name=Acme')
 })
+
+test('humanReview pauses the flow with a resolved templated message', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}' } },
+      { id: 'hr', type: 'humanReview', data: { message: 'Confirm the plan for {{step.n1.output}}' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'a2', input: 'never runs' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'hr' },
+      { id: 'e2', source: 'hr', target: 'n2' },
+    ],
+  }
+  const result = await interpretFlow(graph, 'x', { runAgent: stub({ a1: 'Acme' }) })
+  assert.equal(result.status, 'waiting')
+  assert.equal(result.waiting?.nodeId, 'hr')
+  assert.equal(result.waiting?.question, 'Confirm the plan for Acme')
+  const hr = result.steps.find((step) => step.nodeId === 'hr')
+  assert.equal(hr?.status, 'waiting')
+  // The pause reason rides on the outcome so execute-flow's onStep persistence
+  // stores the same waiting shape the agent adapter writes (kind 'input').
+  assert.deepEqual(hr?.output, { waiting: { kind: 'input', question: 'Confirm the plan for Acme' } })
+  assert.ok(!result.steps.some((step) => step.nodeId === 'n2'))
+})
+
+test('humanReview resume turns the reply into the step output for downstream steps', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}' } },
+      { id: 'hr', type: 'humanReview', data: { message: 'Confirm the plan for {{step.n1.output}}' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'a2', input: 'got {{step.hr.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'hr' },
+      { id: 'e2', source: 'hr', target: 'n2' },
+    ],
+  }
+  const result = await interpretFlow(graph, 'x', {
+    runAgent: stub({}),
+    completed: { n1: 'Acme' },
+    resumeNodeId: 'hr',
+    resumeReply: 'Approved by Jane',
+  })
+  assert.equal(result.status, 'succeeded')
+  const hr = result.steps.find((step) => step.nodeId === 'hr')
+  assert.equal(hr?.status, 'succeeded')
+  assert.equal(hr?.output, 'Approved by Jane')
+  assert.equal(result.output, 'ran:got Approved by Jane')
+})

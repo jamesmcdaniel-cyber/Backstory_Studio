@@ -210,8 +210,23 @@ const dataNode = z.object({
   }),
 })
 
+// MS-parity "Request information" (human review): a first-class pause with no
+// agent involved. The flow stops, asks `message` (templated) of a person, and
+// the reply becomes this step's output. `assigneeUserId` routes the
+// needs-input notification; unset means the run's owner is asked.
+const humanReviewNode = z.object({
+  id: z.string(),
+  type: z.literal('humanReview'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    message: z.string(),
+    assigneeUserId: z.string().optional(),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

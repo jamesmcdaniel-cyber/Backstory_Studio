@@ -38,6 +38,11 @@ type Opts = {
   // was paused and should re-run with the user's reply injected.
   completed?: Record<string, unknown>
   resumeNodeId?: string
+  // The user's reply for the resuming node. Agent steps receive the reply
+  // inside their adapter (execute-flow re-enters the paused execution with
+  // it); a humanReview step has no adapter, so the interpreter itself turns
+  // this reply into the resuming step's output.
+  resumeReply?: string
 }
 
 // Result of executing a single node — an output, or a control signal that
@@ -347,6 +352,24 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'condition' || node.type === 'switch') {
       // Conditions/switches route on the main chain; inside a body they can't branch.
       return { kind: 'skip' }
+    }
+
+    if (node.type === 'humanReview') {
+      // Request information: a first-class pause with no agent involved.
+      // Resuming this exact node? The reviewer's reply IS the step output.
+      if (opts.resumeNodeId === node.id) {
+        const output = opts.resumeReply ?? ''
+        ctx.step[node.id] = { output }
+        emit({ nodeId: node.id, status: 'succeeded', output })
+        return { kind: 'ok', output }
+      }
+      // First visit: resolve the message and pause the run. The outcome carries
+      // the same `{ waiting: { kind: 'input', question } }` shape the agent
+      // adapter persists, so execute-flow's onStep path can store it verbatim
+      // and the existing reply machinery renders/answers it unchanged.
+      const question = resolveTemplate(node.data.message, ctx)
+      emit({ nodeId: node.id, status: 'waiting', output: { waiting: { kind: 'input', question } } })
+      return { kind: 'pause', nodeId: node.id, question }
     }
 
     if (node.type === 'transform') {

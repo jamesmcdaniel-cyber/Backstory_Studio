@@ -77,6 +77,8 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   variable: SlidersHorizontal,
   // Placeholder pending Task 4's dedicated Data operations treatment.
   data: SlidersHorizontal,
+  // Placeholder pending Task 4's dedicated Request information treatment.
+  humanReview: Mail,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -93,6 +95,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   switch: 'bg-fuchsia-600 text-white',
   variable: 'bg-purple-600 text-white',
   data: 'bg-violet-600 text-white',
+  humanReview: 'bg-teal-600 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {

@@ -67,6 +67,8 @@ function nodeLabel(node: FlowNode | undefined) {
           return 'Select'
       }
       break
+    case 'humanReview':
+      return 'Request information'
     case 'variable':
       switch (node.data.op) {
         case 'initialize':
@@ -447,6 +449,12 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         }
       }
     }
+    if (node.type === 'humanReview') {
+      if (!node.data.message.trim()) {
+        add(issues, 'error', 'MISSING_REVIEW_MESSAGE', `${nodeLabel(node)} needs a message for the reviewer.`, node.id)
+      }
+    }
+
     if (node.type === 'data') {
       if (!node.data.input?.trim()) {
         add(issues, 'error', 'MISSING_DATA_INPUT', `${nodeLabel(node)} needs data to work with.`, node.id)

@@ -505,7 +505,7 @@ export async function runFlowExecution(
     runAgent,
     runAction,
     onStep,
-    ...(resuming ? { completed, resumeNodeId } : {}),
+    ...(resuming ? { completed, resumeNodeId, resumeReply: job.reply } : {}),
   })
   await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'
@@ -516,6 +516,27 @@ export async function runFlowExecution(
     where: { id: run.id },
     data: { status, output: jsonValue(result.output), error: runError, finishedAt: status === 'waiting' ? null : new Date() },
   })
+  // A humanReview ("Request information") pause has no adapter: its waiting
+  // FlowRunStep row was persisted by the interpreter's onStep path (the
+  // outcome carries `{ waiting: { kind: 'input', question } }`), so the only
+  // side effect owed here is telling the assignee — or the run owner when no
+  // assignee is set — that the flow is waiting on them. Mirrors the
+  // flow.needs_approval notify above; notify never throws into the run.
+  if (status === 'waiting' && result.waiting) {
+    const waitingNode = graph.nodes.find((node) => node.id === result.waiting?.nodeId)
+    if (waitingNode?.type === 'humanReview') {
+      await notify({
+        organizationId: job.organizationId,
+        userId: waitingNode.data.assigneeUserId?.trim() || run.userId || job.userId,
+        type: 'flow.needs_input',
+        level: 'action',
+        title: `Flow "${flow.name}" needs information`,
+        body: result.waiting.question ? `${result.waiting.question} (run ${run.id})` : `Reply to continue the flow (run ${run.id})`,
+        executionId: flow.id,
+        link: `/flows/${flow.id}/activity`,
+      })
+    }
+  }
   if (status === 'failed') {
     // Sweep phantom 'running' rows: a timed-out agent step's adapter promise
     // was abandoned by the interpreter, so its FlowRunStep would stay stuck
