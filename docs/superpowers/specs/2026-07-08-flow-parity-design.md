@@ -280,6 +280,21 @@ User report: a manually-run flow paused `waiting`; the Activity page showed only
 - **Reply from Activity:** waiting run rows surface the question inline with the same reply box, and every run row links back to the builder (`/flows/[id]?run=<runId>` opens the Runs panel).
 - Copy stays plain-English (no token syntax, no internal status strings).
 
+## 9. Flow execution & connectivity parity (added 2026-07-09, user live-testing feedback + investigation)
+
+User reports: "the flow doesn't execute as well as the agents do"; "it doesn't show what it's doing"; "users should only enter input/credentials once — the flow should keep executing with the last successful inputs until edited"; "the flow must execute HTTP requests and wire the necessary credentials"; "where are all the Klavis, MCP, and Nango integration options?" Investigation (ledger 2026-07-09) traced the root causes.
+
+- **Connector catalog parity:** the flow tool catalog and picker draw from the SAME five tool planes agents use (People.ai, Klavis, MCP, native, Nango via `buildToolRegistry`) instead of `mcpConnection` only; tool steps execute through the same registry dispatch as agent tool calls (approval gates included).
+- **HTTP credential wiring:** the HTTP step gains an optional connection picker; at execution the connection's fresh token is injected as the Authorization header (tokens never stored in the graph or logs).
+- **Input memory:** the builder's test input prefills from the last successful run; a manual/scheduled run missing required inputs falls back to the last successful run's input (until the flow is edited — compare graph version); resuming a waiting run reloads the run's ORIGINAL input so `Run input` tokens resolve correctly downstream.
+- **Live step visibility:** `agentExecutionId` is written when an agent step STARTS; the runs API returns it; the Runs panel streams the agent's real process feed (existing executions events API) under the running step instead of the fake typewriter.
+- **Robustness:** per-step timeout no longer races/spawns duplicate concurrent agent executions; a cron-tick reaper fails FlowRuns stuck `running` past the execution budget; stale `waiting` runs (>24h) stop blocking the schedule overlap guard.
+- **Reply coherence:** replying in the agent activity pane to a flow-owned execution resumes the FLOW run (not just the agent execution), so the flow never strands.
+
+## 10. Step config parity — variables, data operations, human review (added 2026-07-09, user screenshots)
+
+Reference: `docs/superpowers/specs/references/2026-07-09-ms-config-settings.md`. New step families to reach MS Agent flows parity: Variables (initialize/set/increment/decrement/append with typed symbol table), Data operations (compose, parse JSON with schema-from-sample, join, CSV/HTML table, filter array, select), Human review (request information = first-class pause step; multistage approval later). Scoped and planned separately after WS9.
+
 ## Out of scope
 
 - React Flow / canvas replatform
