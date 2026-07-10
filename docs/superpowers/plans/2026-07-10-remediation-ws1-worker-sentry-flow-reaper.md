@@ -8,7 +8,9 @@
 
 **Tech Stack:** TypeScript, Prisma, node:test (`tsx --test`), @sentry/nextjs (dynamic import), Vercel cron dispatch route.
 
-**Supersession note:** This plan implements the *reaper* and *stale-waiting scheduling* behaviors of WS9 Task 5 (`docs/superpowers/plans/2026-07-10-flow-execution-parity.md`). The *timeout-race* behavior of WS9 Task 5 is NOT covered here — it moves to Remediation WS-R2 (flow durability parity). Task 4 of this plan annotates the WS9 plan file accordingly.
+**Supersession note:** This plan implements the *reaper* behavior of WS9 Task 5 (`docs/superpowers/plans/2026-07-10-flow-execution-parity.md`). The *timeout-race* behavior of WS9 Task 5 is NOT covered here — it moves to Remediation WS-R2 (flow durability parity). The WS9 plan file is annotated accordingly.
+
+**Task 3 status: SKIPPED (2026-07-10).** During execution, a concurrent Claude Code session was found already implementing the stale-waiting-scheduling behavior directly in WS9 (as `src/lib/flows/schedule-blocking.ts` / `blocksSchedule`, wired into the same cron dispatch route this plan's Task 2 also touches). To avoid two competing implementations landing in the same file, the user chose to drop Task 3 from this workstream and let WS9 own that behavior end-to-end. Task 3's steps below are retained for the record but were not executed; do not implement them if this plan is ever resumed — check WS9's status first.
 
 ## Global Constraints
 
@@ -521,13 +523,7 @@ git commit -m "fix(flows): waiting runs older than 24h stop blocking their sched
 
 **Interfaces:** none — documentation and verification only.
 
-- [ ] **Step 1: Annotate WS9 Task 5**
-
-In `docs/superpowers/plans/2026-07-10-flow-execution-parity.md`, at the top of the `### Task 5` section body, insert:
-
-```markdown
-> **Supersession (2026-07-10):** The *reaper* and *stale-waiting scheduling* behaviors shipped in Remediation WS-R1 (`2026-07-10-remediation-ws1-worker-sentry-flow-reaper.md`) — see `src/lib/flows/reap.ts`. Only the *timeout race* behavior remains for this task (or Remediation WS-R2, whichever executes first).
-```
+- [x] **Step 1: Annotate WS9 Task 5** — done ahead of this step, corrected for the Task 3 skip: the WS9 plan file's Task 5 now notes only the *reaper* was superseded by WS-R1; *timeout race* and *stale-waiting scheduling* remain WS9's own scope (the latter already in flight in the concurrent session as `schedule-blocking.ts`).
 
 - [ ] **Step 2: Update ARCHITECTURE.md**
 

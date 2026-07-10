@@ -7,6 +7,8 @@ There are two runtimes:
 1. **Next.js**: pages, authentication, CRUD APIs, integration management, execution inspection, and external trigger endpoints.
 2. **Worker**: one Fastify process with BullMQ consumers for manual, scheduled, webhook-triggered, and resumed agent runs.
 
+Both runtimes report errors through `src/lib/observability/sentry.ts`; the worker initializes it at boot (tagged `process: worker`) and flushes on shutdown.
+
 Pipedream owns embedded account connections; Klavis owns agent-facing MCP tool servers. Model access goes through `src/lib/llm/model-runner.ts`, which routes `claude-*` models to the Anthropic SDK and everything else to OpenAI, and falls back to whichever provider's key is configured so a run never hard-fails on a missing vendor. Defaults are OpenAI: the agent model is `AGENT_MODEL` (default `gpt-4o`) and cheap surfaces (run Q&A, activity headlines, the natural-language agent builder) use `SUMMARY_MODEL` (default `gpt-4o-mini`). Set a `claude-*` model plus `ANTHROPIC_API_KEY` to use Anthropic.
 
 ## Agent Execution
