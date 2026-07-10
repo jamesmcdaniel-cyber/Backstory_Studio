@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 
 const templateSchema = z.object({
@@ -736,7 +736,8 @@ const builtInTemplates = [
 export const GET = withAuthenticatedApi(async (request, auth) => {
   // Community templates are a PUBLIC library: readable by every workspace,
   // writable only by the creator's org (PUT/DELETE below stay org-scoped).
-  const stored = await prisma.agentTemplate.findMany({
+  // systemPrisma: cross-org read by design — same exemption as /api/skills GET.
+  const stored = await systemPrisma.agentTemplate.findMany({
     where: { isActive: true },
     orderBy: { updatedAt: 'desc' },
     take: 500,
@@ -782,7 +783,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   if (!existing) throw new ApiError('Template not found', 404, 'NOT_FOUND')
   const config = (existing.configuration && typeof existing.configuration === 'object' ? existing.configuration : {}) as any
   const template = await prisma.agentTemplate.update({
-    where: { id: body.id },
+    where: { id: body.id, organizationId: auth.organizationId },
     data: {
       ...(body.name !== undefined && { name: body.name }),
       ...(body.description !== undefined && { description: body.description }),

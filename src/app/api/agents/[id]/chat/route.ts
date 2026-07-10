@@ -136,7 +136,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   let sessionId: string | null = requested
   if (!sessionId) {
     const latest = await prisma.agentChatSession.findFirst({
-      where: { agentTaskId: agentId, userId: auth.dbUser.id },
+      where: { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id },
       orderBy: { updatedAt: 'desc' },
       select: { id: true },
     })
@@ -144,7 +144,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
       sessionId = latest.id
     } else {
       const legacyCount = await prisma.agentChatMessage.count({
-        where: { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
+        where: { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
       })
       sessionId = legacyCount > 0 ? LEGACY_SESSION_ID : null
     }
@@ -155,8 +155,8 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     rows = await prisma.agentChatMessage.findMany({
       where:
         sessionId === LEGACY_SESSION_ID
-          ? { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null }
-          : { agentTaskId: agentId, userId: auth.dbUser.id, sessionId },
+          ? { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null }
+          : { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id, sessionId },
       // Secondary id sort keeps user/assistant pairs stable when both rows land
       // in the same millisecond (cuids are creation-ordered within a process).
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -187,7 +187,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   let session =
     requestedSessionId && requestedSessionId !== LEGACY_SESSION_ID
       ? await prisma.agentChatSession.findFirst({
-          where: { id: requestedSessionId, agentTaskId: agentId, userId: auth.dbUser.id },
+          where: { id: requestedSessionId, organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id },
         })
       : null
   if (!session) {
@@ -204,7 +204,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const [context, historyRows] = await Promise.all([
     buildAssistantContext(agent, message, auth.dbUser.id),
     prisma.agentChatMessage.findMany({
-      where: { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: session.id },
+      where: { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id, sessionId: session.id },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 20,
     }),
@@ -283,7 +283,7 @@ export const PATCH = withAuthenticatedApi(async (request, auth) => {
   await requireAgent(agentId, auth)
 
   const row = await prisma.agentChatMessage.findFirst({
-    where: { id: messageId, agentTaskId: agentId, userId: auth.dbUser.id },
+    where: { id: messageId, organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id },
   })
   if (!row) throw new ApiError('Message not found', 404, 'NOT_FOUND')
   const metadata =
@@ -291,7 +291,7 @@ export const PATCH = withAuthenticatedApi(async (request, auth) => {
       ? (row.metadata as Record<string, unknown>)
       : {}
   const updated = await prisma.agentChatMessage.update({
-    where: { id: row.id },
+    where: { id: row.id, organizationId: auth.organizationId },
     data: { metadata: { ...metadata, appliedAt: new Date().toISOString() } as unknown as Prisma.InputJsonValue },
   })
   return { success: true, message: serializeMessage(updated) }

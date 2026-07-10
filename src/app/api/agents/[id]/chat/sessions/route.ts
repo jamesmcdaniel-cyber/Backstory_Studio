@@ -14,7 +14,7 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   await requireAgent(agentId, auth)
 
   const sessions = await prisma.agentChatSession.findMany({
-    where: { agentTaskId: agentId, userId: auth.dbUser.id },
+    where: { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id },
     orderBy: { updatedAt: 'desc' },
     take: 50,
     include: { _count: { select: { messages: true } } },
@@ -32,11 +32,11 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   // Legacy flat thread → one read-only synthetic session, ordered by its most
   // recent message so it sorts naturally among real sessions.
   const legacyCount = await prisma.agentChatMessage.count({
-    where: { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
+    where: { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
   })
   if (legacyCount > 0) {
     const latest = await prisma.agentChatMessage.findFirst({
-      where: { agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
+      where: { organizationId: auth.organizationId, agentTaskId: agentId, userId: auth.dbUser.id, sessionId: null },
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     })
