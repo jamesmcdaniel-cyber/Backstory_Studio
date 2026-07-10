@@ -1141,6 +1141,19 @@ function HttpBody({
           ariaLabel="Body"
         />
       </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>Cookie</label>
+        <TokenTextEditor
+          ref={registerEditor('http.cookie')}
+          value={node.data.cookie ?? ''}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('http.cookie')}
+          onChange={(cookie) => update({ ...node, data: { ...node.data, cookie: cookie || undefined } })}
+          className={tokenControlClass}
+          placeholder="name=value; other=value"
+          ariaLabel="Cookie"
+        />
+      </div>
       <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )

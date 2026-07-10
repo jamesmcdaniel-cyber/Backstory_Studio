@@ -112,6 +112,7 @@ const httpNode = z.object({
     query: z.string().optional(),
     headers: z.string().optional(),
     body: z.string().optional(),
+    cookie: z.string().optional(),
     bodyMode: z.enum(['json', 'text', 'none']).optional(),
     responseType: z.enum(['auto', 'json', 'text']).optional(),
     failOnHttpError: z.boolean().optional(),

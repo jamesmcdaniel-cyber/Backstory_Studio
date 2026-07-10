@@ -10,6 +10,7 @@ export type FlowHttpConfig = {
   failOnHttpError?: unknown
   retries?: unknown
   timeoutMs?: unknown
+  cookie?: unknown
 }
 
 export type FlowHttpOutput = {
@@ -107,6 +108,11 @@ export function prepareHttpRequest(config: FlowHttpConfig): { url: string; init:
   const method = String(config.method || 'POST').toUpperCase()
   const url = queryUrl(String(config.url || ''), config.query)
   const headers = headersFrom(config.headers)
+  // The Cookie field is a convenience for the common single-header case; an
+  // explicit Cookie among `headers` always wins.
+  if (typeof config.cookie === 'string' && config.cookie.trim() !== '' && !Object.keys(headers).some((key) => key.toLowerCase() === 'cookie')) {
+    headers.cookie = config.cookie
+  }
   const mode = explicitBodyMode(config.bodyMode) ?? inferBodyMode(config.body)
   const bodyAllowed = BODY_METHODS.has(method)
   let body: string | undefined

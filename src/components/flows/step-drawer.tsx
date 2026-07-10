@@ -742,6 +742,20 @@ export function StepDrawer({
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
             </div>
+            <div>
+              <label className={labelClass}>Cookie</label>
+              <TokenTextEditor
+                ref={registerEditor('http.cookie')}
+                className="min-w-0 flex-1 px-2 py-1.5"
+                value={node.data.cookie ?? ''}
+                labelCtx={labelCtx}
+                placeholder="name=value; other=value"
+                onFocus={focusEditor('http.cookie')}
+                onChange={(cookie) => onChange({ ...node, data: { ...node.data, cookie: cookie || undefined } })}
+                ariaLabel="Cookie"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">Sent as the request&apos;s Cookie header. An explicit Cookie among Headers takes precedence.</p>
+            </div>
             <AdvancedParamsSection node={node} onChange={onChange} defaultOpen />
             <p className="text-xs text-muted-foreground">Calls a public HTTPS URL. Output includes status, headers, parsed body, and raw bodyText. Retries re-send the request.</p>
           </div>

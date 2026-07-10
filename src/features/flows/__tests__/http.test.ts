@@ -17,6 +17,27 @@ test('prepareHttpRequest appends query params and sends JSON bodies', () => {
   assert.equal(request.init.body, '{"account":"Acme"}')
 })
 
+test('prepareHttpRequest sends a Cookie header from the cookie field', () => {
+  const request = prepareHttpRequest({
+    method: 'GET',
+    url: 'https://api.example.com/me',
+    cookie: 'session=abc; theme=dark',
+  })
+  assert.equal((request.init.headers as Record<string, string>).cookie, 'session=abc; theme=dark')
+})
+
+test('an explicit Cookie header wins over the cookie field', () => {
+  const request = prepareHttpRequest({
+    method: 'GET',
+    url: 'https://api.example.com/me',
+    headers: { Cookie: 'from=header' },
+    cookie: 'from=field',
+  })
+  const headers = request.init.headers as Record<string, string>
+  const cookieVals = Object.entries(headers).filter(([k]) => k.toLowerCase() === 'cookie').map(([, v]) => v)
+  assert.deepEqual(cookieVals, ['from=header'])
+})
+
 test('prepareHttpRequest omits body for GET and supports text body mode', () => {
   const get = prepareHttpRequest({ method: 'GET', url: 'https://api.example.com/search', body: '{"ignored":true}', bodyMode: 'json' })
   assert.equal(get.init.body, undefined)
