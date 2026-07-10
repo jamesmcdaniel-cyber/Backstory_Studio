@@ -61,6 +61,10 @@ const itemContext = (item: unknown, ctx?: FlowContext): FlowContext => ({
   trigger: ctx?.trigger ?? { input: undefined },
   step: ctx?.step ?? {},
   ...(ctx?.variables ? { variables: ctx.variables } : {}),
+  // Keep the enclosing loop's counters reachable — a data op inside a loop
+  // body may reference {{loop.index}} even though {{item}} is shadowed by
+  // the array item being filtered/mapped.
+  ...(ctx?.loop ? { loop: ctx.loop } : {}),
   item,
 })
 
