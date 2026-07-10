@@ -20,6 +20,7 @@ import {
   Plus,
   Search,
   Server,
+  ShieldCheck,
   Trash2,
   Workflow,
 } from 'lucide-react'
@@ -90,6 +91,7 @@ const navigation = [
   { name: 'Home', href: '/dashboard', icon: Brain },
   { name: 'Integrations', href: '/integrations', icon: Plug },
   { name: 'Flows', href: '/flows', icon: Workflow },
+  { name: 'Approvals', href: '/approvals', icon: ShieldCheck },
   { name: 'Explore', href: '/templates', icon: FileText },
   { name: 'MCP Servers', href: '/connections', icon: Server },
 ]
