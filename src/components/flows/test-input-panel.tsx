@@ -70,7 +70,7 @@ export function TestInputPanel({
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Test input</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            These values are sent as <code className="font-mono">{'{{trigger.input}}'}</code> when you click Run.
+            These values are sent as the Run input when you click Run.
           </p>
         </div>
         <p className="rounded-full bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700">
