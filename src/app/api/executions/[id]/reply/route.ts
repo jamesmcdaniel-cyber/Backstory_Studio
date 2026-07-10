@@ -3,8 +3,11 @@ import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { runAgentExecution } from '@/features/agents/execute-agent'
+import { runFlowExecution } from '@/features/flows/execute-flow'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { executionVisibilityScope } from '@/lib/server/visibility'
+import { deriveRunWaiting } from '@/lib/flows/run-waiting'
+import { resolveReplyTarget, type ReplyTarget } from '@/lib/flows/reply-target'
 
 export const runtime = 'nodejs'
 export const maxDuration = 1200
@@ -18,6 +21,39 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     where: { id, organizationId: auth.organizationId, ...executionVisibilityScope(auth.dbUser.id) },
   })
   if (!execution) throw new ApiError('Execution not found', 404, 'NOT_FOUND')
+
+  // Cross-path coherence: if this execution is a FLOW's paused agent step,
+  // replying from the agent activity pane must resume the FLOW — resuming
+  // only the bare agent would leave the FlowRun stranded `waiting` forever.
+  // The most recent step row wins (a resume creates a NEW row for the re-run
+  // node with the same agentExecutionId). Org-scoped through the run.
+  const flowStep = await prisma.flowRunStep.findFirst({
+    where: { agentExecutionId: execution.id, run: { organizationId: auth.organizationId } },
+    orderBy: { startedAt: 'desc' },
+    include: { run: { select: { id: true, flowId: true, status: true, userId: true, trigger: true } } },
+  })
+  let target: ReplyTarget = 'agent'
+  if (flowStep) {
+    const steps = await prisma.flowRunStep.findMany({
+      where: { flowRunId: flowStep.flowRunId },
+      orderBy: { order: 'asc' },
+      select: { nodeId: true, status: true, output: true },
+    })
+    target = resolveReplyTarget(flowStep.run, flowStep, deriveRunWaiting(flowStep.run.status, steps))
+    // The reply endpoint never decides approvals — those resume only through
+    // the approvals route with an explicit approve/reject decision.
+    if (target === 'approval-block') {
+      throw new ApiError('This step is waiting for an approval decision.', 400, 'FLOW_RUN_AWAITING_APPROVAL')
+    }
+    // target 'agent' includes the swept-run case: an ABANDONED (timed-out)
+    // execution may later go waiting_for_input inside a run that already
+    // `failed` — falling through to the bare agent resume still lets the
+    // zombie finish and write memory, harmlessly.
+  }
+
+  // Checked AFTER the flow routing so a concurrent resume that already
+  // claimed the execution (execute-agent's atomic waiting_* -> running
+  // claim) makes this reply lose cleanly here instead of failing the run.
   if (execution.status !== 'waiting_for_input' || !execution.agentTaskId) {
     throw new ApiError('Execution is not waiting for input', 409, 'NOT_WAITING')
   }
@@ -25,6 +61,27 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   await prisma.executionMessage.create({
     data: { executionId: execution.id, role: 'user', content: message },
   })
+
+  if (target === 'flow' && flowStep) {
+    const run = flowStep.run
+    // Non-manual runs executed the published graph; resume against the same
+    // (mirrors the approvals route's derivation).
+    const triggerType = (run.trigger as { type?: string } | null)?.type
+    try {
+      const result = await runFlowExecution({
+        flowId: run.flowId,
+        organizationId: auth.organizationId,
+        userId: run.userId ?? auth.dbUser.id,
+        flowRunId: run.id,
+        reply: message,
+        usePublished: Boolean(triggerType && triggerType !== 'manual'),
+      })
+      return { success: true, executionId: execution.id, flowRunId: run.id, result }
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+      throw new ApiError('Flow resume failed', 500, 'RUN_FAILED')
+    }
+  }
 
   if (inlineExecution) {
     try {
