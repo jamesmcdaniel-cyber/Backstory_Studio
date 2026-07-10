@@ -513,8 +513,8 @@ function RowCard({
 }) {
   const Icon = row.icon
   return (
-    <div className="group relative flex min-h-[84px] items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-blue-300 hover:bg-blue-50">
-      <button type="button" onClick={row.onSelect} className="flex flex-1 items-start gap-3 text-left">
+    <div className="group relative flex min-h-[84px] min-w-0 items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-blue-300 hover:bg-blue-50">
+      <button type="button" onClick={row.onSelect} className="flex min-w-0 flex-1 items-start gap-3 text-left">
         {row.logo ? (
           <IntegrationLogo slug={row.logo.slug} name={row.logo.name} className="h-10 w-10 rounded-lg bg-white p-1 shadow-sm" />
         ) : Icon ? (
@@ -522,7 +522,7 @@ function RowCard({
             <Icon className="h-5 w-5" />
           </span>
         ) : null}
-        <span className="min-w-0 pr-5">
+        <span className="min-w-0 flex-1 pr-5">
           <span className="block truncate text-sm font-semibold text-slate-950">{row.label}</span>
           <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-slate-500">{row.description}</span>
         </span>
