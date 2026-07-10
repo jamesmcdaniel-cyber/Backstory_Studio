@@ -1,19 +1,30 @@
 import 'dotenv/config'
 import Fastify from 'fastify'
-import { Worker } from 'bullmq'
+import { Worker, type Processor } from 'bullmq'
 import { executeAgentJob } from '@/features/agents/execute-agent'
+import { executeFlowJob } from '@/features/flows/execute-flow'
 import { getRedisConnection, QUEUE_NAMES, workerConfig } from '@/lib/queue/config'
 import { deadLetterFromJob } from '@/lib/queue/dead-letter'
+import { deadLetterFromFlowJob } from '@/lib/queue/flow-dead-letter'
 import { registerAgentSchedules } from '@/lib/workers/agent-schedule-registrar'
 import { initSentry, captureError, flushErrorReporting } from '@/lib/observability/sentry'
 
 class WorkerRuntime {
   private server = Fastify({ logger: true })
   private scheduleTimer?: NodeJS.Timeout
-  private workers = [
-    new Worker(QUEUE_NAMES.AGENT_EXECUTION, executeAgentJob, { ...workerConfig, connection: getRedisConnection() }),
-    new Worker(QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION, executeAgentJob, { ...workerConfig, connection: getRedisConnection() }),
+  // handler is typed as the generic BullMQ Processor so this array (mixing
+  // the agent- and flow-job handler signatures) unifies to one element type —
+  // each queue is still wired to its own correctly-typed handler at runtime.
+  private workerSpecs: { queue: string; handler: Processor<any, any, string>; onFailed: (job: any, error: Error) => void }[] = [
+    { queue: QUEUE_NAMES.AGENT_EXECUTION, handler: executeAgentJob, onFailed: deadLetterFromJob(QUEUE_NAMES.AGENT_EXECUTION) },
+    { queue: QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION, handler: executeAgentJob, onFailed: deadLetterFromJob(QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION) },
+    // Flow execution: same worker pool, its own queue and dead-letter target
+    // (flowRun rows, not agentExecution rows) — see flow-dead-letter.ts.
+    { queue: QUEUE_NAMES.FLOW_EXECUTION, handler: executeFlowJob, onFailed: deadLetterFromFlowJob(QUEUE_NAMES.FLOW_EXECUTION) },
   ]
+  private workers = this.workerSpecs.map(
+    (spec) => new Worker(spec.queue, spec.handler, { ...workerConfig, connection: getRedisConnection() }),
+  )
 
   constructor() {
     // Real readiness: reflect that the workers are running AND Redis is
@@ -32,14 +43,14 @@ class WorkerRuntime {
       reply.code(healthy ? 200 : 503)
       return {
         status: healthy ? 'healthy' : 'unhealthy',
-        workers: { 'agent-execution': this.workers[0].isRunning(), 'scheduled-agent-execution': this.workers[1].isRunning() },
+        workers: Object.fromEntries(this.workerSpecs.map((spec, index) => [spec.queue, this.workers[index].isRunning()])),
         redis,
         uptime: process.uptime(),
       }
     })
-    // Failed jobs (single attempt — no side-effect replay) are dead-lettered.
-    const queues = [QUEUE_NAMES.AGENT_EXECUTION, QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION]
-    this.workers.forEach((worker, index) => worker.on('failed', deadLetterFromJob(queues[index])))
+    // Failed jobs are dead-lettered (durable, inspectable) — see workerSpecs
+    // above for the per-queue handler (agent vs. flow target different tables).
+    this.workers.forEach((worker, index) => worker.on('failed', this.workerSpecs[index].onFailed))
     this.setupShutdown()
   }
 

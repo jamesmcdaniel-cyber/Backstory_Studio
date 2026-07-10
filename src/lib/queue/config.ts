@@ -9,6 +9,8 @@ export const QUEUE_NAMES = {
   // durably inspectable (and re-runnable by an operator) instead of vanishing.
   // We do NOT auto-retry: agent runs have external side effects.
   DEAD_LETTER: 'agent-dead-letter',
+  FLOW_EXECUTION: 'flow-execution',
+  FLOW_DEAD_LETTER: 'flow-dead-letter',
 } as const
 
 const buildPhase = process.env.NEXT_PHASE === 'phase-production-build'

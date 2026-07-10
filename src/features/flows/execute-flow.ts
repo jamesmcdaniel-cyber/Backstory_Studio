@@ -1,4 +1,8 @@
+import type { Job } from 'bullmq'
 import { prisma } from '@/lib/prisma'
+import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
+import { inlineExecution } from '@/lib/queue/execution-mode'
+import { flowJobOptions } from '@/lib/flows/queue-options'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { flowGraphSchema } from '@/lib/flows/graph'
 import { validateFlowGraph, validationErrorMessage } from '@/lib/flows/validate'
@@ -554,4 +558,26 @@ export async function runFlowExecution(
   }
 
   return { flowRunId: run.id, status, output: result.output }
+}
+
+/**
+ * Entry point for callers that want queue durability (BullMQ stall recovery
+ * and dead-letter) instead of running inline in the request process. NOT YET
+ * called from any route — infrastructure only (WS-R2 Task 2). In
+ * `inlineExecution` mode (the default today) this is identical to calling
+ * `runFlowExecution` directly.
+ */
+export async function dispatchFlowExecution(
+  job: FlowExecutionJob,
+): Promise<{ flowRunId: string; status: string; output: unknown } | { queued: true }> {
+  if (inlineExecution) return runFlowExecution(job)
+  if (!workersEnabled) throw new Error('Flow worker is disabled')
+  const queue = createQueue(QUEUE_NAMES.FLOW_EXECUTION)
+  await queue.add('execute-flow', job, flowJobOptions(job.flowRunId))
+  return { queued: true }
+}
+
+/** BullMQ job handler — the worker calls this for each dequeued flow job. */
+export async function executeFlowJob(job: Job<FlowExecutionJob>): Promise<{ flowRunId: string; status: string; output: unknown }> {
+  return runFlowExecution(job.data)
 }
