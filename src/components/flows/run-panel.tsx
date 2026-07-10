@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { ChevronRight, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
 import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import type { StepStatus } from './step-card'
@@ -25,6 +26,7 @@ export type FlowRunDetail = {
   input?: unknown
   output?: unknown
   error?: string | null
+  waiting?: { nodeId: string; kind: 'input' | 'approval'; question?: string } | null
   steps: RunStep[]
 }
 
@@ -66,14 +68,16 @@ function OutputView({ value }: { value: unknown }) {
   return <pre className="max-h-40 overflow-auto rounded bg-muted px-2 py-1.5 text-xs">{preview(value)}</pre>
 }
 
-function StepRow({ step, label }: { step: RunStep; label: string }) {
+function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; waitingKind?: 'input' | 'approval' }) {
   const [open, setOpen] = useState(false)
+  // A paused step reads as what it needs, never the bare status word.
+  const statusLabel = waitingKind ? (waitingKind === 'input' ? 'Waiting for your reply' : 'Waiting for approval') : step.status
   return (
     <div className="border-b border-border/60 last:border-0">
       <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50">
         <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
         <span className="flex-1 truncate text-sm">{label}</span>
-        <span className={cn('text-xs font-medium capitalize', STATUS_TEXT[step.status] || 'text-muted-foreground')}>{step.status === 'running' ? <TypewriterStatus seed={step.nodeId.length ? step.nodeId.charCodeAt(step.nodeId.length - 1) : 0} /> : step.status}</span>
+        <span className={cn('text-xs font-medium', !waitingKind && 'capitalize', STATUS_TEXT[step.status] || 'text-muted-foreground')}>{step.status === 'running' ? <TypewriterStatus seed={step.nodeId.length ? step.nodeId.charCodeAt(step.nodeId.length - 1) : 0} /> : statusLabel}</span>
       </button>
       {open && (
         <div className="space-y-2 px-3 pb-3 pl-8">
@@ -92,18 +96,77 @@ function StepRow({ step, label }: { step: RunStep; label: string }) {
   )
 }
 
+/** Blue banner shown while a run is paused — carries the reply box for agent questions. */
+function WaitingBanner({
+  waiting,
+  runId,
+  onReply,
+}: {
+  waiting: NonNullable<FlowRunDetail['waiting']>
+  runId: string
+  onReply?: (flowRunId: string, reply: string) => Promise<void>
+}) {
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const submit = async () => {
+    const reply = text.trim()
+    if (!reply || sending || !onReply) return
+    setSending(true)
+    try {
+      await onReply(runId, reply)
+      setText('')
+    } catch {
+      // The page already surfaced the error — keep the text for a retry.
+    } finally {
+      setSending(false)
+    }
+  }
+  return (
+    <div className="border-b border-border p-2">
+      <div className="rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-900/40 dark:bg-blue-950/40">
+        {waiting.kind === 'approval' ? (
+          <>
+            <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Waiting for an approval decision</p>
+            <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">A step needs an approval before this run can continue.</p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Waiting for your reply</p>
+            <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">{waiting.question || 'The agent asked a question.'}</p>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={3}
+              placeholder="Type your reply…"
+              disabled={sending}
+              className="mt-2 w-full resize-y rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-blue-300 dark:focus:border-blue-800"
+            />
+            <div className="mt-2 flex justify-end">
+              <Button size="sm" onClick={submit} loading={sending} disabled={!text.trim() || sending}>
+                Send reply
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function RunPanel({
   runs,
   selected,
   onSelectRun,
   onClose,
   labelForNode,
+  onReply,
 }: {
   runs: { id: string; status: string; startedAt?: string }[]
   selected: FlowRunDetail | null
   onSelectRun: (runId: string) => void
   onClose: () => void
   labelForNode: (nodeId: string) => string
+  onReply?: (flowRunId: string, reply: string) => Promise<void>
 }) {
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-card">
@@ -136,10 +199,20 @@ export function RunPanel({
               <span className={cn('text-xs font-semibold capitalize', STATUS_TEXT[selected.status])}>{selected.status === 'running' ? <TypewriterStatus /> : selected.status}</span>
               {selected.error && <p className="mt-1 text-xs text-red-600">{selected.error}</p>}
             </div>
+            {selected.status === 'waiting' && selected.waiting && (
+              <WaitingBanner key={selected.id} waiting={selected.waiting} runId={selected.id} onReply={onReply} />
+            )}
             {selected.steps.length === 0 ? (
               <p className="p-4 text-sm text-muted-foreground">No steps recorded.</p>
             ) : (
-              selected.steps.map((step, i) => <StepRow key={`${step.nodeId}-${i}`} step={step} label={labelForNode(step.nodeId)} />)
+              selected.steps.map((step, i) => (
+                <StepRow
+                  key={`${step.nodeId}-${i}`}
+                  step={step}
+                  label={labelForNode(step.nodeId)}
+                  waitingKind={step.status === 'waiting' && selected.waiting?.nodeId === step.nodeId ? selected.waiting.kind : undefined}
+                />
+              ))
             )}
           </>
         )}

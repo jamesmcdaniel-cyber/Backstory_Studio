@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -165,9 +165,10 @@ function filenameSlug(value: string): string {
     .slice(0, 80) || 'flow'
 }
 
-export default function FlowBuilder() {
+function FlowBuilder() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -253,6 +254,26 @@ export default function FlowBuilder() {
   }, [id])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // ?run=<id> deep-link (waiting-run emails/toasts land here): open the runs
+  // panel and select that run once — later param changes don't re-trigger.
+  const deepLinkedRun = useRef(false)
+  useEffect(() => {
+    if (deepLinkedRun.current) return
+    const runId = searchParams.get('run')
+    if (!runId) return
+    deepLinkedRun.current = true
+    setShowRuns(true)
+    fetch(`/api/flows/${id}/runs`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data?.runs) return
+        setRuns(data.runs.map((r: { id: string; status: string; startedAt?: string }) => ({ id: r.id, status: r.status, startedAt: r.startedAt })))
+        const found = (data.runs as FlowRunDetail[]).find((r) => r.id === runId)
+        if (found) setSelectedRun(found)
+      })
+      .catch(() => undefined)
+  }, [id, searchParams])
 
   useEffect(() => () => window.clearTimeout(highlightTimer.current), [])
 
@@ -512,6 +533,27 @@ export default function FlowBuilder() {
     [id],
   )
 
+  // Answer a paused run's agent question — the execute route resumes it.
+  const replyToRun = useCallback(
+    async (flowRunId: string, reply: string) => {
+      pollRuns()
+      const response = await fetch(`/api/flows/${id}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flowRunId, reply }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        toast.error(data.error ?? 'Could not send the reply.')
+        // Re-throw so the panel keeps the typed reply for a retry.
+        throw new Error(data.error ?? 'Could not send the reply.')
+      }
+      toast.success('Reply sent — resuming the flow.')
+      pollRuns()
+    },
+    [id, pollRuns],
+  )
+
   const viewVersion = useCallback(
     async (v: number) => {
       const data = await fetch(`/api/flows/${id}/versions?version=${v}`, { cache: 'no-store' })
@@ -575,7 +617,7 @@ export default function FlowBuilder() {
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) toast.error(data.error || 'Run failed.')
-      else if (data.run?.status === 'waiting') toast('The flow paused for input on a step.')
+      else if (data.run?.status === 'waiting') toast('The flow is waiting for your reply.', { action: { label: 'View', onClick: () => setShowRuns(true) } })
       else if (data.run?.status === 'failed') toast.error('The flow failed — check the step statuses.')
       else toast.success('Flow ran.')
       pollRuns()
@@ -1033,6 +1075,7 @@ export default function FlowBuilder() {
               onSelectRun={selectRun}
               onClose={() => setShowRuns(false)}
               labelForNode={labelForNode}
+              onReply={replyToRun}
             />
           </ResizablePanel>
         )}
@@ -1062,5 +1105,14 @@ export default function FlowBuilder() {
         )}
       </div>
     </div>
+  )
+}
+
+// useSearchParams needs a Suspense boundary — same pattern as the other pages.
+export default function FlowBuilderPage() {
+  return (
+    <Suspense fallback={null}>
+      <FlowBuilder />
+    </Suspense>
   )
 }
