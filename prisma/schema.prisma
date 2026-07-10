@@ -166,6 +166,12 @@ model AgentMemory {
   content           String    @db.Text
   question          String?   @db.Text
   embedding         Json?
+
+  /// pgvector copy of `embedding` (WS-R5). Reads/writes go through raw SQL —
+  /// Prisma cannot query Unsupported columns. The Json column is legacy,
+  /// kept for deploy-window safety; drop it in a future migration.
+  embeddingVec Unsupported("vector(1024)")?
+
   sourceExecutionId String?
   status            String    @default("open") // 'open' | 'dismissed' | 'superseded'
   timesUsed         Int       @default(0)
@@ -177,6 +183,10 @@ model AgentMemory {
   agent        AgentTask    @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, agentId, kind, status])
+  // HNSW index created by hand-edited migration SQL (Prisma's schema DSL has
+  // no `hnsw`/`vector_cosine_ops` vocabulary); declaring it here keeps
+  // `prisma migrate diff` from proposing to drop it as drift.
+  @@index([embeddingVec], map: "agent_memories_embedding_vec_hnsw")
   @@map("agent_memories")
 }
 
@@ -743,9 +753,18 @@ model KnowledgeChunk {
   content        String  @db.Text
   embedding      Json? // number[] embedding, or null when embeddings are unconfigured
 
+  /// pgvector copy of `embedding` (WS-R5). Reads/writes go through raw SQL —
+  /// Prisma cannot query Unsupported columns. The Json column is legacy,
+  /// kept for deploy-window safety; drop it in a future migration.
+  embeddingVec Unsupported("vector(1024)")?
+
   document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, agentId])
+  // HNSW index created by hand-edited migration SQL (Prisma's schema DSL has
+  // no `hnsw`/`vector_cosine_ops` vocabulary); declaring it here keeps
+  // `prisma migrate diff` from proposing to drop it as drift.
+  @@index([embeddingVec], map: "knowledge_chunks_embedding_vec_hnsw")
   @@map("knowledge_chunks")
 }
 
