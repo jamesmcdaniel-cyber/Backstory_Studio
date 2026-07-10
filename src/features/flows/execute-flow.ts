@@ -84,13 +84,17 @@ export async function runFlowExecution(
   // (graphSnapshot), never whatever the flow currently is — a publish made
   // while the run waited must not reshape a run already in flight.
   //
-  // Invariant: once the claim above flips a run to `running`, everything up
-  // to (but not including) interpretFlow taking over is wrapped so that any
+  // Invariant: once the claim above flips a run to `running`, the read-only
+  // preparation up to and including graph validation is wrapped so that any
   // throw here — a deleted agent/connection the snapshot still references, a
   // malformed snapshot, graph validation failure — rolls the run back to
   // `waiting` before rethrowing. Otherwise the run would be stuck `running`
   // with no executor, and the user's reply would be unretryable until the
-  // reaper terminalizes it after 30 minutes. Once interpretFlow begins,
+  // reaper terminalizes it after 30 minutes. The later resume-state block
+  // (marking the waiting step resumed, superseding stale approvals) sits
+  // OUTSIDE this wrap: those writes are destructive, so a blind rollback
+  // could not restore them anyway — a throw there strands the run until the
+  // reaper sweeps it (rare: plain DB writes). Once interpretFlow begins,
   // failures are handled by the existing failure paths (run marked `failed`)
   // — this rollback must not extend into that phase.
   let graph!: ReturnType<typeof flowGraphSchema.parse>
