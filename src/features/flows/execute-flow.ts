@@ -162,9 +162,18 @@ export async function runFlowExecution(
       )) as { summary?: string; status?: string; question?: string; executionId?: string }
 
       if (typeof result?.status === 'string' && result.status.startsWith('waiting')) {
+        // Persist the pause reason on the step so the runs API can surface it.
+        // The resume scan only reuses output for succeeded/skipped steps, so
+        // this waiting-info output never leaks into resumed step data.
+        const kind = result.status === 'waiting_for_approval' ? 'approval' : 'input'
         await prisma.flowRunStep.update({
           where: { id: step.id },
-          data: { status: 'waiting', agentExecutionId: result.executionId ?? null, finishedAt: new Date() },
+          data: {
+            status: 'waiting',
+            agentExecutionId: result.executionId ?? null,
+            output: jsonValue({ waiting: { kind, question: result.question, approvalId: (result as { approvalId?: string }).approvalId } }),
+            finishedAt: new Date(),
+          },
         })
         return { waiting: { status: result.status, question: result.question } }
       }

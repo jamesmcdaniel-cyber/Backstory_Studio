@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
+import { deriveRunWaiting } from '@/lib/flows/run-waiting'
 
 // GET /api/flows/[id]/runs — recent runs + each run's per-step detail (input,
 // output, error), polled by the builder for live status and run inspection.
@@ -37,8 +38,10 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     include: {
       steps: {
         orderBy: { order: 'asc' },
+        // output is always fetched (a waiting step stores its pause reason
+        // there) but stripped from summary wire steps below to stay slim.
         select: summary
-          ? { nodeId: true, status: true, order: true, error: true }
+          ? { nodeId: true, status: true, order: true, error: true, output: true }
           : { nodeId: true, status: true, order: true, error: true, input: true, output: true, startedAt: true, finishedAt: true },
       },
     },
@@ -51,7 +54,10 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     trigger: run.trigger,
     ...(summary ? {} : { input: run.input, output: run.output }),
     error: run.error,
-    steps: run.steps,
+    // What the run is blocked on (agent question / approval), non-null only
+    // when the run is waiting — reply UIs key off this.
+    waiting: deriveRunWaiting(run.status, run.steps),
+    steps: summary ? run.steps.map(({ nodeId, status, order, error }) => ({ nodeId, status, order, error })) : run.steps,
   })
   return {
     success: true,
