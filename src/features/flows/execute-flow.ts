@@ -100,7 +100,7 @@ export async function runFlowExecution(
   let graph!: ReturnType<typeof flowGraphSchema.parse>
   try {
     if (resuming) {
-      existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId } })
+      existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId, organizationId: job.organizationId } })
       if (!existingRun) throw new Error('Flow run not found after claim')
     }
     // Legacy fallback: a pre-snapshot waiting run (graphSnapshot null) resumes
@@ -133,7 +133,7 @@ export async function runFlowExecution(
     // ourselves hold — never stomp a reaper's terminal `failed` write.
     if (resuming) {
       await prisma.flowRun.updateMany({
-        where: { id: job.flowRunId, status: 'running' },
+        where: { id: job.flowRunId, organizationId: job.organizationId, status: 'running' },
         data: { status: 'waiting' },
       })
     }
@@ -517,7 +517,7 @@ export async function runFlowExecution(
   // runs API surfaces FlowRun.error, so it must never stay null on failure.
   const runError = status === 'failed' ? (result.error ?? 'The flow failed.').slice(0, 300) : null
   await prisma.flowRun.update({
-    where: { id: run.id },
+    where: { id: run.id, organizationId: job.organizationId },
     data: { status, output: jsonValue(result.output), error: runError, finishedAt: status === 'waiting' ? null : new Date() },
   })
   // A humanReview ("Request information") pause has no adapter: its waiting

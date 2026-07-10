@@ -8,7 +8,7 @@
  */
 
 import type { Job } from 'bullmq'
-import { prisma } from '@/lib/prisma'
+import { systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { captureError } from '@/lib/observability/sentry'
 import { createQueue, QUEUE_NAMES } from './config'
@@ -25,7 +25,8 @@ export interface DeadLetterInput {
 export async function recordDeadLetter(input: DeadLetterInput): Promise<void> {
   // Best-effort: mark the execution failed so the UI reflects it.
   if (input.executionId) {
-    await prisma.agentExecution
+    // systemPrisma: id-keyed terminal write from worker job data; execution id was minted org-scoped upstream.
+    await systemPrisma.agentExecution
       .update({
         where: { id: input.executionId },
         data: { status: 'failed', error: input.error.slice(0, 300), completedAt: new Date() },

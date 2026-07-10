@@ -82,10 +82,10 @@ if (TEST_DB) {
       organizationId: ids.org, executionId: ids.execution, userId: ids.user,
       provider: 'nango:slack', tool: 'slack_post_message', args: {},
     })
-    await prisma.approvalRequest.update({ where: { id }, data: { status: 'superseded' } })
+    await prisma.approvalRequest.update({ where: { id, organizationId: ids.org }, data: { status: 'superseded' } })
     const result = await decideApproval({ approvalId: id, organizationId: ids.org, deciderUserId: ids.user, approve: true })
     assert.deepEqual(result, { status: 'superseded', executed: false })
-    const current = await prisma.approvalRequest.findUnique({ where: { id } })
+    const current = await prisma.approvalRequest.findUnique({ where: { id, organizationId: ids.org } })
     assert.equal(current.status, 'superseded')
   })
 

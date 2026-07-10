@@ -61,7 +61,7 @@ if (ENABLED) {
     assert.equal(json.success, true)
     assert.ok(json.signalId)
 
-    const signal = await prisma.signal.findUnique({ where: { id: json.signalId } })
+    const signal = await prisma.signal.findUnique({ where: { id: json.signalId, organizationId: ids.org } })
     assert.equal(signal.organizationId, ids.org)
     assert.equal(signal.opportunityId, 'opp-9')
   })
@@ -79,7 +79,7 @@ if (ENABLED) {
     assert.equal(second.status, 200)
     const json = await second.json()
     assert.equal(json.duplicate, true)
-    const count = await prisma.signal.count({ where: { dedupeKey: 'evt-dup-1' } })
+    const count = await prisma.signal.count({ where: { dedupeKey: 'evt-dup-1', organizationId: ids.org } })
     assert.equal(count, 1)
   })
 
@@ -87,7 +87,7 @@ if (ENABLED) {
     const body = JSON.stringify({ type: 'insight.generated', id: 'evt-bad', team_id: TEAM })
     const response = await POST(requestFor(body, 'deadbeef'.repeat(8)))
     assert.equal(response.status, 401)
-    const count = await prisma.signal.count({ where: { dedupeKey: 'evt-bad' } })
+    const count = await prisma.signal.count({ where: { dedupeKey: 'evt-bad', organizationId: ids.org } })
     assert.equal(count, 0)
   })
 

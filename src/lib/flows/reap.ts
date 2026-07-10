@@ -7,7 +7,7 @@
  * agent-execution reaper.
  */
 
-import { prisma } from '@/lib/prisma'
+import { systemPrisma } from '@/lib/prisma'
 
 // Dispatch/execute routes cap at maxDuration 1200s; 30 min = budget + slack.
 export const STUCK_FLOW_RUN_TIMEOUT_MS = 30 * 60 * 1000
@@ -27,7 +27,8 @@ const REAP_BATCH_LIMIT = 500
  */
 export async function reapStuckFlowRuns(now = new Date(), onAfterRead?: () => Promise<void>): Promise<number> {
   const cutoff = new Date(now.getTime() - STUCK_FLOW_RUN_TIMEOUT_MS)
-  const stuck = await prisma.flowRun.findMany({
+  // systemPrisma: global reaper sweep — runs across all orgs by design (invoked from CRON_SECRET-gated dispatch).
+  const stuck = await systemPrisma.flowRun.findMany({
     where: { status: 'running', startedAt: { lt: cutoff } },
     select: { id: true },
     take: REAP_BATCH_LIMIT,
@@ -35,7 +36,8 @@ export async function reapStuckFlowRuns(now = new Date(), onAfterRead?: () => Pr
   if (stuck.length === 0) return 0
   const runIds = stuck.map((run) => run.id)
   await onAfterRead?.()
-  return prisma.$transaction(async (tx) => {
+  // systemPrisma: global reaper sweep — runs across all orgs by design.
+  return systemPrisma.$transaction(async (tx) => {
     // Status re-checked here so a run that legitimately left `running`
     // (e.g. paused for approval) between the read above and this write is
     // left alone.

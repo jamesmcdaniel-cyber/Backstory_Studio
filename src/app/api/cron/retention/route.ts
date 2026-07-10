@@ -12,7 +12,7 @@
 
 import { timingSafeEqual } from 'crypto'
 import { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/prisma'
+import { systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
@@ -42,18 +42,22 @@ export async function GET(request: Request) {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
 
   try {
-    const staleExecutions = await prisma.agentExecution.findMany({
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
+    const staleExecutions = await systemPrisma.agentExecution.findMany({
       where: { startedAt: { lt: cutoff } }, select: { id: true }, take: CAP,
     })
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
     const executionsDeleted = staleExecutions.length
-      ? (await prisma.agentExecution.deleteMany({ where: { id: { in: staleExecutions.map((e) => e.id) } } })).count
+      ? (await systemPrisma.agentExecution.deleteMany({ where: { id: { in: staleExecutions.map((e) => e.id) } } })).count
       : 0
 
-    const staleSignals = await prisma.signal.findMany({
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
+    const staleSignals = await systemPrisma.signal.findMany({
       where: { receivedAt: { lt: cutoff } }, select: { id: true }, take: CAP,
     })
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
     const signalsDeleted = staleSignals.length
-      ? (await prisma.signal.deleteMany({ where: { id: { in: staleSignals.map((s) => s.id) } } })).count
+      ? (await systemPrisma.signal.deleteMany({ where: { id: { in: staleSignals.map((s) => s.id) } } })).count
       : 0
 
     // Transcripts are the fattest column (provider message JSON, growing per
@@ -62,7 +66,8 @@ export async function GET(request: Request) {
     // theirs nulled long before the row itself is deleted at RETENTION_DAYS.
     const transcriptDays = Number(process.env.TRANSCRIPT_RETENTION_DAYS) || 14
     const transcriptCutoff = new Date(Date.now() - transcriptDays * 24 * 60 * 60 * 1000)
-    const staleTranscripts = await prisma.agentExecution.findMany({
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
+    const staleTranscripts = await systemPrisma.agentExecution.findMany({
       where: {
         completedAt: { lt: transcriptCutoff },
         status: { in: ['completed', 'failed'] },
@@ -71,8 +76,9 @@ export async function GET(request: Request) {
       select: { id: true },
       take: CAP,
     })
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
     const transcriptsPruned = staleTranscripts.length
-      ? (await prisma.agentExecution.updateMany({
+      ? (await systemPrisma.agentExecution.updateMany({
           where: { id: { in: staleTranscripts.map((e) => e.id) } },
           data: { transcript: Prisma.DbNull },
         })).count

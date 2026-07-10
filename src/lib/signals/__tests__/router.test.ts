@@ -101,7 +101,7 @@ if (ENABLED) {
     assert.equal(execution.idempotencyKey, `${ids.signal}:${ids.agent}`)
     assert.equal((execution.input as any).signal.type, 'deal.risk_detected')
 
-    const processed = await prisma.signal.findUnique({ where: { id: ids.signal } })
+    const processed = await prisma.signal.findUnique({ where: { id: ids.signal, organizationId: ids.org } })
     assert.ok(processed.processedAt, 'signal marked processed')
   })
 
@@ -112,7 +112,7 @@ if (ENABLED) {
     assert.equal(result.started, 0)
     assert.equal(result.skippedDuplicates, 1)
     assert.equal(dispatched.length, 0)
-    const count = await prisma.agentExecution.count({ where: { signalId: ids.signal } })
+    const count = await prisma.agentExecution.count({ where: { signalId: ids.signal, organizationId: ids.org } })
     assert.equal(count, 1)
   })
 

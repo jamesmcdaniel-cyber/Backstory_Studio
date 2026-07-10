@@ -8,7 +8,7 @@
  */
 
 import type { Job } from 'bullmq'
-import { prisma } from '@/lib/prisma'
+import { systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { captureError } from '@/lib/observability/sentry'
 import { createQueue, QUEUE_NAMES } from './config'
@@ -24,7 +24,8 @@ export interface FlowDeadLetterInput {
 
 export async function recordFlowDeadLetter(input: FlowDeadLetterInput): Promise<void> {
   if (input.flowRunId) {
-    await prisma.flowRun
+    // systemPrisma: id-keyed terminal write from worker job data; flow run id was minted org-scoped upstream.
+    await systemPrisma.flowRun
       .update({
         where: { id: input.flowRunId },
         data: { status: 'failed', error: input.error.slice(0, 300), finishedAt: new Date() },

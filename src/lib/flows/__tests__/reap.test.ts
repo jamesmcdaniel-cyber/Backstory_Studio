@@ -62,7 +62,7 @@ if (TEST_DB) {
     const reaped = await reapStuckFlowRuns()
     assert.equal(reaped, 1)
 
-    const staleRun = await prisma.flowRun.findUnique({ where: { id: ids.staleRunning } })
+    const staleRun = await prisma.flowRun.findUnique({ where: { id: ids.staleRunning, organizationId: ids.org } })
     assert.equal(staleRun.status, 'failed')
     assert.equal(staleRun.error, 'The run was interrupted and timed out.')
     assert.ok(staleRun.finishedAt)
@@ -73,10 +73,10 @@ if (TEST_DB) {
     const doneStep = await prisma.flowRunStep.findUnique({ where: { id: ids.staleDoneStep } })
     assert.equal(doneStep.status, 'succeeded')
 
-    const freshRun = await prisma.flowRun.findUnique({ where: { id: ids.freshRunning } })
+    const freshRun = await prisma.flowRun.findUnique({ where: { id: ids.freshRunning, organizationId: ids.org } })
     assert.equal(freshRun.status, 'running')
 
-    const waitingRun = await prisma.flowRun.findUnique({ where: { id: ids.staleWaiting } })
+    const waitingRun = await prisma.flowRun.findUnique({ where: { id: ids.staleWaiting, organizationId: ids.org } })
     assert.equal(waitingRun.status, 'waiting')
   })
 
@@ -94,11 +94,11 @@ if (TEST_DB) {
     // approval pause) before the transaction's write executes. This is the
     // exact race the re-query step in reapStuckFlowRuns exists to handle.
     const reaped = await reapStuckFlowRuns(new Date(), async () => {
-      await prisma.flowRun.update({ where: { id: racingRun.id }, data: { status: 'waiting' } })
+      await prisma.flowRun.update({ where: { id: racingRun.id, organizationId: ids.org }, data: { status: 'waiting' } })
     })
     assert.equal(reaped, 0) // racingRun diverted away before the transaction write
 
-    const runAfter = await prisma.flowRun.findUnique({ where: { id: racingRun.id } })
+    const runAfter = await prisma.flowRun.findUnique({ where: { id: racingRun.id, organizationId: ids.org } })
     assert.equal(runAfter.status, 'waiting')
 
     const stepAfter = await prisma.flowRunStep.findUnique({ where: { id: racingStep.id } })
@@ -129,16 +129,16 @@ if (TEST_DB) {
     // sole genuine reap in this call — proving reapedRuns narrows the batch
     // rather than the step update touching every id in runIds.
     const reaped = await reapStuckFlowRuns(new Date(), async () => {
-      await prisma.flowRun.update({ where: { id: divertedRun.id }, data: { status: 'waiting' } })
+      await prisma.flowRun.update({ where: { id: divertedRun.id, organizationId: ids.org }, data: { status: 'waiting' } })
     })
     assert.equal(reaped, 1)
 
-    const divertedRunAfter = await prisma.flowRun.findUnique({ where: { id: divertedRun.id } })
+    const divertedRunAfter = await prisma.flowRun.findUnique({ where: { id: divertedRun.id, organizationId: ids.org } })
     assert.equal(divertedRunAfter.status, 'waiting')
     const divertedStepAfter = await prisma.flowRunStep.findUnique({ where: { id: divertedStep.id } })
     assert.equal(divertedStepAfter.status, 'running')
 
-    const stuckRunAfter = await prisma.flowRun.findUnique({ where: { id: stuckRun.id } })
+    const stuckRunAfter = await prisma.flowRun.findUnique({ where: { id: stuckRun.id, organizationId: ids.org } })
     assert.equal(stuckRunAfter.status, 'failed')
     const stuckStepAfter = await prisma.flowRunStep.findUnique({ where: { id: stuckStep.id } })
     assert.equal(stuckStepAfter.status, 'failed')

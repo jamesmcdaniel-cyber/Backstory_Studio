@@ -136,7 +136,7 @@ if (ENABLED) {
     const cleaned = await prisma.organization.findUnique({ where: { id: soloOrg.id } })
     assert.equal(cleaned, null, 'empty solo org should be deleted after the move')
 
-    await prisma.peopleAiConnection.deleteMany({ where: { userId: userC.id } })
+    await prisma.peopleAiConnection.deleteMany({ where: { userId: userC.id, organizationId: ids.orgA! } })
     await prisma.user.delete({ where: { id: userC.id } })
   })
 

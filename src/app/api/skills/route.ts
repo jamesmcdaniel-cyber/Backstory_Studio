@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { listSkills } from '@/lib/skills/compose'
 
@@ -44,7 +44,8 @@ function serializeShared(
 
 // GET — built-in skills plus the PUBLIC community library (all orgs).
 export const GET = withAuthenticatedApi(async (_request, auth) => {
-  const shared = await prisma.sharedSkill.findMany({
+  // systemPrisma: public community skill library — visible to all orgs by design.
+  const shared = await systemPrisma.sharedSkill.findMany({
     where: { isActive: true },
     orderBy: { updatedAt: 'desc' },
     take: 500,
@@ -80,7 +81,12 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   })
   if (!existing) throw new ApiError('Skill not found (you can only edit skills you published)', 404, 'NOT_FOUND')
   const { id, ...patch } = body
-  const skill = await prisma.sharedSkill.update({ where: { id }, data: patch })
+  // SECURITY FIX: the write itself was unscoped (relying only on the findFirst
+  // ownership check above) — re-assert organizationId on the mutating query too.
+  const skill = await prisma.sharedSkill.update({
+    where: { id, organizationId: auth.organizationId },
+    data: patch,
+  })
   return { success: true, skill: serializeShared(skill, auth.organizationId) }
 })
 

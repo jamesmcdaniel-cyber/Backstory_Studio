@@ -39,7 +39,7 @@ if (TEST_DB) {
       () => runFlowExecution({ flowId: ids.flow, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'hi' }),
       (error: any) => error.code === 'FLOW_RUN_NOT_WAITING',
     )
-    const after1 = await prisma.flowRun.findUnique({ where: { id: run.id } })
+    const after1 = await prisma.flowRun.findUnique({ where: { id: run.id, organizationId: ids.org } })
     assert.equal(after1.status, 'succeeded') // untouched — the claim never fired
   })
 
@@ -63,17 +63,17 @@ if (TEST_DB) {
     })
     // Simulate the flow having been republished (with a distinctly-shaped
     // graph) since the run paused.
-    await prisma.flow.update({ where: { id: ids.flow }, data: { graph: currentGraph, publishedGraph: currentGraph } })
+    await prisma.flow.update({ where: { id: ids.flow, organizationId: ids.org }, data: { graph: currentGraph, publishedGraph: currentGraph } })
 
     // Capture the stale startedAt before resume so we can verify it was refreshed.
-    const before = await prisma.flowRun.findUnique({ where: { id: run.id } })
+    const before = await prisma.flowRun.findUnique({ where: { id: run.id, organizationId: ids.org } })
     assert.ok(before?.startedAt)
     const staleStartedAt = before.startedAt
 
     const result = await runFlowExecution({ flowId: ids.flow, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'go' })
     assert.equal(result.flowRunId, run.id)
 
-    const claimed = await prisma.flowRun.findUnique({ where: { id: run.id } })
+    const claimed = await prisma.flowRun.findUnique({ where: { id: run.id, organizationId: ids.org } })
     assert.notEqual(claimed.status, 'waiting')
     // Resume claim must refresh startedAt so reapStuckFlowRuns does not mark
     // the run failed the instant it resumes after a long approval pause.
@@ -102,7 +102,7 @@ if (TEST_DB) {
       () => runFlowExecution({ flowId: ids.flow, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'go' }),
       (error: any) => error.code === 'FLOW_VALIDATION_ERROR',
     )
-    const after2 = await prisma.flowRun.findUnique({ where: { id: run.id } })
+    const after2 = await prisma.flowRun.findUnique({ where: { id: run.id, organizationId: ids.org } })
     assert.equal(after2.status, 'waiting') // claim rolled back — the reply stays retryable
   })
 

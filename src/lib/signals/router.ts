@@ -12,7 +12,7 @@
  */
 
 import { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
@@ -69,7 +69,7 @@ const defaultDispatcher: SignalDispatcher = async (job) => {
       await runAgentExecution(job)
     } catch (error) {
       await prisma.agentExecution.update({
-        where: { id: job.executionId },
+        where: { id: job.executionId, organizationId: job.organizationId },
         data: {
           status: 'failed',
           error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
@@ -94,7 +94,9 @@ export async function routeSignal(
   signalId: string,
   dispatcher: SignalDispatcher = defaultDispatcher,
 ): Promise<RouteResult> {
-  const signal = await prisma.signal.findUnique({ where: { id: signalId } })
+  // systemPrisma: internal chaining — routeSignal is called with only the signal
+  // id (minted org-scoped by the webhook route); this read discovers organizationId.
+  const signal = await systemPrisma.signal.findUnique({ where: { id: signalId } })
   if (!signal) return { matched: 0, started: 0, skippedDuplicates: 0 }
 
   const subscriptions = await prisma.signalSubscription.findMany({
@@ -168,7 +170,10 @@ export async function routeSignal(
     started++
   }
 
-  await prisma.signal.update({ where: { id: signal.id }, data: { processedAt: new Date() } })
+  await prisma.signal.update({
+    where: { id: signal.id, organizationId: signal.organizationId },
+    data: { processedAt: new Date() },
+  })
 
   // Index the signal + its entities into the graph-RAG store (best-effort,
   // gated on embeddings) so agents and the assistant can correlate against it.

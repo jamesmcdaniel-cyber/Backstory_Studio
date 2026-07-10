@@ -14,7 +14,7 @@
  */
 
 import { timingSafeEqual } from 'crypto'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { runFlowExecution } from '@/features/flows/execute-flow'
@@ -76,7 +76,8 @@ export async function GET(request: Request) {
   try {
     // I5 — reap stuck runs: any execution still "running" past the time limit
     // is marked failed so it doesn't pin resources or block reporting.
-    await prisma.agentExecution.updateMany({
+    // systemPrisma: global reaper sweep — runs across all orgs by design (CRON_SECRET-gated).
+    await systemPrisma.agentExecution.updateMany({
       where: {
         status: 'running',
         startedAt: { lt: new Date(Date.now() - STUCK_RUN_TIMEOUT_MS) },
@@ -107,7 +108,8 @@ export async function GET(request: Request) {
     const workerOwnsRecurring = workersEnabled && EXECUTION_MODE === 'queue'
 
     // Load all active agents (capped at 200 to avoid huge fetches)
-    const agents = await prisma.agentTask.findMany({
+    // systemPrisma: global reaper sweep — scans across all orgs by design (CRON_SECRET-gated).
+    const agents = await systemPrisma.agentTask.findMany({
       where: { status: 'ACTIVE' },
       take: 200,
     })
@@ -136,7 +138,7 @@ export async function GET(request: Request) {
       // per-agent body is wrapped so one agent can never abort the tick.
       try {
         await prisma.agentTask.update({
-          where: { id: agent.id },
+          where: { id: agent.id, organizationId: agent.organizationId },
           data: {
             lastExecutedAt: new Date(),
             executionCount: { increment: 1 },
@@ -204,7 +206,7 @@ export async function GET(request: Request) {
             error: capError(error),
           })
           await prisma.agentExecution.update({
-            where: { id: execution.id },
+            where: { id: execution.id, organizationId: agent.organizationId },
             data: {
               status: 'failed',
               error: capError(error),
@@ -229,7 +231,8 @@ export async function GET(request: Request) {
     // its most-recent flow_run.startedAt is the "last run" marker. Recurring
     // flows are owned by this cron (no BullMQ scheduler for flows), so run them
     // even in worker mode.
-    const flows = await prisma.flow.findMany({
+    // systemPrisma: global reaper sweep — scans across all orgs by design (CRON_SECRET-gated).
+    const flows = await systemPrisma.flow.findMany({
       where: { status: 'ACTIVE' },
       include: { runs: { orderBy: { startedAt: 'desc' }, take: 1, select: { startedAt: true, status: true } } },
       take: 100,

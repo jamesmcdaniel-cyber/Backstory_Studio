@@ -1,6 +1,6 @@
 import type { Job } from 'bullmq'
 import { createHash } from 'node:crypto'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { apiLogger } from '@/lib/logger'
@@ -410,7 +410,9 @@ export async function runAgentExecution(
     // Atomic claim (same pattern as approval decide): two concurrent replies —
     // e.g. builder and Activity page both open — must not both resume. Exactly
     // one caller flips waiting_* -> running; the loser errors cleanly here.
-    const claimed = await prisma.agentExecution.updateMany({
+    // systemPrisma: id-keyed terminal write on worker job data; execution id was
+    // validated against this tenant when queuedExecution was loaded above.
+    const claimed = await systemPrisma.agentExecution.updateMany({
       where: { id: queuedExecution.id, status: { in: ['waiting_for_input', 'waiting_for_approval'] } },
       data: { status: 'running' },
     })
@@ -454,7 +456,9 @@ export async function runAgentExecution(
   }
 
   const execution = queuedExecution
-    ? await prisma.agentExecution.update({
+    ? // systemPrisma: id-keyed terminal write on worker job data; execution id was
+      // validated against this tenant when queuedExecution was loaded above.
+      await systemPrisma.agentExecution.update({
         where: { id: queuedExecution.id },
         data: {
           status: 'running',
@@ -515,7 +519,9 @@ export async function runAgentExecution(
       await prisma.executionMessage.create({
         data: { executionId: execution.id, role: 'agent', content: cancelSummary },
       })
-      await prisma.agentExecution.update({
+      // systemPrisma: id-keyed terminal write on worker job data; execution id was
+      // validated against this tenant when execution was loaded/created above.
+      await systemPrisma.agentExecution.update({
         where: { id: execution.id },
         data: {
           status: 'cancelled',
@@ -560,8 +566,10 @@ export async function runAgentExecution(
     const { tools, bindings } = await loadTools(organizationId, providers, userId, toolQuery)
     // Community skills are public-library rows; resolve any attached ids that
     // aren't built in and compose them the same way. Best-effort.
+    // systemPrisma: public community skill library — cross-org by design, same
+    // as GET /api/skills (any org may compose any published community skill).
     const communitySkills = skillIds.length
-      ? await prisma.sharedSkill
+      ? await systemPrisma.sharedSkill
           .findMany({ where: { id: { in: skillIds }, isActive: true }, select: { id: true, name: true, instructions: true } })
           .catch(() => [])
       : []
@@ -767,7 +775,9 @@ export async function runAgentExecution(
       // status to 'cancelling' rather than mutating this in-memory loop, so
       // check the freshest DB status once per turn (an extra findUnique per
       // LLM call is cheap) and exit cleanly the moment it's noticed.
-      const live = await prisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
+      // systemPrisma: cancellation poll — id-keyed read on worker job data;
+      // execution id was validated against this tenant when it was loaded/created above.
+      const live = await systemPrisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
       if (live?.status === 'cancelling' || live?.status === 'cancelled') {
         return await finalizeCancelled(live.status === 'cancelled')
       }
@@ -994,7 +1004,9 @@ export async function runAgentExecution(
         await prisma.executionMessage.create({
           data: { executionId: execution.id, role: 'agent', content: pendingAsk.question },
         })
-        await prisma.agentExecution.update({
+        // systemPrisma: id-keyed terminal write on worker job data; execution id was
+        // validated against this tenant when execution was loaded/created above.
+        await systemPrisma.agentExecution.update({
           where: { id: execution.id },
           data: {
             status: 'waiting_for_input',
@@ -1032,7 +1044,9 @@ export async function runAgentExecution(
       // so the existing resume path injects the approver's result) and return.
       // decideApproval runs the write and resumes this run with the result.
       if (pendingApproval) {
-        await prisma.agentExecution.update({
+        // systemPrisma: id-keyed terminal write on worker job data; execution id was
+        // validated against this tenant when execution was loaded/created above.
+        await systemPrisma.agentExecution.update({
           where: { id: execution.id },
           data: {
             status: 'waiting_for_approval',
@@ -1070,7 +1084,9 @@ export async function runAgentExecution(
       // Durable checkpoint at a clean turn boundary (results appended → the
       // stored transcript is a valid, resumable conversation). A crash/retry
       // after this resumes from turn+1 instead of losing prior turns.
-      await prisma.agentExecution.update({
+      // systemPrisma: id-keyed terminal write on worker job data; execution id was
+      // validated against this tenant when execution was loaded/created above.
+      await systemPrisma.agentExecution.update({
         where: { id: execution.id },
         data: {
           transcript: jsonValue(transcript),
@@ -1086,7 +1102,9 @@ export async function runAgentExecution(
     // once more before treating this as a normal completion, so the user's
     // cancel wins the race instead of being silently overwritten — and so
     // indexing/reflection (below) never run for a run the user asked to stop.
-    const liveBeforeCompletion = await prisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
+    // systemPrisma: cancellation poll — id-keyed read on worker job data;
+    // execution id was validated against this tenant when it was loaded/created above.
+    const liveBeforeCompletion = await systemPrisma.agentExecution.findUnique({ where: { id: execution.id }, select: { status: true } })
     if (liveBeforeCompletion?.status === 'cancelling' || liveBeforeCompletion?.status === 'cancelled') {
       return await finalizeCancelled(liveBeforeCompletion.status === 'cancelled')
     }
@@ -1098,8 +1116,10 @@ export async function runAgentExecution(
     await prisma.executionMessage.create({
       data: { executionId: execution.id, role: 'agent', content: summary },
     })
-    await prisma.$transaction([
-      prisma.agentExecution.update({
+    // systemPrisma: id-keyed terminal writes on worker job data; execution/agent
+    // ids were validated against this tenant when they were loaded/created above.
+    await systemPrisma.$transaction([
+      systemPrisma.agentExecution.update({
         where: { id: execution.id },
         data: {
           status: 'completed',
@@ -1112,7 +1132,7 @@ export async function runAgentExecution(
           metadata: jsonValue({ ...executionMetadata, pendingQuestion: null, ...(headline ? { headline } : {}) }),
         },
       }),
-      prisma.agentTask.update({
+      systemPrisma.agentTask.update({
         where: { id: agent.id },
         data: {
           lastExecutedAt: new Date(),
@@ -1182,7 +1202,9 @@ export async function runAgentExecution(
     // finalized it as cancelled but a later step in this same try block still
     // threw) should finalize as cancelled, not failed — re-check the live
     // status before writing a failure over what may already be a cancel.
-    const liveOnFailure = await prisma.agentExecution
+    // systemPrisma: cancellation poll — id-keyed read on worker job data;
+    // execution id was validated against this tenant when it was loaded/created above.
+    const liveOnFailure = await systemPrisma.agentExecution
       .findUnique({ where: { id: execution.id }, select: { status: true } })
       .catch(() => null)
     if (liveOnFailure?.status === 'cancelling' || liveOnFailure?.status === 'cancelled') {
@@ -1190,7 +1212,9 @@ export async function runAgentExecution(
     }
 
     const message = error instanceof Error ? error.message : String(error)
-    await prisma.agentExecution.update({
+    // systemPrisma: id-keyed terminal write on worker job data; execution id was
+    // validated against this tenant when execution was loaded/created above.
+    await systemPrisma.agentExecution.update({
       where: { id: execution.id },
       data: {
         status: 'failed',

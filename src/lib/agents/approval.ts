@@ -207,7 +207,7 @@ export async function decideApproval(input: {
   } catch (error) {
     // Delivery failed after we claimed it — mark failed (not back to pending) so
     // a possibly-partial, non-idempotent write is never silently re-approved.
-    await prisma.approvalRequest.update({ where: { id: approval.id }, data: { status: 'failed' } }).catch(() => undefined)
+    await prisma.approvalRequest.update({ where: { id: approval.id, organizationId: input.organizationId }, data: { status: 'failed' } }).catch(() => undefined)
     await recordAudit({
       organizationId: input.organizationId,
       executionId: approval.executionId,
@@ -221,7 +221,7 @@ export async function decideApproval(input: {
   }
 
   await prisma.approvalRequest.update({
-    where: { id: approval.id },
+    where: { id: approval.id, organizationId: input.organizationId },
     data: { status: 'approved' },
   })
   await recordAudit({
