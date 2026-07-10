@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { ChevronRight, RefreshCw, ScrollText } from 'lucide-react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -14,6 +15,7 @@ import type { FlowGraph } from '@/lib/flows/graph'
 import { cn } from '@/lib/utils'
 
 type RunStepSummary = { nodeId: string; status: string; order: number; error?: string | null }
+type RunWaiting = { nodeId: string; kind: 'input' | 'approval'; question?: string }
 type RunSummary = {
   id: string
   status: string
@@ -21,6 +23,7 @@ type RunSummary = {
   finishedAt: string | null
   trigger?: { type?: string; [key: string]: unknown } | null
   error?: string | null
+  waiting?: RunWaiting | null
   steps: RunStepSummary[]
 }
 
@@ -48,6 +51,7 @@ const STEP_DOT: Record<string, string> = {
   running: 'bg-amber-500',
   skipped: 'bg-gray-300',
   queued: 'bg-gray-300',
+  resumed: 'bg-gray-300',
 }
 
 const STEP_TEXT: Record<string, string> = {
@@ -57,6 +61,7 @@ const STEP_TEXT: Record<string, string> = {
   running: 'text-amber-600',
   skipped: 'text-gray-400',
   queued: 'text-gray-400',
+  resumed: 'text-gray-400',
 }
 
 /** Node label for a run step: the agent's own label, else the step type,
@@ -78,6 +83,62 @@ function duration(run: RunSummary): string {
 function triggerLabel(run: RunSummary): string {
   const type = run.trigger?.type || 'manual'
   return type.charAt(0).toUpperCase() + type.slice(1)
+}
+
+/** Blue banner shown under a paused run's row — carries the reply box for agent
+ *  questions. Mirrors the builder Runs panel's WaitingBanner (not exported there). */
+function WaitingBanner({
+  waiting,
+  runId,
+  onReply,
+}: {
+  waiting: RunWaiting
+  runId: string
+  onReply: (flowRunId: string, reply: string) => Promise<void>
+}) {
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const submit = async () => {
+    const reply = text.trim()
+    if (!reply || sending) return
+    setSending(true)
+    try {
+      await onReply(runId, reply)
+      setText('')
+    } catch {
+      // The page already surfaced the error — keep the text for a retry.
+    } finally {
+      setSending(false)
+    }
+  }
+  return (
+    <div className="rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-900/40 dark:bg-blue-950/40">
+      {waiting.kind === 'approval' ? (
+        <>
+          <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Waiting for an approval decision</p>
+          <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">A step needs an approval before this run can continue.</p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Waiting for your reply</p>
+          <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">{waiting.question || 'The agent asked a question.'}</p>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            rows={3}
+            placeholder="Type your reply…"
+            disabled={sending}
+            className="mt-2 w-full resize-y rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-blue-300 dark:focus:border-blue-800"
+          />
+          <div className="mt-2 flex justify-end">
+            <Button size="sm" onClick={submit} loading={sending} disabled={!text.trim() || sending}>
+              Send reply
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 export default function FlowActivityPage() {
@@ -140,6 +201,23 @@ export default function FlowActivityPage() {
     }
   }, [id, filter, refreshKey])
 
+  // Resume a paused run with the user's reply, then refetch (keeps the filter).
+  const replyToRun = async (flowRunId: string, reply: string) => {
+    const response = await fetch(`/api/flows/${id}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ flowRunId, reply }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      toast.error(data.error || 'Could not send the reply.')
+      // Re-throw so the banner keeps the typed reply for a retry.
+      throw new Error(data.error || 'Could not send the reply.')
+    }
+    toast.success('Reply sent — resuming the flow.')
+    setRefreshKey((k) => k + 1)
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -188,6 +266,9 @@ export default function FlowActivityPage() {
               <TableHead>Duration</TableHead>
               <TableHead>Trigger</TableHead>
               <TableHead>Error</TableHead>
+              <TableHead>
+                <span className="sr-only">Open in builder</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -208,22 +289,43 @@ export default function FlowActivityPage() {
                     <TableCell className="text-sm text-muted-foreground">{duration(run)}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{triggerLabel(run)}</TableCell>
                     <TableCell className="max-w-xs truncate text-sm text-red-600">{run.error || ''}</TableCell>
+                    <TableCell className="text-right">
+                      <Link
+                        href={`/flows/${id}?run=${run.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="whitespace-nowrap text-xs font-medium text-primary hover:underline"
+                      >
+                        Open in builder
+                      </Link>
+                    </TableCell>
                   </TableRow>
+                  {run.status === 'waiting' && run.waiting && (
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell colSpan={6} className="pt-0">
+                        <WaitingBanner key={run.id} waiting={run.waiting} runId={run.id} onReply={replyToRun} />
+                      </TableCell>
+                    </TableRow>
+                  )}
                   {expanded && (
                     <TableRow className="hover:bg-transparent">
-                      <TableCell colSpan={5} className="bg-muted/30 p-0">
+                      <TableCell colSpan={6} className="bg-muted/30 p-0">
                         {run.steps.length === 0 ? (
                           <p className="px-6 py-3 text-sm text-muted-foreground">No steps recorded for this run.</p>
                         ) : (
                           <div className="divide-y divide-border/60 px-2 py-2">
-                            {run.steps.map((step, i) => (
-                              <div key={`${step.nodeId}-${i}`} className="flex items-center gap-2 px-4 py-1.5">
-                                <span className={cn('h-2 w-2 shrink-0 rounded-full', STEP_DOT[step.status] || 'bg-gray-300')} />
-                                <span className="flex-1 truncate text-sm">{labelForNode(graph, step.nodeId)}</span>
-                                <span className={cn('text-xs font-medium capitalize', STEP_TEXT[step.status] || 'text-muted-foreground')}>{step.status}</span>
-                                {step.error && <span className="max-w-xs truncate text-xs text-red-600">{step.error}</span>}
-                              </div>
-                            ))}
+                            {run.steps.map((step, i) => {
+                              // The paused step reads as what it needs, never the bare status word.
+                              const waitingKind = step.status === 'waiting' && run.waiting?.nodeId === step.nodeId ? run.waiting.kind : undefined
+                              const statusLabel = waitingKind ? (waitingKind === 'input' ? 'Waiting for your reply' : 'Waiting for approval') : step.status
+                              return (
+                                <div key={`${step.nodeId}-${i}`} className="flex items-center gap-2 px-4 py-1.5">
+                                  <span className={cn('h-2 w-2 shrink-0 rounded-full', STEP_DOT[step.status] || 'bg-gray-300')} />
+                                  <span className="flex-1 truncate text-sm">{labelForNode(graph, step.nodeId)}</span>
+                                  <span className={cn('text-xs font-medium', !waitingKind && 'capitalize', STEP_TEXT[step.status] || 'text-muted-foreground')}>{statusLabel}</span>
+                                  {step.error && <span className="max-w-xs truncate text-xs text-red-600">{step.error}</span>}
+                                </div>
+                              )
+                            })}
                           </div>
                         )}
                       </TableCell>
