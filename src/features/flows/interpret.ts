@@ -2,6 +2,7 @@ import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/gr
 import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from './context'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
+import { runDataOp } from '@/lib/flows/data-ops'
 
 export type StepOutcome = {
   nodeId: string
@@ -371,6 +372,29 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
     if (node.type === 'variable') {
       const res = applyVariableOp(node, ctx, declaredTypes)
+      if ('error' in res) {
+        emit({ nodeId: node.id, status: 'failed', error: res.error })
+        return { kind: 'fail', error: res.error }
+      }
+      ctx.step[node.id] = { output: res.output }
+      emit({ nodeId: node.id, status: 'succeeded', output: res.output })
+      return { kind: 'ok', output: res.output }
+    }
+
+    if (node.type === 'data') {
+      // Pure transform: resolve the input template here (an exact token keeps
+      // its structure), then delegate to the side-effect-free op runner.
+      // filterArray clauses / select values resolve per item inside runDataOp,
+      // with this ctx riding along so step/trigger/var tokens keep working.
+      const input = node.data.input?.trim() ? resolveTemplateValue(node.data.input, ctx) : undefined
+      const res = runDataOp(node.data.op, {
+        input,
+        separator: node.data.separator === undefined ? undefined : resolveTemplate(node.data.separator, ctx),
+        schema: node.data.schema,
+        clauses: node.data.clauses,
+        fields: node.data.fields,
+        ctx,
+      })
       if ('error' in res) {
         emit({ nodeId: node.id, status: 'failed', error: res.error })
         return { kind: 'fail', error: res.error }

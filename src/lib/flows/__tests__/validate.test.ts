@@ -352,3 +352,51 @@ test('validateFlowGraph rejects increment/decrement on non-numeric variables', (
   const result = validateFlowGraph(graph)
   assert.ok(result.errors.some((issue) => issue.code === 'VARIABLE_NOT_NUMERIC' && issue.nodeId === 'v2'))
 })
+
+test('validateFlowGraph accepts a well-formed data operation flow', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'join', input: '{{trigger.input}}', separator: ', ' } },
+      { id: 'd2', type: 'data', data: { op: 'select', input: '{{step.d1.output}}', fields: [{ name: 'x', value: '{{item}}' }] } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'd1' },
+      { id: 'e1', source: 'd1', target: 'd2' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.deepEqual(result.errors, [])
+})
+
+test('validateFlowGraph requires an input on every data operation', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'compose', input: '' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'd1' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((issue) => issue.code === 'MISSING_DATA_INPUT' && issue.nodeId === 'd1'))
+})
+
+test('validateFlowGraph requires clauses on filter array and fields on select', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'filterArray', input: '{{trigger.input}}' } },
+      { id: 'd2', type: 'data', data: { op: 'select', input: '{{trigger.input}}', fields: [] } },
+      { id: 'd3', type: 'data', data: { op: 'select', input: '{{trigger.input}}', fields: [{ name: '', value: '{{item}}' }] } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'd1' },
+      { id: 'e1', source: 'd1', target: 'd2' },
+      { id: 'e2', source: 'd2', target: 'd3' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((issue) => issue.code === 'EMPTY_DATA_CLAUSES' && issue.nodeId === 'd1'))
+  assert.ok(result.errors.some((issue) => issue.code === 'EMPTY_DATA_FIELDS' && issue.nodeId === 'd2'))
+  assert.ok(result.errors.some((issue) => issue.code === 'MISSING_DATA_FIELD_NAME' && issue.nodeId === 'd3'))
+})

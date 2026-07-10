@@ -185,8 +185,33 @@ const variableNode = z.object({
   }),
 })
 
+/** Pure transforms a data operation step can perform (MS Data Operation parity). */
+export const DATA_OPS = ['compose', 'parseJson', 'join', 'csvTable', 'htmlTable', 'filterArray', 'select'] as const
+export type DataOp = (typeof DATA_OPS)[number]
+// Deterministic data-shaping step between other steps: no LLM, no I/O. `input`
+// is templated (usually an exact {{step.x.output}} token so structure survives);
+// the op-specific extras are: `separator` (join), `schema` (parseJson — stored
+// for the editor, not yet enforced), `clauses` (filterArray, evaluated per item
+// against {{item.*}}), `fields` (select's per-item name/value mappings).
+// NOTE: the existing `transform`/`filter` node types stay untouched; `data`
+// supersedes them for new graphs (picker copy steers — Task 4).
+const dataNode = z.object({
+  id: z.string(),
+  type: z.literal('data'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    op: z.enum(DATA_OPS),
+    input: z.string().optional(),
+    separator: z.string().optional(),
+    schema: z.string().optional(),
+    clauses: z.array(conditionClauseSchema).optional(),
+    fields: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

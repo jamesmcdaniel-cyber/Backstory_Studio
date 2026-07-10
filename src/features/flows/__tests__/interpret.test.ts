@@ -1076,3 +1076,109 @@ test('set with a literally empty value field still clears a string variable', as
   assert.equal(result.status, 'succeeded')
   assert.equal(result.output, 'greeting=[]')
 })
+
+// ── data operation steps ─────────────────────────────────────────────────────
+
+test('data step joins a prior step output and feeds a later step', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'list', input: 'x' } },
+      { id: 'd1', type: 'data', data: { op: 'join', input: '{{step.n1.output}}', separator: ' - ' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'echo', input: 'got {{step.d1.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'd1' },
+      { id: 'e2', source: 'd1', target: 'n2' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: stub({ list: '["a","b","c"]' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'ran:got a - b - c')
+})
+
+test('data parseJson exposes fields to downstream steps', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'parseJson', input: '{{trigger.input}}' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'echo', input: 'score={{step.d1.output.score}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'd1' },
+      { id: 'e1', source: 'd1', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, '{"score": 91}', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'score=91')
+})
+
+test('data parseJson on invalid content fails the run with a plain message', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'parseJson', input: '{{trigger.input}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'd1' }],
+  }
+  const result = await interpretFlow(graph, 'not json at all', { runAgent: stub({}) })
+  assert.equal(result.status, 'failed')
+  assert.match(result.error ?? '', /Parse JSON needs valid JSON/)
+})
+
+test('data filterArray filters a prior step output by item fields', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'list', input: 'x' } },
+      { id: 'd1', type: 'data', data: { op: 'filterArray', input: '{{step.n1.output}}', clauses: [{ left: '{{item.stage}}', op: 'eq', right: 'open' }] } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'd1' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', {
+    runAgent: stub({ list: '[{"stage":"open","name":"A"},{"stage":"closed","name":"B"}]' }),
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.output, [{ stage: 'open', name: 'A' }])
+})
+
+test('data select maps items and feeds an html table downstream', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'select', input: '{{trigger.input}}', fields: [{ name: 'company', value: '{{item.name}}' }] } },
+      { id: 'd2', type: 'data', data: { op: 'htmlTable', input: '{{step.d1.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'd1' },
+      { id: 'e1', source: 'd1', target: 'd2' },
+    ],
+  }
+  const result = await interpretFlow(graph, [{ name: '<b>Acme</b>' }], { runAgent: stub({}) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, '<table><thead><tr><th>company</th></tr></thead><tbody><tr><td>&lt;b&gt;Acme&lt;/b&gt;</td></tr></tbody></table>')
+})
+
+test('data compose passes trigger input structure through to later steps', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'd1', type: 'data', data: { op: 'compose', input: '{{trigger.input.account}}' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'echo', input: 'name={{step.d1.output.name}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'd1' },
+      { id: 'e1', source: 'd1', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, { account: { name: 'Acme' } }, { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'name=Acme')
+})

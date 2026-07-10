@@ -49,6 +49,24 @@ function nodeLabel(node: FlowNode | undefined) {
       return 'Filter'
     case 'stop':
       return 'Stop'
+    case 'data':
+      switch (node.data.op) {
+        case 'compose':
+          return 'Compose'
+        case 'parseJson':
+          return 'Parse JSON'
+        case 'join':
+          return 'Join'
+        case 'csvTable':
+          return 'Create CSV table'
+        case 'htmlTable':
+          return 'Create HTML table'
+        case 'filterArray':
+          return 'Filter array'
+        case 'select':
+          return 'Select'
+      }
+      break
     case 'variable':
       switch (node.data.op) {
         case 'initialize':
@@ -427,6 +445,26 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         if (names.filter((entry) => entry === name).length > 1) {
           add(issues, 'error', 'DUPLICATE_TRANSFORM_FIELD', `${nodeLabel(node)} has duplicate field "${name}".`, node.id)
         }
+      }
+    }
+    if (node.type === 'data') {
+      if (!node.data.input?.trim()) {
+        add(issues, 'error', 'MISSING_DATA_INPUT', `${nodeLabel(node)} needs data to work with.`, node.id)
+      }
+      // separator (join) is optional — it defaults to ',' at run time.
+      if (node.data.op === 'filterArray') {
+        const clauses = node.data.clauses ?? []
+        if (clauses.length === 0) add(issues, 'error', 'EMPTY_DATA_CLAUSES', `${nodeLabel(node)} needs at least one condition.`, node.id)
+        clauses.forEach((clause, index) => {
+          if (!clause.left.trim()) add(issues, 'error', 'MISSING_DATA_CLAUSE_LEFT', `${nodeLabel(node)} condition ${index + 1} needs data to check.`, node.id)
+        })
+      }
+      if (node.data.op === 'select') {
+        const fields = node.data.fields ?? []
+        if (fields.length === 0) add(issues, 'error', 'EMPTY_DATA_FIELDS', `${nodeLabel(node)} needs at least one field.`, node.id)
+        fields.forEach((field, index) => {
+          if (!field.name.trim()) add(issues, 'error', 'MISSING_DATA_FIELD_NAME', `${nodeLabel(node)} field ${index + 1} needs a name.`, node.id)
+        })
       }
     }
   }
