@@ -44,26 +44,57 @@ if (TEST_DB) {
   })
 
   test('resuming a run that IS waiting succeeds and pins execution to graphSnapshot, not the flow\'s current graph', async () => {
-    // The run's snapshot has an extra 'legacy' marker node absent from the flow's
-    // CURRENT (edited-after-pause) graph — if resume re-derives from flow.graph
-    // instead of the snapshot, this node would vanish and resume would silently
-    // run a different graph shape than the one that paused.
-    const snapshot = { nodes: [...emptyGraph.nodes, { id: 'legacy', type: 'stop', position: { x: 0, y: 0 }, data: { reason: 'marker' } }], edges: [] }
+    // The run's snapshot routes the trigger to a 'legacy' stop node; the flow's
+    // CURRENT (edited-after-pause) graph routes the trigger to a differently
+    // named 'current-only' stop node instead. If resume re-derived from
+    // flow.graph rather than the snapshot, the persisted step would carry the
+    // 'current-only' node id, never 'legacy' — this test observes the actual
+    // executed step, not just that the run didn't throw.
+    const snapshot = {
+      nodes: [...emptyGraph.nodes, { id: 'legacy', type: 'stop', position: { x: 0, y: 0 }, data: { reason: 'marker' } }],
+      edges: [{ id: 'e-legacy', source: 'trigger', target: 'legacy' }],
+    }
+    const currentGraph = {
+      nodes: [...emptyGraph.nodes, { id: 'current-only', type: 'stop', position: { x: 0, y: 0 }, data: { reason: 'marker' } }],
+      edges: [{ id: 'e-current', source: 'trigger', target: 'current-only' }],
+    }
     const run = await prisma.flowRun.create({
       data: { flowId: ids.flow, organizationId: ids.org, userId: ids.user, status: 'waiting', graphSnapshot: snapshot, input: { prompt: '' } },
     })
-    // Simulate the flow having been republished since the run paused.
-    await prisma.flow.update({ where: { id: ids.flow }, data: { graph: emptyGraph, publishedGraph: emptyGraph } })
+    // Simulate the flow having been republished (with a distinctly-shaped
+    // graph) since the run paused.
+    await prisma.flow.update({ where: { id: ids.flow }, data: { graph: currentGraph, publishedGraph: currentGraph } })
 
     const result = await runFlowExecution({ flowId: ids.flow, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'go' })
-    // The trigger has no outgoing edge to 'legacy' in either graph, so the run
-    // completes immediately either way — this test's job is only to prove the
-    // claim succeeded (status flipped, not thrown) using the snapshot's shape,
-    // verified indirectly via the second assertion below.
     assert.equal(result.flowRunId, run.id)
 
     const claimed = await prisma.flowRun.findUnique({ where: { id: run.id } })
     assert.notEqual(claimed.status, 'waiting')
+
+    const steps: any[] = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id } })
+    assert.ok(steps.some((step) => step.nodeId === 'legacy'), 'the snapshot\'s step node must have actually executed')
+    assert.ok(!steps.some((step) => step.nodeId === 'current-only'), 'the flow\'s current-graph-only node must never execute on resume')
+  })
+
+  test('a resume claim that fails validation rolls the run back to `waiting`, not stuck `running`', async () => {
+    // The snapshot references an agent that no longer exists (deleted while
+    // the run waited) — validateFlowGraph rejects it AFTER the atomic claim
+    // has already flipped the run to `running`. That claim must be undone so
+    // the user's reply stays retryable instead of stranding the run until the
+    // reaper terminalizes it.
+    const snapshot = {
+      nodes: [...emptyGraph.nodes, { id: 'agent1', type: 'agent', position: { x: 0, y: 0 }, data: { agentId: 'deleted-agent-id', input: 'hi' } }],
+      edges: [{ id: 'e-agent', source: 'trigger', target: 'agent1' }],
+    }
+    const run = await prisma.flowRun.create({
+      data: { flowId: ids.flow, organizationId: ids.org, userId: ids.user, status: 'waiting', graphSnapshot: snapshot, input: { prompt: '' } },
+    })
+    await assert.rejects(
+      () => runFlowExecution({ flowId: ids.flow, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'go' }),
+      (error: any) => error.code === 'FLOW_VALIDATION_ERROR',
+    )
+    const after2 = await prisma.flowRun.findUnique({ where: { id: run.id } })
+    assert.equal(after2.status, 'waiting') // claim rolled back — the reply stays retryable
   })
 
   test('a second concurrent resume of the same run loses cleanly after the first claims it', async () => {

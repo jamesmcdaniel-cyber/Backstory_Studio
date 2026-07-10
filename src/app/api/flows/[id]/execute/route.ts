@@ -22,6 +22,12 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
   const body = await request.json().catch(() => ({}))
   const parsed = z.object({ input: z.unknown().optional(), flowRunId: z.string().optional(), reply: z.string().optional() }).parse(body)
+  // flowRunId only resumes a paused run when paired with the user's reply —
+  // without a reply there is nothing to resume with, and silently starting a
+  // fresh run instead would strand the caller's expectation of continuity.
+  if (parsed.flowRunId && parsed.reply === undefined) {
+    throw new ApiError('flowRunId requires a reply — to start a new run, omit flowRunId.', 400, 'FLOW_RESUME_REQUIRES_REPLY')
+  }
   // Resume hardening: the run being resumed must belong to THIS flow and org —
   // otherwise a crafted flowRunId could re-interpret another flow's run
   // against this flow's graph.

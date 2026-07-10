@@ -73,35 +73,63 @@ export async function runFlowExecution(
       data: { status: 'running' },
     })
     if (claimed.count === 0) throw new ApiError('This run is not waiting for input', 409, 'FLOW_RUN_NOT_WAITING')
-    existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId } })
-    if (!existingRun) throw new Error('Flow run not found after claim')
   }
   // Snapshot pinning: a resumed run executes the EXACT graph it started with
   // (graphSnapshot), never whatever the flow currently is — a publish made
   // while the run waited must not reshape a run already in flight.
-  const source = existingRun ? existingRun.graphSnapshot : job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
-  const graph = flowGraphSchema.parse(source)
-  let input: unknown = job.input ?? ''
-  const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
-    node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
-  ).filter((id): id is string => Boolean(id))))
-  const [agents, toolCatalog] = await Promise.all([
-    prisma.agentTask.findMany({
-      where: { organizationId: job.organizationId, status: 'ACTIVE' },
-      select: { id: true, description: true },
-      take: 500,
-    }),
-    usedConnectionIds.length
-      ? loadFlowToolCatalog(job.organizationId, { userId: job.userId, connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
-      : Promise.resolve([]),
-  ])
-  const validation = validateFlowGraph(graph, {
-    agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
-    toolCatalog,
-  })
-  if (!validation.ok) {
-    throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
+  //
+  // Invariant: once the claim above flips a run to `running`, everything up
+  // to (but not including) interpretFlow taking over is wrapped so that any
+  // throw here — a deleted agent/connection the snapshot still references, a
+  // malformed snapshot, graph validation failure — rolls the run back to
+  // `waiting` before rethrowing. Otherwise the run would be stuck `running`
+  // with no executor, and the user's reply would be unretryable until the
+  // reaper terminalizes it after 30 minutes. Once interpretFlow begins,
+  // failures are handled by the existing failure paths (run marked `failed`)
+  // — this rollback must not extend into that phase.
+  let graph!: ReturnType<typeof flowGraphSchema.parse>
+  try {
+    if (resuming) {
+      existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId } })
+      if (!existingRun) throw new Error('Flow run not found after claim')
+    }
+    // Legacy fallback: a pre-snapshot waiting run (graphSnapshot null) resumes
+    // against the flow's current graph — the same source a fresh run would use.
+    const currentGraph = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
+    const source = existingRun ? existingRun.graphSnapshot ?? currentGraph : currentGraph
+    graph = flowGraphSchema.parse(source)
+    const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
+      node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
+    ).filter((id): id is string => Boolean(id))))
+    const [agents, toolCatalog] = await Promise.all([
+      prisma.agentTask.findMany({
+        where: { organizationId: job.organizationId, status: 'ACTIVE' },
+        select: { id: true, description: true },
+        take: 500,
+      }),
+      usedConnectionIds.length
+        ? loadFlowToolCatalog(job.organizationId, { userId: job.userId, connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
+        : Promise.resolve([]),
+    ])
+    const validation = validateFlowGraph(graph, {
+      agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
+      toolCatalog,
+    })
+    if (!validation.ok) {
+      throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
+    }
+  } catch (error) {
+    // The `status: 'running'` guard means we only roll back a claim we
+    // ourselves hold — never stomp a reaper's terminal `failed` write.
+    if (resuming) {
+      await prisma.flowRun.updateMany({
+        where: { id: job.flowRunId, status: 'running' },
+        data: { status: 'waiting' },
+      })
+    }
+    throw error
   }
+  let input: unknown = job.input ?? ''
 
   // Required trigger inputs (declared on the trigger node) must be present.
   // Skipped when resuming: the original input was validated on the first run.
