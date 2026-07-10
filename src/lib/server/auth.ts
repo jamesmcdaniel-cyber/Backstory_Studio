@@ -11,6 +11,21 @@ export interface AuthContext {
   organizationId: string
 }
 
+// Production-inert test seam: mirrors src/lib/observability/sentry.ts's
+// injectable reporter. A route smoke test injects a seeded auth context so it
+// can drive real handlers without a Supabase session. NEVER active in
+// production — double-gated on NODE_ENV and TEST_DATABASE_URL (production sets
+// neither), and null by default so real auth runs unless a test injects.
+let testAuthContext: AuthContext | null = null
+
+export function setTestAuthContext(ctx: AuthContext | null): void {
+  testAuthContext = ctx
+}
+
+function testAuthActive(): boolean {
+  return process.env.NODE_ENV !== 'production' && Boolean(process.env.TEST_DATABASE_URL)
+}
+
 export class AuthContextError extends Error {
   constructor(
     message: string,
@@ -49,6 +64,8 @@ export async function assertEntitled(organizationId: string): Promise<void> {
 export async function requireAuthContext(
   options?: { skipBackstoryGate?: boolean; skipEntitlementGate?: boolean },
 ): Promise<AuthContext> {
+  if (testAuthContext && testAuthActive()) return testAuthContext
+
   const auth = await getAuthWithUser()
 
   if (!auth?.user || !auth.userId) {
