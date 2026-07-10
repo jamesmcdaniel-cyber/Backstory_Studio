@@ -491,15 +491,27 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
   )
   for (const memberId of containerMemberIds) {
     const member = byId.get(memberId)
-    if (member?.type !== 'tool' || !member.data.connectionId) continue
-    if (parseFlowToolConnectionId(member.data.connectionId).plane !== 'nango') continue
-    add(
-      issues,
-      'error',
-      'APPROVAL_IN_CONTAINER',
-      `${nodeLabel(member)} needs an approval to send — approvals aren't supported inside loops or parallel branches yet. Move it after the loop.`,
-      member.id,
-    )
+    if (!member) continue
+    if (member.type === 'tool' && member.data.connectionId && parseFlowToolConnectionId(member.data.connectionId).plane === 'nango') {
+      add(
+        issues,
+        'error',
+        'APPROVAL_IN_CONTAINER',
+        `${nodeLabel(member)} needs an approval to send — approvals aren't supported inside loops or parallel branches yet. Move it after the loop.`,
+        member.id,
+      )
+    }
+    // Warning (not an error): the run still works, but resuming a paused
+    // container replays its body, so the same question is asked again.
+    if (member.type === 'humanReview') {
+      add(
+        issues,
+        'warning',
+        'HUMAN_REVIEW_IN_CONTAINER',
+        `${nodeLabel(member)} inside a loop or parallel branches will re-ask on resume — move it to the main flow for now.`,
+        member.id,
+      )
+    }
   }
 
   const flaggedNodeIds = new Set<string>()

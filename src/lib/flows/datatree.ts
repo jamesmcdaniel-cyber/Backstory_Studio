@@ -58,6 +58,8 @@ export type DataTreeSource = {
   insideLoop?: boolean
   /** Parsed last-run outputs keyed by node id — fields are inferred from them. */
   lastOutputs?: Record<string, unknown>
+  /** Variables initialized by upstream variable steps, exposed as {{var.<name>}}. */
+  variables?: { name: string; type: string }[]
 }
 
 /** Build the datatree roots for the field picker. */
@@ -83,6 +85,18 @@ export function buildDataTree(source: DataTreeSource): DataField[] {
       type: typeOf(source.triggerInput) === 'any' ? 'string' : typeOf(source.triggerInput),
       description: 'The text, JSON, or webhook payload passed when this flow starts.',
       children,
+    })
+  }
+  // Upstream initialized variables, each a root of its own: every DataTree row
+  // is insertable and there is no aggregate all-variables token to hang a
+  // grouping root on.
+  for (const variable of source.variables ?? []) {
+    if (!variable.name.trim()) continue
+    roots.push({
+      label: `Variable ${variable.name}`,
+      token: `{{var.${variable.name}}}`,
+      type: variable.type,
+      description: 'Variable set earlier in this flow.',
     })
   }
   if (source.insideLoop) {

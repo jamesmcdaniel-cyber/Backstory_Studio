@@ -21,14 +21,17 @@ function toolOutputHint(schema: unknown): string {
 const graphRules =
   'You design runnable workflow graphs for Backstory Studio. Return a single JSON object with one property, graphJson: a JSON string containing the flow graph, shaped as {"nodes": [...], "edges": [...]}. ' +
   'Always include one trigger node with id "trigger". Prefer deterministic tool nodes for concrete integration actions and agent nodes for reasoning/writing decisions. ' +
-  'Allowed node types: agent, tool, http, transform, filter, condition, switch, loop, parallel, stop. ' +
+  'Allowed node types: agent, tool, http, transform, filter, condition, switch, loop, parallel, stop, variable, data, humanReview. ' +
   'If the flow expects named input fields, put them on the trigger as data.trigger.inputFields: [{name,type,description}]. ' +
   'Agent data: {agentId, label, input}; agentId MUST be from the agent roster. ' +
   'Tool data: {connectionId, toolName, label, args, retries, timeoutMs}; connectionId/toolName MUST be from available tools and args MUST be a JSON object string. Use retries for flaky external actions and timeoutMs for slow tools. ' +
   'For required tool args that should come from the run form, declare trigger inputFields and map args to {{trigger.input.fieldName}}. ' +
   'HTTP data: {method,url,query,headers,bodyMode,responseType,failOnHttpError,retries,timeoutMs,body}; method is GET/POST/PUT/PATCH/DELETE, query/headers/body are JSON strings, bodyMode is json/text/none, responseType is auto/json/text. ' +
   'HTTP output is an object with ok, status, statusText, url, headers, body, and bodyText; use {{step.<httpNodeId>.output.body}} for parsed API response data and {{step.<httpNodeId>.output.status}} for status checks. ' +
-  'Use data references only when needed: {{trigger.input}}, {{step.<nodeId>.output}}, {{step.<nodeId>.output.field}}, {{item}}, {{item.field}}, {{loop.index}}. ' +
+  'Variable data: {op, name, varType, value}; op is initialize/set/increment/decrement/appendArray/appendString; initialize declares the variable (free name, varType one of boolean/integer/float/string/object/array, optional starting value) and MUST come before any mutation of that name; varType is only for initialize; value is templated and optional for increment/decrement (defaults to 1); read a variable anywhere with {{var.<name>}}. ' +
+  'Data (data operation) node data: {op, input, separator, schema, clauses, fields}; op is compose/parseJson/join/csvTable/htmlTable/filterArray/select; input is templated and usually an exact {{step.<nodeId>.output}} token so structure survives; separator is join-only; schema is parseJson-only (optional, stored for reference); clauses is filterArray-only (left/op/right evaluated per item against {{item.*}}); fields is select-only ([{name,value}] with {{item.*}} values). Prefer data nodes over transform/filter for new graphs. ' +
+  'HumanReview data: {message, assigneeUserId}; message (required, templated) is the question asked; the run pauses at this step until the person replies and the reply becomes {{step.<nodeId>.output}}; omit assigneeUserId to ask the flow owner. ' +
+  'Use data references only when needed: {{trigger.input}}, {{step.<nodeId>.output}}, {{step.<nodeId>.output.field}}, {{item}}, {{item.field}}, {{loop.index}}, {{var.<name>}}. ' +
   'For loops, data.over should point at a list and data.body should contain nested node ids. For condition/filter, use data.clauses with left/op/right. ' +
   'Edges connect node ids; condition edges use branch "true"/"false"; switch edges use case ids or "default". ' +
   'When a later step references {{step.<agentNodeId>.output.<field>}}, that agent node MUST set responseFormat: "structured" and declare outputFields: [{name,type}] matching the referenced fields.'

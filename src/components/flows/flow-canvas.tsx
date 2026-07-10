@@ -3,7 +3,8 @@
 import { Fragment, useState } from 'react'
 import { Plus, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { FlowGraph, FlowNode } from '@/lib/flows/graph'
+import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
+import { VARIABLE_OP_LABELS, VARIABLE_TYPE_LABELS, type DataOp, type FlowGraph, type FlowNode, type VariableOp } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
 import type { DataField } from '@/lib/flows/datatree'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
@@ -18,6 +19,8 @@ export type FlowInsertSeed = {
   connectionId?: string
   toolName?: string
   label?: string
+  variableOp?: VariableOp
+  dataOp?: DataOp
 }
 
 function InsertMenu({
@@ -117,6 +120,7 @@ export function FlowCanvas({
   toolCatalog,
   dataFields,
   labelCtx,
+  variableNames,
   statusByNode,
   issuesByNode,
   highlightIds,
@@ -139,6 +143,7 @@ export function FlowCanvas({
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
+  variableNames?: string[]
   statusByNode: Record<string, StepStatus>
   issuesByNode?: Record<string, { errors: number; warnings: number; items: { level: 'error' | 'warning'; message: string }[] }>
   highlightIds?: string[]
@@ -207,11 +212,12 @@ export function FlowCanvas({
         return node.data.label || 'Filter'
       case 'switch':
         return node.data.label || 'Switch'
-      // Neutral placeholder titles; Task 4 adds the per-op treatment.
-      case 'variable':
-        return node.data.label || 'Variable'
+      case 'variable': {
+        const name = node.data.name.trim()
+        return node.data.label || `${VARIABLE_OP_LABELS[node.data.op]}${name ? ` ${name}` : ''}`
+      }
       case 'data':
-        return node.data.label || 'Data operation'
+        return node.data.label || DATA_OP_LABELS[node.data.op]
       case 'humanReview':
         return node.data.label || 'Request information'
     }
@@ -252,6 +258,23 @@ export function FlowCanvas({
         return node.data.note || 'Continue only if a rule matches'
       case 'switch':
         return node.data.note || `${node.data.cases.length} case${node.data.cases.length === 1 ? '' : 's'}`
+      // Subtitles run through StepCard's humanize, so {{tokens}} below read as
+      // plain-English chips, never raw braces.
+      case 'variable': {
+        if (node.data.note) return node.data.note
+        if (node.data.op === 'initialize') {
+          const typeLabel = VARIABLE_TYPE_LABELS[node.data.varType ?? 'string']
+          return node.data.value?.trim() ? `${typeLabel} — starts as ${node.data.value}` : `${typeLabel} variable`
+        }
+        if (node.data.op === 'increment' || node.data.op === 'decrement') {
+          return node.data.value?.trim() ? `By ${node.data.value}` : 'By 1'
+        }
+        return node.data.value?.trim() || 'Choose the value to store'
+      }
+      case 'data':
+        return node.data.note || node.data.input?.trim() || 'Choose the data to work with'
+      case 'humanReview':
+        return node.data.note || node.data.message.trim() || 'Write the question to ask'
       default:
         return (node.data as { note?: string }).note || undefined
     }
@@ -272,6 +295,7 @@ export function FlowCanvas({
         toolCatalog={toolCatalog}
         dataFields={selectedId === node.id ? dataFields : undefined}
         labelCtx={labelCtx}
+        variableNames={selectedId === node.id ? variableNames : undefined}
         onChange={onChangeNode}
         onClick={() => onSelect(node.id)}
         onRefreshAgents={onRefreshAgents}

@@ -1,4 +1,5 @@
-import type { FlowGraph } from '@/lib/flows/graph'
+import { VARIABLE_OP_LABELS, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 
 /**
  * Pure presentation helpers that turn `{{token}}` template strings into
@@ -69,9 +70,21 @@ export function humanizeTokens(value: string, ctx: TokenLabelContext): string {
 }
 
 /**
+ * Plain-English fallback label for a step with no user label. Variable/data
+ * steps read as their operation and human review as 'Request information' —
+ * internal type names like "humanReview" must never reach the user.
+ */
+export function defaultStepLabel(node: FlowNode): string {
+  if (node.type === 'variable') return VARIABLE_OP_LABELS[node.data.op]
+  if (node.type === 'data') return DATA_OP_LABELS[node.data.op]
+  if (node.type === 'humanReview') return 'Request information'
+  return node.type.charAt(0).toUpperCase() + node.type.slice(1)
+}
+
+/**
  * Node-id → display-label map matching the builder's `labelForNode`: agent
  * nodes use their label, else the agent's title, else 'Agent step'; other
- * nodes use their label, else the capitalized type. The trigger is excluded.
+ * nodes use their label, else a plain-English type label. The trigger is excluded.
  */
 export function stepLabelsOf(graph: FlowGraph, agents?: { id: string, title: string }[]): Record<string, string> {
   const labels: Record<string, string> = {}
@@ -80,7 +93,7 @@ export function stepLabelsOf(graph: FlowGraph, agents?: { id: string, title: str
     if (node.type === 'agent') {
       labels[node.id] = node.data.label || agents?.find((a) => a.id === node.data.agentId)?.title || 'Agent step'
     } else {
-      labels[node.id] = node.data.label || node.type.charAt(0).toUpperCase() + node.type.slice(1)
+      labels[node.id] = node.data.label || defaultStepLabel(node)
     }
   }
   return labels

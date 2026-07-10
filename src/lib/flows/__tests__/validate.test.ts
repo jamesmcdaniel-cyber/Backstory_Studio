@@ -431,3 +431,38 @@ test('validateFlowGraph accepts a humanReview step with a message and optional a
   const result = validateFlowGraph(graph)
   assert.deepEqual(result.errors, [])
 })
+
+test('validateFlowGraph warns (not errors) on a humanReview step inside a loop or parallel branch', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'l1', type: 'loop', data: { over: '{{trigger.input}}', body: ['hr1'] } },
+      { id: 'hr1', type: 'humanReview', data: { message: 'Approve this item?' } },
+      { id: 'p1', type: 'parallel', data: { branches: [['hr2']] } },
+      { id: 'hr2', type: 'humanReview', data: { message: 'Anything to add?' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'l1' },
+      { id: 'e1', source: 'l1', target: 'p1' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, true) // warning only — the flow stays runnable
+  for (const nodeId of ['hr1', 'hr2']) {
+    const issue = result.warnings.find((entry) => entry.code === 'HUMAN_REVIEW_IN_CONTAINER' && entry.nodeId === nodeId)
+    assert.ok(issue, `expected a container warning for ${nodeId}`)
+    assert.match(issue!.message, /re-ask on resume/)
+  }
+})
+
+test('validateFlowGraph does not warn on a humanReview step in the main flow', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'hr', type: 'humanReview', data: { message: 'What segment should we target?' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'hr' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(!result.warnings.some((entry) => entry.code === 'HUMAN_REVIEW_IN_CONTAINER'))
+})

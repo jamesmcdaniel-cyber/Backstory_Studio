@@ -208,7 +208,8 @@ function WaitingBanner({
         ) : (
           <>
             <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Waiting for your reply</p>
-            <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">{waiting.question || 'The agent asked a question.'}</p>
+            {/* Neutral fallback: input pauses come from agent questions AND humanReview steps. */}
+            <p className="mt-1 text-xs text-blue-800 dark:text-blue-300">{waiting.question || 'This flow is waiting on information from you.'}</p>
             <textarea
               value={text}
               onChange={(e) => setText(e.target.value)}

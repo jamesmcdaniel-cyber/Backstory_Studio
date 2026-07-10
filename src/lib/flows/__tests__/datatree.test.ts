@@ -82,3 +82,19 @@ test('buildDataTree exposes {{item}}/{{loop.index}} inside a loop', () => {
   assert.equal(item?.children?.[0]?.token, '{{item.name}}')
   assert.ok(tree.some((r) => r.token === '{{loop.index}}'))
 })
+
+test('buildDataTree lists upstream initialized variables as typed {{var.*}} roots', () => {
+  const tree = buildDataTree({
+    upstream: [],
+    variables: [
+      { name: 'deal_count', type: 'integer' },
+      { name: '', type: 'string' }, // blank names are skipped
+    ],
+  })
+  const variable = tree.find((root) => root.token === '{{var.deal_count}}')
+  assert.ok(variable)
+  assert.equal(variable?.label, 'Variable deal_count')
+  assert.equal(variable?.type, 'integer')
+  assert.equal(variable?.description, 'Variable set earlier in this flow.')
+  assert.equal(tree.filter((root) => root.token.startsWith('{{var.')).length, 1)
+})

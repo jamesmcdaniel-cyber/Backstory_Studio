@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'motion/react'
 import {
   Bot,
+  Braces,
   CalendarDays,
   Check,
   CircleStop,
@@ -30,13 +31,17 @@ import {
   ToggleLeft,
   Trash2,
   Type,
+  UserCheck,
+  Variable,
   Wrench,
   Zap,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
-import { CONDITION_OPS, FIELD_TYPES, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
+import { CONDITION_OPS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type ConditionClause, type ConditionOp, type DataOp, type FlowNode, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
+import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
+import { DATA_OP_HELPER, DATA_OP_INPUT_PLACEHOLDER, VARIABLE_VALUE_PLACEHOLDER, variableValueOptional } from '@/lib/flows/step-copy'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
@@ -73,12 +78,9 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   transform: SlidersHorizontal,
   filter: Filter,
   switch: Split,
-  // Placeholder pending Task 4's dedicated Variables treatment.
-  variable: SlidersHorizontal,
-  // Placeholder pending Task 4's dedicated Data operations treatment.
-  data: SlidersHorizontal,
-  // Placeholder pending Task 4's dedicated Request information treatment.
-  humanReview: Mail,
+  variable: Variable,
+  data: Braces,
+  humanReview: UserCheck,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -95,7 +97,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   switch: 'bg-fuchsia-600 text-white',
   variable: 'bg-purple-600 text-white',
   data: 'bg-violet-600 text-white',
-  humanReview: 'bg-teal-600 text-white',
+  humanReview: 'bg-blue-600 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {
@@ -246,6 +248,9 @@ const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
   condition: 'clause.left',
   filter: 'clause.left',
   switch: 'sw.left',
+  variable: 'var.value',
+  data: 'data.input',
+  humanReview: 'hr.message',
 }
 
 // Chip editors still render when the caller omitted labelCtx: chips fall back
@@ -273,6 +278,7 @@ export function StepCard({
   toolCatalog,
   dataFields,
   labelCtx,
+  variableNames,
   onChange,
   onClick,
   onRefreshAgents,
@@ -294,6 +300,7 @@ export function StepCard({
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
+  variableNames?: string[]
   onChange?: (node: FlowNode) => void
   onClick?: () => void
   onRefreshAgents?: () => void
@@ -630,7 +637,7 @@ export function StepCard({
             className="overflow-hidden"
           >
             <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors })}
+              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors, variableNames })}
             </div>
           </motion.div>
         ) : (
@@ -711,6 +718,7 @@ function renderNodeBody({
   onRefreshAgents,
   tokenWiring,
   showErrors,
+  variableNames,
 }: {
   node: FlowNode
   agents: Agent[]
@@ -719,6 +727,7 @@ function renderNodeBody({
   onRefreshAgents?: () => void
   tokenWiring: TokenEditorWiring
   showErrors?: boolean
+  variableNames?: string[]
 }) {
   switch (node.type) {
     case 'trigger':
@@ -743,6 +752,12 @@ function renderNodeBody({
       return <SwitchBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'stop':
       return <StopBody node={node} update={update} />
+    case 'variable':
+      return <VariableBody node={node} update={update} tokenWiring={tokenWiring} variableNames={variableNames} showErrors={showErrors} />
+    case 'data':
+      return <DataBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
+    case 'humanReview':
+      return <HumanReviewBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
   }
 }
 
@@ -1463,6 +1478,336 @@ function StopBody({ node, update }: { node: Extract<FlowNode, { type: 'stop' }>;
         className={controlClass}
         placeholder="Optional reason shown when this flow stops"
       />
+    </div>
+  )
+}
+
+function VariableBody({
+  node,
+  update,
+  tokenWiring,
+  variableNames,
+  showErrors,
+}: {
+  node: Extract<FlowNode, { type: 'variable' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+  variableNames?: string[]
+  showErrors?: boolean
+}) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
+  const isInitialize = node.data.op === 'initialize'
+  const currentName = node.data.name.trim()
+  // Mutation ops pick from variables initialized earlier; keep a name that is
+  // not in that list selectable (it may live in a sibling branch).
+  const nameOptions = [...(variableNames ?? []), ...(currentName && !(variableNames ?? []).includes(currentName) ? [currentName] : [])]
+  const setOp = (op: VariableOp) =>
+    update({ ...node, data: { ...node.data, op, varType: op === 'initialize' ? node.data.varType ?? 'string' : undefined } })
+  const nameInvalid = Boolean(showErrors && !currentName)
+  const valueInvalid = Boolean(showErrors && !variableValueOptional(node.data.op) && !node.data.value?.trim())
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2">
+        <label className={labelClass}>Operation</label>
+        <select value={node.data.op} onChange={(event) => setOp(event.target.value as VariableOp)} className={controlClass}>
+          {VARIABLE_OPS.map((op) => (
+            <option key={op} value={op}>
+              {VARIABLE_OP_LABELS[op]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>Name <span className="text-red-500">*</span></label>
+        {isInitialize || nameOptions.length === 0 ? (
+          <input
+            value={node.data.name}
+            onChange={(event) => update({ ...node, data: { ...node.data, name: event.target.value } })}
+            onFocus={blockActive}
+            onBlur={unblockActive}
+            className={cn(controlClass, nameInvalid && 'border-red-400 focus:border-red-500')}
+            placeholder="Enter variable name"
+            aria-label="Variable name"
+          />
+        ) : (
+          <select
+            value={currentName}
+            onChange={(event) => update({ ...node, data: { ...node.data, name: event.target.value } })}
+            className={cn(controlClass, nameInvalid && 'border-red-400 focus:border-red-500')}
+            aria-label="Variable name"
+          >
+            <option value="">Choose a variable</option>
+            {nameOptions.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
+        {!isInitialize && nameOptions.length === 0 && (
+          <p className="text-xs text-slate-500">No variables are initialized earlier in this flow — add an Initialize variable step first, or type the name it will use.</p>
+        )}
+      </div>
+      {isInitialize && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Type <span className="text-red-500">*</span></label>
+          <select
+            value={node.data.varType ?? 'string'}
+            onChange={(event) => update({ ...node, data: { ...node.data, varType: event.target.value as VariableType } })}
+            className={controlClass}
+          >
+            {VARIABLE_TYPES.map((type) => (
+              <option key={type} value={type}>
+                {VARIABLE_TYPE_LABELS[type]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      <div className="grid gap-2">
+        <label className={labelClass}>
+          Value {variableValueOptional(node.data.op) ? <span className="font-normal normal-case text-slate-400">(optional)</span> : <span className="text-red-500">*</span>}
+        </label>
+        <TokenTextEditor
+          ref={registerEditor('var.value')}
+          value={node.data.value ?? ''}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('var.value')}
+          onChange={(value) => update({ ...node, data: { ...node.data, value } })}
+          invalid={valueInvalid}
+          className={cn(tokenControlBase, valueInvalid ? 'focus:border-red-500' : 'border-slate-300')}
+          placeholder={VARIABLE_VALUE_PLACEHOLDER[node.data.op]}
+          ariaLabel="Variable value"
+        />
+      </div>
+    </div>
+  )
+}
+
+function DataBody({
+  node,
+  update,
+  tokenWiring,
+  showErrors,
+}: {
+  node: Extract<FlowNode, { type: 'data' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+  showErrors?: boolean
+}) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
+  const op = node.data.op
+  const setOp = (next: DataOp) => {
+    // Ops with required list config start with one empty row so the editor
+    // opens ready to fill in.
+    const clauses = next === 'filterArray' && !(node.data.clauses ?? []).length ? [{ left: '', op: 'contains' as ConditionOp, right: '' }] : node.data.clauses
+    const fields = next === 'select' && !(node.data.fields ?? []).length ? [{ name: '', value: '' }] : node.data.fields
+    update({ ...node, data: { ...node.data, op: next, clauses, fields } })
+  }
+  const inputInvalid = Boolean(showErrors && !node.data.input?.trim())
+  const clauses = node.data.clauses ?? []
+  const fields = node.data.fields ?? []
+  const setClauses = (next: ConditionClause[]) => update({ ...node, data: { ...node.data, clauses: next } })
+  const setFields = (next: { name: string; value: string }[]) => update({ ...node, data: { ...node.data, fields: next } })
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2">
+        <label className={labelClass}>Operation</label>
+        <select value={op} onChange={(event) => setOp(event.target.value as DataOp)} className={controlClass}>
+          {DATA_OPS.map((entry) => (
+            <option key={entry} value={entry}>
+              {DATA_OP_LABELS[entry]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>Input <span className="text-red-500">*</span></label>
+        <TokenTextEditor
+          ref={registerEditor('data.input')}
+          value={node.data.input ?? ''}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('data.input')}
+          onChange={(input) => update({ ...node, data: { ...node.data, input } })}
+          invalid={inputInvalid}
+          className={cn(tokenControlBase, inputInvalid ? 'focus:border-red-500' : 'border-slate-300')}
+          placeholder={DATA_OP_INPUT_PLACEHOLDER[op]}
+          ariaLabel="Input"
+        />
+      </div>
+      {op === 'join' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Join with <span className="font-normal normal-case text-slate-400">(optional)</span></label>
+          <input
+            value={node.data.separator ?? ''}
+            onChange={(event) => update({ ...node, data: { ...node.data, separator: event.target.value || undefined } })}
+            onFocus={blockActive}
+            onBlur={unblockActive}
+            className={controlClass}
+            placeholder="Defaults to a comma"
+            aria-label="Join with"
+          />
+        </div>
+      )}
+      {op === 'parseJson' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Schema <span className="font-normal normal-case text-slate-400">(optional)</span></label>
+          <textarea
+            rows={4}
+            value={node.data.schema ?? ''}
+            onChange={(event) => update({ ...node, data: { ...node.data, schema: event.target.value || undefined } })}
+            onFocus={blockActive}
+            onBlur={unblockActive}
+            className={cn(controlClass, 'h-auto resize-y py-2 font-mono text-xs')}
+            placeholder="A JSON Schema describing the parsed shape"
+            aria-label="Schema"
+          />
+          <p className="text-xs text-slate-500">Optional — stored for reference.</p>
+        </div>
+      )}
+      {op === 'filterArray' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Conditions <span className="text-red-500">*</span></label>
+          {(clauses.length ? clauses : [{ left: '', op: 'contains' as ConditionOp, right: '' }]).map((clause, index, list) => (
+            <div key={index} className="grid gap-2 sm:grid-cols-[1fr_130px_1fr_36px]">
+              <TokenTextEditor
+                ref={registerEditor(`data.clause.${index}.left`)}
+                value={clause.left}
+                labelCtx={labelCtx}
+                onFocus={focusEditor(`data.clause.${index}.left`)}
+                onChange={(left) => setClauses(list.map((entry, j) => (j === index ? { ...entry, left } : entry)))}
+                className={cn(tokenControlClass, 'min-w-0')}
+                placeholder="Item field to check"
+                ariaLabel={`Condition ${index + 1} value`}
+              />
+              <select
+                value={clause.op}
+                onChange={(event) => setClauses(list.map((entry, j) => (j === index ? { ...entry, op: event.target.value as ConditionOp } : entry)))}
+                className={controlClass}
+              >
+                {CONDITION_OPS.map((entry) => (
+                  <option key={entry} value={entry}>
+                    {entry}
+                  </option>
+                ))}
+              </select>
+              <TokenTextEditor
+                ref={registerEditor(`data.clause.${index}.right`)}
+                value={clause.right}
+                labelCtx={labelCtx}
+                onFocus={focusEditor(`data.clause.${index}.right`)}
+                onChange={(right) => setClauses(list.map((entry, j) => (j === index ? { ...entry, right } : entry)))}
+                className={cn(tokenControlClass, 'min-w-0')}
+                placeholder="Compare to"
+                ariaLabel={`Condition ${index + 1} comparison value`}
+              />
+              <button
+                type="button"
+                onClick={() => setClauses(list.filter((_, j) => j !== index))}
+                disabled={list.length === 1}
+                className="flex h-10 w-10 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30"
+                aria-label="Remove condition"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => setClauses([...(clauses.length ? clauses : [{ left: '', op: 'contains' as ConditionOp, right: '' }]), { left: '', op: 'contains', right: '' }])}
+            className="text-left text-sm font-semibold text-blue-700 hover:text-blue-900"
+          >
+            Add condition
+          </button>
+        </div>
+      )}
+      {op === 'select' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Fields <span className="text-red-500">*</span></label>
+          {(fields.length ? fields : [{ name: '', value: '' }]).map((field, index, list) => (
+            <div key={index} className="grid gap-2 sm:grid-cols-[1fr_1fr_36px]">
+              <input
+                value={field.name}
+                onChange={(event) => setFields(list.map((entry, j) => (j === index ? { ...entry, name: event.target.value } : entry)))}
+                onFocus={blockActive}
+                onBlur={unblockActive}
+                className={controlClass}
+                placeholder="Output field"
+              />
+              <TokenTextEditor
+                ref={registerEditor(`data.field.${index}.value`)}
+                value={field.value}
+                labelCtx={labelCtx}
+                onFocus={focusEditor(`data.field.${index}.value`)}
+                onChange={(value) => setFields(list.map((entry, j) => (j === index ? { ...entry, value } : entry)))}
+                className={cn(tokenControlClass, 'min-w-0')}
+                placeholder="Value for this field"
+                ariaLabel={`Value for field ${field.name || index + 1}`}
+              />
+              <button
+                type="button"
+                onClick={() => setFields(list.filter((_, j) => j !== index))}
+                disabled={list.length === 1}
+                className="flex h-10 w-10 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30"
+                aria-label="Remove field"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => setFields([...(fields.length ? fields : [{ name: '', value: '' }]), { name: '', value: '' }])}
+            className="text-left text-sm font-semibold text-blue-700 hover:text-blue-900"
+          >
+            Add field
+          </button>
+        </div>
+      )}
+      <p className="text-xs text-slate-500">{DATA_OP_HELPER[op]}</p>
+    </div>
+  )
+}
+
+function HumanReviewBody({
+  node,
+  update,
+  tokenWiring,
+  showErrors,
+}: {
+  node: Extract<FlowNode, { type: 'humanReview' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+  showErrors?: boolean
+}) {
+  const { labelCtx, registerEditor, focusEditor } = tokenWiring
+  const messageInvalid = Boolean(showErrors && !node.data.message.trim())
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2">
+        <label className={labelClass}>Message <span className="text-red-500">*</span></label>
+        <TokenTextEditor
+          ref={registerEditor('hr.message')}
+          multiline
+          rows={4}
+          value={node.data.message}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('hr.message')}
+          onChange={(message) => update({ ...node, data: { ...node.data, message } })}
+          invalid={messageInvalid}
+          className={cn(tokenControlBase, messageInvalid ? 'focus:border-red-500' : 'border-slate-300')}
+          placeholder="What should the person be asked? Their reply becomes this step's output."
+          ariaLabel="Message"
+        />
+      </div>
+      {/* No org-member roster is fetched anywhere in the builder today, so an
+          assignee select would need a new members API + fetch. v1 keeps the
+          engine default (data.assigneeUserId unset = the run owner is asked)
+          and says so in plain english. */}
+      <div className="grid gap-2">
+        <label className={labelClass}>Assigned to</label>
+        <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">The flow owner is asked by default. The run pauses here until they reply, and the reply becomes this step&apos;s output.</p>
+      </div>
     </div>
   )
 }

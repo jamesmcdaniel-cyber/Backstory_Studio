@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Bot,
+  Braces,
   ChevronLeft,
   ChevronRight,
   CircleStop,
@@ -18,6 +19,8 @@ import {
   Sparkles,
   Split,
   Star,
+  UserCheck,
+  Variable,
   Wrench,
   Zap,
   type LucideIcon,
@@ -57,6 +60,9 @@ const STEP_ICON: Partial<Record<StepType, LucideIcon>> = {
   stop: CircleStop,
   agent: Bot,
   tool: Wrench,
+  variable: Variable,
+  data: Braces,
+  humanReview: UserCheck,
 }
 
 const STEP_TONE: Partial<Record<StepType, string>> = {
@@ -70,6 +76,9 @@ const STEP_TONE: Partial<Record<StepType, string>> = {
   stop: 'bg-red-500 text-white',
   agent: 'bg-slate-900 text-white',
   tool: 'bg-orange-500 text-white',
+  variable: 'bg-purple-600 text-white',
+  data: 'bg-violet-600 text-white',
+  humanReview: 'bg-blue-600 text-white',
 }
 
 const LEAF_ICON: Record<string, LucideIcon> = {
@@ -84,15 +93,17 @@ const LEAF_TONE: Record<string, string> = {
 const GROUP_ICON: Record<string, LucideIcon> = {
   http: Globe,
   control: GitBranch,
-  'data-operation': SlidersHorizontal,
-  variable: Wrench,
+  'data-operation': Braces,
+  variable: Variable,
+  'human-review': UserCheck,
 }
 
 const GROUP_TONE: Record<string, string> = {
   http: 'bg-emerald-600 text-white',
   control: 'bg-amber-500 text-white',
-  'data-operation': 'bg-violet-500 text-white',
-  variable: 'bg-sky-500 text-white',
+  'data-operation': 'bg-violet-600 text-white',
+  variable: 'bg-purple-600 text-white',
+  'human-review': 'bg-blue-600 text-white',
 }
 
 const TRIGGER_ICON: Record<string, LucideIcon> = {

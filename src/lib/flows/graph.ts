@@ -169,6 +169,24 @@ export type VariableOp = (typeof VARIABLE_OPS)[number]
 /** Types an Initialize variable step can declare (MS Copilot Studio parity). */
 export const VARIABLE_TYPES = ['boolean', 'integer', 'float', 'string', 'object', 'array'] as const
 export type VariableType = (typeof VARIABLE_TYPES)[number]
+/** Display names for variable ops — the ONLY strings surfaces may show for them. */
+export const VARIABLE_OP_LABELS: Record<VariableOp, string> = {
+  initialize: 'Initialize variable',
+  set: 'Set variable',
+  increment: 'Increment variable',
+  decrement: 'Decrement variable',
+  appendArray: 'Append to array variable',
+  appendString: 'Append to string variable',
+}
+/** Display names for variable types (the stored values stay lowercase). */
+export const VARIABLE_TYPE_LABELS: Record<VariableType, string> = {
+  boolean: 'Boolean',
+  integer: 'Integer',
+  float: 'Float',
+  string: 'String',
+  object: 'Object',
+  array: 'Array',
+}
 // Typed symbol table step: initialize declares a variable (varType applies to
 // initialize only, default 'string'); the other ops mutate one initialized
 // earlier. `value` is templated; readable anywhere via {{var.<name>}}.

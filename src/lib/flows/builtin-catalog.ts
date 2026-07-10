@@ -1,4 +1,5 @@
 import type { StepType } from '@/lib/flows/mutate'
+import type { DataOp, VariableOp } from '@/lib/flows/graph'
 
 /** One pickable item in the Add-trigger/Add-action catalog. */
 export type PickerLeaf = {
@@ -7,7 +8,7 @@ export type PickerLeaf = {
   description: string
   mode: 'action' | 'trigger' | 'both'
   stepType?: StepType
-  seed?: { agentId?: string; connectionId?: string; toolName?: string; label?: string }
+  seed?: { agentId?: string; connectionId?: string; toolName?: string; label?: string; variableOp?: VariableOp; dataOp?: DataOp }
   triggerType?: 'manual' | 'schedule' | 'webhook' | 'signal'
 }
 
@@ -46,27 +47,46 @@ export const BUILTIN_GROUPS: PickerGroup[] = [
   },
   {
     id: 'data-operation',
-    label: 'Data Operation',
-    description: 'Shape and filter data between steps.',
+    label: 'Data operations',
+    description: 'Shape, parse, and filter data between steps.',
     mode: 'action',
     children: [
-      { id: 'data-compose', label: 'Set fields', description: 'Create named values later steps can reuse.', mode: 'action', stepType: 'transform' },
-      { id: 'data-filter', label: 'Filter', description: 'Continue only when a value matches a rule.', mode: 'action', stepType: 'filter' },
+      { id: 'data-compose', label: 'Compose', description: 'Pass a value through so later steps can reuse it.', mode: 'action', stepType: 'data', seed: { dataOp: 'compose' } },
+      { id: 'data-parse-json', label: 'Parse JSON', description: 'Turn JSON text into structured data for later steps.', mode: 'action', stepType: 'data', seed: { dataOp: 'parseJson' } },
+      { id: 'data-join', label: 'Join', description: 'Combine a list into one text value with a separator.', mode: 'action', stepType: 'data', seed: { dataOp: 'join' } },
+      { id: 'data-csv-table', label: 'Create CSV table', description: 'Turn a list of records into a CSV table.', mode: 'action', stepType: 'data', seed: { dataOp: 'csvTable' } },
+      { id: 'data-html-table', label: 'Create HTML table', description: 'Turn a list of records into an HTML table.', mode: 'action', stepType: 'data', seed: { dataOp: 'htmlTable' } },
+      { id: 'data-filter-array', label: 'Filter array', description: 'Keep only the list items that match your conditions.', mode: 'action', stepType: 'data', seed: { dataOp: 'filterArray' } },
+      { id: 'data-select', label: 'Select', description: 'Map each list item to a new shape with the fields you choose.', mode: 'action', stepType: 'data', seed: { dataOp: 'select' } },
     ],
   },
   {
     id: 'variable',
-    label: 'Variable',
-    description: 'Store a value for later steps.',
+    label: 'Variables',
+    description: 'Declare and update named values shared across the flow.',
     mode: 'action',
     children: [
-      { id: 'variable-set', label: 'Set variable', description: 'Save a named value for downstream steps.', mode: 'action', stepType: 'transform', seed: { label: 'Set variable' } },
+      { id: 'variable-initialize', label: 'Initialize variable', description: 'Declare a named, typed value before other steps use it.', mode: 'action', stepType: 'variable', seed: { variableOp: 'initialize' } },
+      { id: 'variable-set', label: 'Set variable', description: 'Replace the value of a variable initialized earlier.', mode: 'action', stepType: 'variable', seed: { variableOp: 'set' } },
+      { id: 'variable-increment', label: 'Increment variable', description: 'Add to a number variable — by 1 unless you set an amount.', mode: 'action', stepType: 'variable', seed: { variableOp: 'increment' } },
+      { id: 'variable-decrement', label: 'Decrement variable', description: 'Subtract from a number variable — by 1 unless you set an amount.', mode: 'action', stepType: 'variable', seed: { variableOp: 'decrement' } },
+      { id: 'variable-append-array', label: 'Append to array variable', description: 'Add an item to the end of an array variable.', mode: 'action', stepType: 'variable', seed: { variableOp: 'appendArray' } },
+      { id: 'variable-append-string', label: 'Append to string variable', description: 'Add text to the end of a string variable.', mode: 'action', stepType: 'variable', seed: { variableOp: 'appendString' } },
+    ],
+  },
+  {
+    id: 'human-review',
+    label: 'Human review',
+    description: 'Pause the flow and ask a person.',
+    mode: 'action',
+    children: [
+      { id: 'human-review-request', label: 'Request information', description: 'Pause the flow, ask someone a question, and use their reply in later steps.', mode: 'action', stepType: 'humanReview' },
     ],
   },
 ]
 
 /** AI capabilities shown first in action mode. */
-// 'Run a prompt' (inline, no saved agent) and 'Human review' return when prompt-mode / a human-review step exist in the graph schema.
+// 'Run a prompt' (inline, no saved agent) returns when prompt-mode exists in the graph schema.
 export const AI_CAPABILITY_LEAVES: PickerLeaf[] = [
   { id: 'ai-run-agent', label: 'Run an agent', description: 'Run one of your agents and pass its response to the next step.', mode: 'action', stepType: 'agent' },
 ]

@@ -17,7 +17,7 @@ import { parseFlowInput } from '@/lib/flows/input'
 import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema-fields'
 import { validateFlowGraph } from '@/lib/flows/validate'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
-import { stepLabelsOf } from '@/lib/flows/token-text'
+import { defaultStepLabel, stepLabelsOf } from '@/lib/flows/token-text'
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { storedRunInput, prefillTextFromRunInput } from '@/lib/flows/reuse-input'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
@@ -346,7 +346,7 @@ function FlowBuilder() {
       const node = graph.nodes.find((n) => n.id === nodeId)
       if (!node) return nodeId
       if (node.type === 'agent') return node.data.label || agentsById.get(node.data.agentId) || 'Agent step'
-      return node.type.charAt(0).toUpperCase() + node.type.slice(1)
+      return ('label' in node.data && node.data.label) || defaultStepLabel(node)
     },
     [graph, agentsById],
   )
@@ -428,6 +428,19 @@ function FlowBuilder() {
     return (idx > 0 ? ids.slice(1, idx) : ids.slice(1)).filter((x) => x !== selectedId)
   }, [graph, selectedId, loopContext, parallelContext])
 
+  // Variables initialized upstream of the selected step: fed to the datatree
+  // (as {{var.<name>}} roots) and to the editors' variable-name selects.
+  const upstreamVariables = useMemo(() => {
+    const byName = new Map<string, string>()
+    for (const uid of upstreamIds) {
+      const n = graph.nodes.find((x) => x.id === uid)
+      if (n?.type === 'variable' && n.data.op === 'initialize' && n.data.name.trim()) {
+        byName.set(n.data.name.trim(), n.data.varType ?? 'string')
+      }
+    }
+    return Array.from(byName, ([name, type]) => ({ name, type }))
+  }, [graph, upstreamIds])
+
   // The datatree of mappable upstream data — declared output fields plus fields
   // inferred from the latest run's actual output.
   const dataFields = useMemo(() => {
@@ -449,13 +462,13 @@ function FlowBuilder() {
             : n?.type === 'http'
               ? n.data.label || `${n.data.method} request`
               : n
-                ? n.type
+                ? ('label' in n.data && n.data.label) || defaultStepLabel(n)
                 : uid
       const outputFields = outputFieldsForNode(n, toolCatalog)
       return { id: uid, label, outputFields }
     })
-    return buildDataTree({ upstream, insideLoop, lastOutputs, triggerInput, inputFields })
-  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById, loopContext, testInput, inputFields, toolCatalog])
+    return buildDataTree({ upstream, insideLoop, lastOutputs, triggerInput, inputFields, variables: upstreamVariables })
+  }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById, loopContext, testInput, inputFields, toolCatalog, upstreamVariables])
 
   const validation = useMemo(
     () => validateFlowGraph(graph, { agents, toolCatalog }),
@@ -797,8 +810,31 @@ function FlowBuilder() {
         },
       })
     }
+    if (node.type === 'variable' && seed.variableOp) {
+      // Non-initialize ops mutate a variable declared elsewhere — the default
+      // varType only belongs on the declaration site.
+      const varType = seed.variableOp === 'initialize' ? node.data.varType : undefined
+      return updateNode(next, {
+        ...node,
+        data: { ...node.data, op: seed.variableOp, varType, ...(seed.label ? { label: seed.label } : {}) },
+      })
+    }
+    if (node.type === 'data' && seed.dataOp) {
+      // Ops with required list config start with one empty row so the editor
+      // opens ready to fill in (mirrors condition/transform defaults).
+      const extras =
+        seed.dataOp === 'filterArray'
+          ? { clauses: [{ left: '', op: 'contains' as const, right: '' }] }
+          : seed.dataOp === 'select'
+            ? { fields: [{ name: '', value: '' }] }
+            : {}
+      return updateNode(next, {
+        ...node,
+        data: { ...node.data, op: seed.dataOp, ...extras, ...(seed.label ? { label: seed.label } : {}) },
+      })
+    }
     // Every other step type only carries the label (picker leaves like
-    // "HTTP Webhook" and "Set variable" pre-name their node).
+    // "HTTP Webhook" pre-name their node).
     if (seed.label && node.type !== 'trigger') {
       return updateNode(next, { ...node, data: { ...node.data, label: seed.label } } as FlowNode)
     }
@@ -945,6 +981,7 @@ function FlowBuilder() {
               toolCatalog={toolCatalog}
               dataFields={dataFields}
               labelCtx={labelCtx}
+              variableNames={upstreamVariables.map((variable) => variable.name)}
               statusByNode={viewingVersion ? {} : statusByNode}
               issuesByNode={viewingVersion ? undefined : issuesByNode}
               highlightIds={viewingVersion ? [] : highlightIds}
@@ -1032,6 +1069,7 @@ function FlowBuilder() {
               toolCatalog={toolCatalog}
               dataFields={dataFields}
               labelCtx={labelCtx}
+              variableNames={upstreamVariables.map((variable) => variable.name)}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
               onChangeType={(type) => commitGraph(changeNodeType(graph, selectedNode.id, type))}
               onDuplicate={() => {
