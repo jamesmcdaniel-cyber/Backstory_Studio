@@ -155,7 +155,10 @@ export async function completeConnect(input: CompleteConnectInput): Promise<Peop
       // The abandoned solo landing org is deleted when it holds nothing.
       const agentCount = await prisma.agentTask.count({ where: { organizationId: input.organizationId } })
       if (agentCount === 0) {
-        await prisma.organization.delete({ where: { id: input.organizationId } }).catch(() => undefined)
+        // Full teardown, not a bare row delete: the solo org may still hold
+        // connections/flows whose external resources would otherwise leak.
+        const { teardownOrganization } = await import('@/lib/org-teardown')
+        await teardownOrganization(input.organizationId).catch(() => undefined)
       }
     } else if (!teamOrg) {
       if (currentBoundElsewhere) throw new TeamMismatchError()

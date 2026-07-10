@@ -170,6 +170,15 @@ export class Neo4jGraphStore implements GraphRagStore {
       { org: organizationId, owner: ownerUserId },
     )
   }
+
+  /** Org teardown: remove every node (and their edges) for this org. */
+  async clear(organizationId: string): Promise<void> {
+    const driver = await this.driver()
+    await driver.executeQuery(
+      'MATCH (e:Entity) WHERE e.organizationId = $org DETACH DELETE e',
+      { org: organizationId },
+    )
+  }
 }
 
 function toRaw(node: GraphNode) {
