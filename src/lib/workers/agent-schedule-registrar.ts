@@ -1,5 +1,5 @@
 import { createQueue, QUEUE_NAMES } from '@/lib/queue/config'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 
 type Schedule = {
   type?: string
@@ -22,7 +22,8 @@ function repeatFor(schedule: Schedule) {
 }
 
 export async function registerAgentSchedules() {
-  const agents = await prisma.agentTask.findMany()
+  // systemPrisma: worker scheduler reconciles ACTIVE agents across all orgs by design.
+  const agents = await systemPrisma.agentTask.findMany()
   const queue = createQueue(QUEUE_NAMES.SCHEDULED_AGENT_EXECUTION)
   let registered = 0
   let failed = 0

@@ -43,7 +43,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   // Drop any legacy plaintext secret from before hashing was introduced.
   delete (nextMetadata as Record<string, unknown>).triggerSecret
   await prisma.agentTask.update({
-    where: { id: agent.id },
+    where: { id: agent.id, organizationId: auth.organizationId },
     data: { metadata: nextMetadata },
   })
 

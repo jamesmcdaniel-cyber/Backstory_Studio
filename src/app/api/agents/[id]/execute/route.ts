@@ -53,7 +53,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       return { success: true, executionId: execution.id, result }
     } catch (error) {
       await prisma.agentExecution.update({
-        where: { id: execution.id },
+        where: { id: execution.id, organizationId: auth.organizationId },
         data: {
           status: 'failed',
           error: error instanceof Error ? error.message : String(error),
@@ -75,7 +75,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       }, { jobId: execution.id })
     } catch (error) {
       await prisma.agentExecution.update({
-        where: { id: execution.id },
+        where: { id: execution.id, organizationId: auth.organizationId },
         data: { status: 'failed', error: error instanceof Error ? error.message : String(error), completedAt: new Date() },
       })
       throw new ApiError('Unable to queue agent execution', 503, 'QUEUE_UNAVAILABLE')

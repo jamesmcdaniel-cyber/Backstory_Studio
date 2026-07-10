@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
@@ -45,7 +45,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Missing trigger secret' }, { status: 401 })
     }
 
-    const agent = await prisma.agentTask.findFirst({ where: { id, status: 'ACTIVE' } })
+    // systemPrisma: session-less webhook trigger (per-agent secret, no org context); agent id is globally unique.
+  const agent = await systemPrisma.agentTask.findFirst({ where: { id, status: 'ACTIVE' } })
     const metadata = agent?.metadata && typeof agent.metadata === 'object' ? agent.metadata as Record<string, unknown> : {}
     if (!agent || !triggerSecretValid(provided, metadata)) {
       return NextResponse.json({ success: false, error: 'Invalid trigger secret' }, { status: 401 })
@@ -117,7 +118,8 @@ export async function POST(request: NextRequest) {
         })
         return NextResponse.json({ success: true, executionId: execution.id, result })
       } catch (error) {
-        await prisma.agentExecution.update({
+        // systemPrisma: session-less trigger path; execution id was minted org-scoped above.
+        await systemPrisma.agentExecution.update({
           where: { id: execution.id },
           data: {
             status: 'failed',

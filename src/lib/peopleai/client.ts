@@ -8,7 +8,7 @@
  *             for non-interactive runs (signals) — access follows the key.
  */
 
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { decryptSecret, encryptSecret } from '@/lib/crypto/secrets'
 import { apiLogger } from '@/lib/logger'
 import { StreamableHttpMcpClient, type McpToolDescriptor } from '@/lib/mcp/streamable-http'
@@ -77,7 +77,8 @@ export class PeopleAiClient {
         { tokenEndpoint: metadata.tokenEndpoint, refreshToken: this.auth.refreshToken },
       )
       this.auth = { ...this.auth, accessToken: tokens.accessToken, refreshToken: tokens.refreshToken }
-      await prisma.peopleAiConnection.update({
+      // systemPrisma: token refresh keyed by globally-unique connection id (resolved org-scoped upstream).
+      await systemPrisma.peopleAiConnection.update({
         where: { id: this.auth.connectionId },
         data: {
           accessToken: encryptSecret(tokens.accessToken),
@@ -93,7 +94,7 @@ export class PeopleAiClient {
         error: error instanceof Error ? error.message : String(error),
       })
       await prisma.peopleAiConnection
-        .update({ where: { id: this.auth.connectionId }, data: { status: 'refresh_failed' } })
+        .update({ where: { id: this.auth.connectionId }, data: { status: 'refresh_failed' } }) // systemPrisma below
         .catch(() => undefined)
       return false
     }

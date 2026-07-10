@@ -27,7 +27,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
   if (revert) {
     if (existing.publishedGraph == null) throw new ApiError('Nothing published to revert to', 400, 'NO_PUBLISHED')
-    const flow = await prisma.flow.update({ where: { id }, data: { graph: existing.publishedGraph } })
+    const flow = await prisma.flow.update({ where: { id, organizationId: auth.organizationId }, data: { graph: existing.publishedGraph } })
     return { success: true, flow: serializeFlow(flow) }
   }
 
@@ -57,7 +57,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   const trigger = jsonValue(preserveWebhookSecretHash(triggerFromGraph(graph, existing.trigger), existing.trigger))
   const [flow] = await prisma.$transaction([
     prisma.flow.update({
-      where: { id },
+      where: { id, organizationId: auth.organizationId },
       data: {
         trigger,
         publishedGraph: existing.graph ?? {},

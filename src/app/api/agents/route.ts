@@ -121,7 +121,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   if (!existing) throw new ApiError('Agent not found', 404, 'NOT_FOUND')
   const metadata = existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata) ? existing.metadata : {}
   const agent = await prisma.agentTask.update({
-    where: { id: body.id },
+    where: { id: body.id, organizationId: auth.organizationId },
     data: {
       ...(body.description !== undefined && { description: body.description || body.title || existing.description }),
       ...(body.instructions !== undefined && { objective: body.instructions }),

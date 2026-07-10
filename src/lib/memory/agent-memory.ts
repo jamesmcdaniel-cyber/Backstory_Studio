@@ -1,4 +1,4 @@
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { embedQuery, embeddingsConfigured, cosineSimilarity, toSqlVector } from '@/lib/rag/embeddings'
 import { keywordScore } from '@/lib/knowledge/retrieve'
@@ -113,7 +113,7 @@ export async function saveAgentMemory(params: {
       })
       if (overflow.length) {
         await prisma.agentMemory.updateMany({
-          where: { id: { in: overflow.map((m) => m.id) } },
+          where: { id: { in: overflow.map((m) => m.id) }, organizationId: params.organizationId },
           data: { status: 'superseded' },
         })
       }
@@ -244,7 +244,8 @@ export function bestAnswerMatch(
 export async function markMemoriesUsed(ids: string[]): Promise<void> {
   if (!ids.length) return
   try {
-    await prisma.agentMemory.updateMany({
+    // systemPrisma: best-effort usage bump on memory ids drawn from an org-scoped retrieval.
+    await systemPrisma.agentMemory.updateMany({
       where: { id: { in: ids } },
       data: { timesUsed: { increment: 1 }, lastUsedAt: new Date() },
     })

@@ -63,7 +63,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ? triggerFromGraph(body.graph, existing.trigger)
         : undefined
   const flow = await prisma.flow.update({
-    where: { id: body.id },
+    where: { id: body.id, organizationId: auth.organizationId },
     data: {
       ...(body.name !== undefined && { name: body.name }),
       ...(body.description !== undefined && { description: body.description }),

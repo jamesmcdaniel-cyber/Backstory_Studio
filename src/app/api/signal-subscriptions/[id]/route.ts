@@ -22,7 +22,7 @@ export const PATCH = withAuthenticatedApi(async (request, auth) => {
 
   const input = updateSchema.parse(await request.json())
   const subscription = await prisma.signalSubscription.update({
-    where: { id },
+    where: { id, organizationId: auth.organizationId },
     data: { ...(input.isActive !== undefined && { isActive: input.isActive }), ...(input.filter !== undefined && { filter: input.filter }) },
   })
   return { success: true, subscription }

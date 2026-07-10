@@ -59,6 +59,6 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   })
   if (!row) throw new ApiError('Version not found', 404, 'NOT_FOUND')
 
-  const updated = await prisma.flow.update({ where: { id }, data: { graph: jsonValue(row.graph) } })
+  const updated = await prisma.flow.update({ where: { id, organizationId: auth.organizationId }, data: { graph: jsonValue(row.graph) } })
   return { success: true, flow: serializeFlow(updated) }
 })

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { runFlowExecution } from '@/features/flows/execute-flow'
 import { hashToken, timingSafeEqualHex } from '@/lib/crypto/secrets'
@@ -25,7 +25,8 @@ export async function POST(request: NextRequest) {
       (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '')
     if (!id || !provided) return NextResponse.json({ success: false, error: 'Missing trigger secret' }, { status: 401 })
 
-    const flow = await prisma.flow.findFirst({ where: { id, status: 'ACTIVE' } })
+    // systemPrisma: session-less webhook trigger (per-flow secret, no org context); flow id is globally unique.
+  const flow = await systemPrisma.flow.findFirst({ where: { id, status: 'ACTIVE' } })
     const trigger = (flow?.trigger && typeof flow.trigger === 'object' && !Array.isArray(flow.trigger) ? flow.trigger : {}) as Record<string, unknown>
     const hash = typeof trigger.webhookSecretHash === 'string' ? trigger.webhookSecretHash : null
     if (!flow || !hash || !timingSafeEqualHex(hashToken(provided), hash)) {

@@ -162,7 +162,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   })
 
   const connection = await prisma.mcpConnection.update({
-    where: { id: body.id },
+    where: { id: body.id, organizationId: auth.organizationId },
     data: {
       ...(body.name !== undefined && { name: body.name }),
       ...(body.description !== undefined && { description: body.description }),
@@ -209,7 +209,7 @@ export const DELETE = withAuthenticatedApi(async (request, auth) => {
     throw new ApiError('This connection is managed by the platform and cannot be edited or deleted.', 403, 'PROVIDER_MANAGED')
   }
 
-  await prisma.mcpConnection.delete({ where: { id: existing.id } })
+  await prisma.mcpConnection.delete({ where: { id: existing.id, organizationId: auth.organizationId } })
 
   return { success: true }
 })

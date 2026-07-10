@@ -27,7 +27,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 export const DELETE = withAuthenticatedApi(async (request, auth) => {
   const endpoint = request.nextUrl.searchParams.get('endpoint')
   if (endpoint) {
-    await prisma.pushSubscription.deleteMany({ where: { endpoint, userId: auth.dbUser.id } })
+    await prisma.pushSubscription.deleteMany({ where: { organizationId: auth.organizationId, endpoint, userId: auth.dbUser.id } })
   }
   return { success: true }
 })

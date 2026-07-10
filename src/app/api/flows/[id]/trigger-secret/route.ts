@@ -29,7 +29,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
   if (hasSecret && !rotate) {
     await prisma.flow.update({
-      where: { id: flow.id },
+      where: { id: flow.id, organizationId: auth.organizationId },
       data: { trigger: { ...trigger, type: 'webhook' } },
     }).catch(() => undefined)
     return { ...base, hasSecret: true, secret: null }
@@ -37,7 +37,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
   const secret = randomBytes(24).toString('base64url')
   await prisma.flow.update({
-    where: { id: flow.id },
+    where: { id: flow.id, organizationId: auth.organizationId },
     data: { trigger: { ...trigger, type: 'webhook', webhookSecretHash: hashToken(secret) } },
   })
   return { ...base, hasSecret: true, secret }

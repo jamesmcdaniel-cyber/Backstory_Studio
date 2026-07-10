@@ -90,7 +90,7 @@ async function correlatedContext(agent: AgentTask, question: string, viewerUserI
 
 export async function buildAssistantContext(agent: AgentTask, question = '', viewerUserId: string | null = null): Promise<AssistantContext> {
   const executions = await prisma.agentExecution.findMany({
-    where: { agentTaskId: agent.id },
+    where: { agentTaskId: agent.id, organizationId: agent.organizationId },
     omit: { transcript: true },
     orderBy: { startedAt: 'desc' },
     take: RECENT_RUN_LIMIT,

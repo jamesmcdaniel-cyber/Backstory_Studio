@@ -130,10 +130,10 @@ export async function reflectAndRemember(
       // The latest critique is ALWAYS injected next run — store it on the task
       // metadata (single slot), not as an accumulating memory row. A proposed
       // goal must persist even when there's no critique this run.
-      const agent = await prisma.agentTask.findUnique({ where: { id: params.agentId }, select: { metadata: true, goal: true } })
+      const agent = await prisma.agentTask.findFirst({ where: { id: params.agentId, organizationId: params.organizationId }, select: { metadata: true, goal: true } })
       const metadata = (agent?.metadata && typeof agent.metadata === 'object' && !Array.isArray(agent.metadata) ? agent.metadata : {}) as Record<string, unknown>
       await prisma.agentTask.update({
-        where: { id: params.agentId },
+        where: { id: params.agentId, organizationId: params.organizationId },
         data: {
           metadata: {
             ...metadata,

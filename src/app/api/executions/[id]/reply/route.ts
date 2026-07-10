@@ -104,7 +104,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       return { success: true, executionId: execution.id, result }
     } catch (error) {
       await prisma.agentExecution.update({
-        where: { id: execution.id },
+        where: { id: execution.id, organizationId: auth.organizationId },
         data: {
           status: 'failed',
           error: error instanceof Error ? error.message : String(error),

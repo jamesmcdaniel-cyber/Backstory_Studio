@@ -64,7 +64,7 @@ async function saveConnection(
 
   if (existing) {
     return prisma.mCPAgent.update({
-      where: { id: existing.id },
+      where: { id: existing.id, organizationId },
       data: {
         ...(server.serverUrl ? { mcpServerUrl: server.serverUrl } : {}),
         isActive: status === 'active',

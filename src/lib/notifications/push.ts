@@ -1,5 +1,5 @@
 import webpush from 'web-push'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 
 let configured = false
 
@@ -23,7 +23,8 @@ export type PushPayload = { title: string; body?: string; url?: string }
 // keys aren't configured, so in-app notifications still work without push.
 export async function sendPushToUser(userId: string, payload: PushPayload): Promise<void> {
   if (!ensureConfigured()) return
-  const subs = await prisma.pushSubscription.findMany({ where: { userId } })
+  // systemPrisma: push delivery path keyed by userId only (no org in scope); a user's subscriptions are org-determined.
+  const subs = await systemPrisma.pushSubscription.findMany({ where: { userId } })
   await Promise.all(
     subs.map(async (sub) => {
       try {
@@ -34,7 +35,7 @@ export async function sendPushToUser(userId: string, payload: PushPayload): Prom
       } catch (error) {
         const status = (error as { statusCode?: number })?.statusCode
         if (status === 404 || status === 410) {
-          await prisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {})
+          await systemPrisma.pushSubscription.delete({ where: { id: sub.id } }).catch(() => {}) // systemPrisma: dead-subscription cleanup by unique id
         }
       }
     }),

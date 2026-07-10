@@ -14,7 +14,7 @@
  */
 
 import { Prisma } from '@prisma/client'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { encryptSecret, decryptSecret } from '@/lib/crypto/secrets'
 import { refreshAccessToken, type TokenResponse } from '@/lib/mcp/oauth-authcode'
@@ -72,7 +72,8 @@ export async function persistRefreshedAuthcodeTokens(
       (typeof tokens.expires_in === 'number' && tokens.expires_in > 0 ? tokens.expires_in : 3600) * 1000,
   }
 
-  await prisma.mcpConnection.update({
+  // systemPrisma: OAuth token refresh keyed by globally-unique connection id (resolved org-scoped upstream).
+  await systemPrisma.mcpConnection.update({
     where: { id: connectionId },
     data: { authConfig: newAuthConfig as Prisma.InputJsonValue },
   })

@@ -11,7 +11,7 @@
  * this connection?"), while the runtime read path prefers the typed rows and
  * falls back to `metadata.integrations` for any not-yet-synced agent.
  */
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { BUILTIN_CONNECTORS } from './registry'
 
@@ -77,7 +77,8 @@ export async function resolveAgentConnectorKeys(
     return Array.isArray(integrations) ? integrations.map(String) : []
   }
   try {
-    const rows = await prisma.agentConnector.findMany({
+    // systemPrisma: keyed by globally-unique agentTaskId (org-determined); resolved during execution setup.
+    const rows = await systemPrisma.agentConnector.findMany({
       where: { agentTaskId },
       select: { connectorKey: true },
     })
