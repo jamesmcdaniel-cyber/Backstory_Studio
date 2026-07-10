@@ -9,6 +9,8 @@ import crypto from 'node:crypto'
 import { prisma } from '@/lib/prisma'
 import { encryptSecret } from '@/lib/crypto/secrets'
 import { revalidateEntitlement } from '@/lib/entitlement'
+import { captureError } from '@/lib/observability/sentry'
+import { ensureOrgWebhookSecret } from './webhook-secret'
 import {
   buildAuthorizeUrl,
   discoverMetadata,
@@ -164,6 +166,15 @@ export async function completeConnect(input: CompleteConnectInput): Promise<Peop
         })
       }
     }
+  }
+
+  // Best-effort: give the org its per-tenant webhook signing secret as soon
+  // as its team binding exists. Failure must not break connect — the
+  // receiver falls back to the global secret until a secret is minted.
+  try {
+    await ensureOrgWebhookSecret(organizationId)
+  } catch (error) {
+    captureError(error, { source: 'peopleai.connect.webhookSecret', organizationId })
   }
 
   await prisma.peopleAiConnection.upsert({

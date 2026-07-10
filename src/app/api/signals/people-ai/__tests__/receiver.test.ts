@@ -106,4 +106,52 @@ if (ENABLED) {
     const json = await response.json()
     assert.equal(json.ignored, true)
   })
+
+  // The next two tests mint/rotate a per-org secret for `ids.org`, so they
+  // run last — every earlier test above relies on the global secret alone.
+
+  test('org with a per-org secret accepts only its own signature', async () => {
+    const { rotateOrgWebhookSecret } = await import('@/lib/peopleai/webhook-secret')
+    const perOrg = await rotateOrgWebhookSecret(ids.org)
+
+    const body = JSON.stringify({
+      type: 'deal.risk_detected',
+      id: `evt-perorg-${Date.now()}`,
+      team_id: TEAM,
+      data: { opportunity_id: 'opp-perorg' },
+    })
+    const okRes = await POST(requestFor(body, signPayload(body, perOrg)))
+    assert.equal(okRes.status, 202)
+
+    const body2 = JSON.stringify({
+      type: 'deal.risk_detected',
+      id: `evt-global-${Date.now()}`,
+      team_id: TEAM,
+      data: { opportunity_id: 'opp-global' },
+    })
+    const globalRes = await POST(requestFor(body2, signPayload(body2, 'whsec_receiver_test')))
+    assert.equal(globalRes.status, 401) // global secret no longer reaches an org with its own
+  })
+
+  test('org without a per-org secret still accepts the global secret', async () => {
+    const bareTeam = `team-bare-${Date.now()}`
+    const bareOrg = await prisma.organization.create({
+      data: { name: 'RecvBare', slug: `recv-bare-${Date.now()}`, peopleAiTeamId: bareTeam },
+    })
+    try {
+      const body = JSON.stringify({
+        type: 'deal.risk_detected',
+        id: `evt-bare-${Date.now()}`,
+        team_id: bareTeam,
+        data: { opportunity_id: 'opp-bare' },
+      })
+      const response = await POST(requestFor(body, signPayload(body, 'whsec_receiver_test')))
+      assert.equal(response.status, 202)
+      const json = await response.json()
+      assert.equal(json.success, true)
+    } finally {
+      await prisma.signal.deleteMany({ where: { organizationId: bareOrg.id } })
+      await prisma.organization.delete({ where: { id: bareOrg.id } })
+    }
+  })
 }

@@ -8,6 +8,7 @@ import { verifySignature } from '@/lib/signals/verify'
 import { mapEventToSignal } from '@/lib/signals/map'
 import { routeSignal } from '@/lib/signals/router'
 import { captureError } from '@/lib/observability/sentry'
+import { decryptSecret } from '@/lib/crypto/secrets'
 
 export const runtime = 'nodejs'
 export const maxDuration = 1200
@@ -27,14 +28,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Rate limit exceeded' }, { status: 429 })
   }
 
-  const secret = process.env.PEOPLE_AI_WEBHOOK_SECRET
-  if (!secret) {
-    return NextResponse.json(
-      { success: false, error: 'Signal webhooks are not configured for this environment.' },
-      { status: 503 },
-    )
-  }
-
+  const globalSecret = process.env.PEOPLE_AI_WEBHOOK_SECRET || null
   const rawBody = await request.text()
   // SEAM: header name per SalesAI webhook registration docs; both common
   // conventions accepted.
@@ -43,10 +37,8 @@ export async function POST(request: NextRequest) {
     request.headers.get('x-pai-signature') ||
     request.headers.get('x-signature')
 
-  if (!verifySignature({ rawBody, header, secret })) {
-    return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 401 })
-  }
-
+  // Parse BEFORE verifying only to discover which org's secret governs this
+  // delivery — the payload stays untrusted until the HMAC check passes.
   let payload: unknown
   try {
     payload = JSON.parse(rawBody)
@@ -54,20 +46,41 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Invalid JSON payload' }, { status: 400 })
   }
 
-  const mapped = mapEventToSignal(payload)
-  if (!mapped) {
-    // Unknown event type — acknowledge so People.ai doesn't retry forever.
-    return NextResponse.json({ success: true, ignored: true }, { status: 202 })
-  }
-
-  // Resolve tenant from the payload's team id.
   const record = payload as Record<string, unknown>
   const teamId = [record.team_id, record.org_id, (record.data as Record<string, unknown> | undefined)?.team_id]
     .map((value) => (typeof value === 'string' || typeof value === 'number' ? String(value) : null))
     .find(Boolean)
   const organization = teamId
-    ? await prisma.organization.findUnique({ where: { peopleAiTeamId: teamId }, select: { id: true } })
+    ? await prisma.organization.findUnique({
+        where: { peopleAiTeamId: teamId },
+        select: { id: true, peopleAiWebhookSecret: true },
+      })
     : null
+
+  // Per-org secret binds authenticity to tenancy: a signature is only valid
+  // if produced with the TARGET org's own secret. Orgs that haven't minted
+  // one yet fall back to the global secret. An org WITH a secret never
+  // accepts the global one — otherwise the global secret would still reach
+  // every tenant.
+  const orgSecret = organization?.peopleAiWebhookSecret
+    ? decryptSecret(organization.peopleAiWebhookSecret)
+    : null
+  const secret = orgSecret ?? globalSecret
+  if (!secret) {
+    return NextResponse.json(
+      { success: false, error: 'Signal webhooks are not configured for this environment.' },
+      { status: 503 },
+    )
+  }
+  if (!verifySignature({ rawBody, header, secret })) {
+    return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 401 })
+  }
+
+  const mapped = mapEventToSignal(payload)
+  if (!mapped) {
+    // Unknown event type — acknowledge so People.ai doesn't retry forever.
+    return NextResponse.json({ success: true, ignored: true }, { status: 202 })
+  }
 
   if (!organization) {
     apiLogger.warn('signal dropped: no workspace for team', { teamId: teamId ?? null, type: mapped.type })

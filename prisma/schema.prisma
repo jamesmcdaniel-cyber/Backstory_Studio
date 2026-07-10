@@ -19,6 +19,11 @@ model Organization {
   // People.ai tenant binding: one Studio workspace per People.ai team. Set on
   // first People.ai connection; every rep from that team lands in this org.
   peopleAiTeamId       String?   @unique
+  /// HMAC signing secret for this org's People.ai webhook deliveries.
+  /// Stored encrypted (src/lib/crypto/secrets.ts encryptSecret) — verification
+  /// needs the plaintext, so this is NOT a hash. Null = org falls back to the
+  /// global PEOPLE_AI_WEBHOOK_SECRET during migration.
+  peopleAiWebhookSecret String?
   // Entitlement snapshot, derived from an active People.ai Sales AI
   // connection and revalidated on a TTL (see src/lib/entitlement.ts).
   entitlementTier      String?
