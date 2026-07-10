@@ -6,6 +6,9 @@ import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 import { resolveFlowToolExecutor } from '@/features/agents/tool-planes'
 import { createApproval, capabilityFromProvider } from '@/lib/agents/approval'
+import { parseApprovalDecision, shouldConsumeApprovalDecision } from '@/lib/flows/approval-decision'
+import { notify } from '@/lib/notifications/service'
+import { recordAudit } from '@/lib/audit'
 import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
 import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
@@ -39,17 +42,9 @@ function jsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? null))
 }
 
-// The approvals route resumes a flow paused on a tool-step approval with a
-// JSON reply of { status: 'approved'|'rejected', executed, result } (the same
-// payload injected into a resumed agent run). Anything else → null.
-function parseApprovalDecision(reply: string): { status?: string; executed?: boolean; result?: unknown } | null {
-  try {
-    const parsed = JSON.parse(reply)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as { status?: string; executed?: boolean; result?: unknown }) : null
-  } catch {
-    return null
-  }
-}
+// Write planes are the consequential audit entries — the same set the agent
+// loop uses for its tool.write / tool.call distinction.
+const WRITE_PLANES = /^(nango|slack|email|backstory)/i
 
 /**
  * Run a flow to completion. Each agent node delegates to the real agent runtime
@@ -116,6 +111,11 @@ export async function runFlowExecution(
   const completed: Record<string, unknown> = {}
   let resumeNodeId: string | undefined
   let resumeExecutionId: string | undefined
+  // Approval ids persisted on the run's waiting step rows. A resuming tool
+  // step may only consume a decision reply whose approvalId is in this set —
+  // and each id is consumed at most once — so in loops/parallel one item's
+  // decision is never reported as another item's result.
+  const pausedApprovalIds = new Set<string>()
   let order = 0
   if (resuming) {
     const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
@@ -124,6 +124,8 @@ export async function runFlowExecution(
       if (step.status === 'waiting') {
         resumeNodeId = step.nodeId
         resumeExecutionId = step.agentExecutionId ?? undefined
+        const approvalId = (step.output as { waiting?: { approvalId?: string } } | null)?.waiting?.approvalId
+        if (typeof approvalId === 'string' && approvalId) pausedApprovalIds.add(approvalId)
       }
     }
     // Resuming creates NEW step rows for the re-run node — resolve every stale
@@ -251,19 +253,23 @@ export async function runFlowExecution(
         // Re-entering a step paused on an approval: the reply carries the
         // decision (decideApproval already executed an approved write, exactly
         // as it does for agent runs) — consume it, never re-execute the write.
+        // CORRELATED consume only: the decision must name an approvalId this
+        // run actually paused on, and each decision is consumed once. A step
+        // whose approval the decision does NOT match (another loop item's
+        // pause) falls through and re-queues its own approval below.
         if (node.resume && typeof job.reply === 'string') {
           const decision = parseApprovalDecision(job.reply)
-          if (decision?.status === 'approved') {
-            const output = decision.result ?? { status: 'approved', executed: decision.executed === true }
-            await finish({ status: 'succeeded', output })
-            return { output }
+          if (decision && shouldConsumeApprovalDecision(decision, pausedApprovalIds)) {
+            pausedApprovalIds.delete(String(decision.approvalId))
+            if (decision.status === 'approved') {
+              const output = decision.result ?? { status: 'approved', executed: decision.executed === true }
+              await finish({ status: 'succeeded', output })
+              return { output }
+            }
+            const message = 'The approver rejected this action.'
+            await finish({ status: 'failed', error: message })
+            return { error: message }
           }
-          const message =
-            decision?.status === 'rejected'
-              ? 'The approver rejected this action.'
-              : 'The approval decision could not be interpreted — run the flow again.'
-          await finish({ status: 'failed', error: message })
-          return { error: message }
         }
 
         const args = prepareToolArgs(node.config.args)
@@ -290,6 +296,17 @@ export async function runFlowExecution(
           })
           const question = `Approve ${toolName}?`
           await finish({ status: 'waiting', output: { waiting: { kind: 'approval', approvalId: approval.id, question } } })
+          // Mirror the agent path: surface the pending approval to the user
+          // (in-app + push). notify never throws into the run.
+          await notify({
+            organizationId: job.organizationId,
+            userId: job.userId,
+            type: 'agent.needs_approval',
+            level: 'action',
+            title: `Flow "${flow.name}" needs approval`,
+            body: `Approve or reject: ${toolName} (run ${run.id})`,
+            executionId: run.id,
+          })
           return { waiting: { status: 'waiting_for_approval', question } }
         }
 
@@ -303,6 +320,19 @@ export async function runFlowExecution(
             timeoutMessage: timeoutMs ? `Tool ${toolName} timed out after ${timeoutMs}ms` : undefined,
           },
         )
+        // Immutable audit trail, mirroring the agent loop's tool execution:
+        // every plane is recorded; write/delivery planes are the consequential
+        // ones. Args are hashed by recordAudit, never stored raw.
+        await recordAudit({
+          organizationId: job.organizationId,
+          executionId: run.id,
+          actorUserId: job.userId,
+          actorKind: 'agent',
+          action: WRITE_PLANES.test(executor.provider) ? 'tool.write' : 'tool.call',
+          tool: toolName,
+          resourceType: executor.provider,
+          payload: args,
+        })
         await finish({ status: 'succeeded', output })
         return { output }
       }

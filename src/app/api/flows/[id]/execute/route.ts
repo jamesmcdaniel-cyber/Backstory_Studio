@@ -4,6 +4,7 @@ import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { runFlowExecution } from '@/features/flows/execute-flow'
 import { parseFlowInput } from '@/lib/flows/input'
+import { deriveRunWaiting } from '@/lib/flows/run-waiting'
 
 export const runtime = 'nodejs'
 export const maxDuration = 1200
@@ -27,9 +28,23 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   if (parsed.flowRunId) {
     const owned = await prisma.flowRun.findFirst({
       where: { id: parsed.flowRunId, flowId: flow.id, organizationId: auth.organizationId },
-      select: { id: true },
+      select: { id: true, status: true },
     })
     if (!owned) throw new ApiError('Run not found', 404, 'NOT_FOUND')
+    // A run paused on a tool-step APPROVAL resumes only through the approvals
+    // route (which calls runFlowExecution directly with the decision payload,
+    // never through this endpoint). A user-supplied reply here must never be
+    // interpreted as — or race with — an approval decision.
+    if (parsed.reply !== undefined && owned.status === 'waiting') {
+      const steps = await prisma.flowRunStep.findMany({
+        where: { flowRunId: owned.id },
+        orderBy: { order: 'asc' },
+        select: { nodeId: true, status: true, output: true },
+      })
+      if (deriveRunWaiting(owned.status, steps)?.kind === 'approval') {
+        throw new ApiError('This run is waiting for an approval decision, not a reply.', 400, 'FLOW_RUN_AWAITING_APPROVAL')
+      }
+    }
   }
   const run = await runFlowExecution({
     flowId: id,

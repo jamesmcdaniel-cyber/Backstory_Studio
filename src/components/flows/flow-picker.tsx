@@ -33,6 +33,8 @@ import {
   type PickerGroup,
   type PickerLeaf,
 } from '@/lib/flows/builtin-catalog'
+import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
+import { humanizeToolName } from '@/lib/flows/humanize-tool-name'
 import type { FlowInsertSeed } from './flow-canvas'
 import type { ToolCatalog } from './step-drawer'
 
@@ -158,10 +160,17 @@ function includesQuery(text: string, query: string): boolean {
 // whose ref is an opaque row id — its display name (e.g. "GitHub") slugifies to
 // a recognizable icon key instead.
 function connectionLogoSlug(connection: Connection): string {
-  const sep = connection.id.indexOf(':')
-  if (sep === -1) return connection.id
-  const plane = connection.id.slice(0, sep)
-  return plane === 'klavis' ? connection.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') : connection.id.slice(sep + 1)
+  const { plane, ref } = parseFlowToolConnectionId(connection.id)
+  if (plane === 'klavis') return connection.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  return ref
+}
+
+// Connector key for tool-label humanization: prefixed planes name their
+// connector in the ref (native:slack, nango:gmail, people_ai:backstory); MCP
+// and Klavis refs are opaque row ids, so the display name is the key instead.
+function connectionToolKey(connection: Connection): string {
+  const { plane, ref } = parseFlowToolConnectionId(connection.id)
+  return plane === 'mcp' || plane === 'klavis' ? connection.name : ref
 }
 
 export function FlowPicker({
@@ -237,7 +246,9 @@ export function FlowPicker({
     const favoriteId = `tool:${connection.id}:${tool.name}`
     return {
       id: favoriteId,
-      label: tool.name,
+      // Humanized DISPLAY label only — the raw tool.name stays the stored
+      // toolName on the inserted node (see onSelect below).
+      label: humanizeToolName(tool.name, connectionToolKey(connection)),
       description: tool.description || 'Run this connected action.',
       logo: { slug: connectionLogoSlug(connection), name: connection.name },
       favoriteId,

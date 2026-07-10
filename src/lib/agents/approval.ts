@@ -145,7 +145,11 @@ export async function decideApproval(input: {
   })
   if (!approval) throw new Error('Approval not found')
   if (approval.status !== 'pending') {
-    return { status: approval.status === 'rejected' ? 'rejected' : 'approved', executed: false }
+    // Idempotent replay — but if the fire-and-forget flow resume crashed after
+    // the decision was recorded, the run is stranded `waiting`. Hand the caller
+    // resume info again so re-POSTing the decision un-strands it.
+    const resumeFlow = await flowResumeRetryInfo(approval, input.organizationId)
+    return { status: approval.status === 'rejected' ? 'rejected' : 'approved', executed: false, ...(resumeFlow ? { resumeFlow } : {}) }
   }
 
   if (!input.approve) {
@@ -163,7 +167,7 @@ export async function decideApproval(input: {
       tool: approval.tool,
       resourceId: approval.id,
     })
-    const rejectedReply = JSON.stringify({ status: 'rejected', message: 'The approver rejected this action. Do not retry it; continue without it.' })
+    const rejectedReply = rejectedDecisionReply(approval.id)
     const resume = await resumeInfoFor(approval.executionId, input.organizationId, rejectedReply)
     const requesterUserId = (approval.payload as { userId?: string } | null)?.userId
     const resumeFlow = resume ? undefined : await flowResumeInfoFor(approval.executionId, input.organizationId, rejectedReply, requesterUserId)
@@ -227,7 +231,7 @@ export async function decideApproval(input: {
     resourceId: approval.id,
     payload: payload.args,
   })
-  const approvedReply = JSON.stringify({ status: 'approved', executed, result: writeResult })
+  const approvedReply = approvedDecisionReply(approval.id, executed, writeResult)
   const resume = await resumeInfoFor(approval.executionId, input.organizationId, approvedReply)
   const resumeFlow = resume ? undefined : await flowResumeInfoFor(approval.executionId, input.organizationId, approvedReply, payload.userId)
   return { status: 'approved', executed, ...(resume ? { resume } : {}), ...(resumeFlow ? { resumeFlow } : {}) }
@@ -238,5 +242,37 @@ async function currentDecision(approvalId: string, organizationId: string): Prom
   const current = await prisma.approvalRequest.findFirst({ where: { id: approvalId, organizationId } })
   // 'approving' = another approver is mid-execution; surface it as approved
   // (not executed by us) rather than implying it's still actionable.
-  return { status: current?.status === 'rejected' ? 'rejected' : 'approved', executed: false }
+  const resumeFlow = current ? await flowResumeRetryInfo(current, organizationId) : undefined
+  return { status: current?.status === 'rejected' ? 'rejected' : 'approved', executed: false, ...(resumeFlow ? { resumeFlow } : {}) }
+}
+
+// Decision replies carry the approvalId so a resuming flow step only consumes
+// a decision that correlates with the approval IT paused on (loops/parallel
+// can have several approvals in flight for one run).
+function approvedDecisionReply(approvalId: string, executed: boolean, result: unknown): string {
+  return JSON.stringify({ status: 'approved', approvalId, executed, result })
+}
+
+function rejectedDecisionReply(approvalId: string): string {
+  return JSON.stringify({ status: 'rejected', approvalId, message: 'The approver rejected this action. Do not retry it; continue without it.' })
+}
+
+/**
+ * Retry path for a flow run stranded on an ALREADY-decided approval: the
+ * decision was recorded but the fire-and-forget resume may have crashed. When
+ * the run is still `waiting`, rebuild the same reply the normal decision path
+ * sent so the caller can trigger the resume again. Undecided states
+ * ('approving', 'failed') never resume — the winner/failure path owns those.
+ */
+async function flowResumeRetryInfo(
+  approval: { id: string; status: string; executionId: string; payload: unknown },
+  organizationId: string,
+): Promise<FlowResumeInfo | undefined> {
+  if (approval.status !== 'approved' && approval.status !== 'rejected') return undefined
+  const reply =
+    approval.status === 'approved'
+      ? approvedDecisionReply(approval.id, true, null)
+      : rejectedDecisionReply(approval.id)
+  const requesterUserId = (approval.payload as { userId?: string } | null)?.userId
+  return flowResumeInfoFor(approval.executionId, organizationId, reply, requesterUserId)
 }
