@@ -58,10 +58,30 @@ export async function runFlowExecution(
 ): Promise<{ flowRunId: string; status: string; output: unknown }> {
   const flow = await prisma.flow.findFirst({ where: { id: job.flowId, organizationId: job.organizationId } })
   if (!flow) throw new Error('Flow not found')
-  const source = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
+  const resuming = Boolean(job.flowRunId && job.reply !== undefined)
+
+  // Resume: atomically claim the run — only a genuinely `waiting` run may be
+  // resumed. A concurrent resume (e.g. the reply route and the approvals
+  // route racing), a run the reaper already terminalized, or a duplicate
+  // reply delivery all lose cleanly here instead of re-interpreting an
+  // already-moving or already-dead run. Mirrors execute-agent.ts's
+  // waiting_* -> running atomic claim.
+  let existingRun: Awaited<ReturnType<typeof prisma.flowRun.findFirst>> = null
+  if (resuming) {
+    const claimed = await prisma.flowRun.updateMany({
+      where: { id: job.flowRunId, organizationId: job.organizationId, status: 'waiting' },
+      data: { status: 'running' },
+    })
+    if (claimed.count === 0) throw new ApiError('This run is not waiting for input', 409, 'FLOW_RUN_NOT_WAITING')
+    existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId } })
+    if (!existingRun) throw new Error('Flow run not found after claim')
+  }
+  // Snapshot pinning: a resumed run executes the EXACT graph it started with
+  // (graphSnapshot), never whatever the flow currently is — a publish made
+  // while the run waited must not reshape a run already in flight.
+  const source = existingRun ? existingRun.graphSnapshot : job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
   const graph = flowGraphSchema.parse(source)
   let input: unknown = job.input ?? ''
-  const resuming = Boolean(job.flowRunId && job.reply !== undefined)
   const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
     node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
   ).filter((id): id is string => Boolean(id))))
@@ -117,21 +137,19 @@ export async function runFlowExecution(
       )
     }
   }
-  const run = job.flowRunId
-    ? await prisma.flowRun.update({ where: { id: job.flowRunId }, data: { status: 'running' } })
-    : await prisma.flowRun.create({
-        data: {
-          flowId: flow.id,
-          status: 'running',
-          input: jsonValue({ prompt: input }),
-          // reusedInput marks the run as replaying the last successful input —
-          // the run panel surfaces it so replayed payloads are never silent.
-          trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}) }),
-          graphSnapshot: jsonValue(graph),
-          organizationId: job.organizationId,
-          userId: job.userId,
-        },
-      })
+  const run = existingRun ?? await prisma.flowRun.create({
+    data: {
+      flowId: flow.id,
+      status: 'running',
+      input: jsonValue({ prompt: input }),
+      // reusedInput marks the run as replaying the last successful input —
+      // the run panel surfaces it so replayed payloads are never silent.
+      trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}) }),
+      graphSnapshot: jsonValue(graph),
+      organizationId: job.organizationId,
+      userId: job.userId,
+    },
+  })
   // Resume integrity: a resume request carries the user's reply, not the run
   // input, so `input` re-derives as '' here — downstream `Run input` tokens
   // would resolve empty. Reload the original input persisted on the run row.
