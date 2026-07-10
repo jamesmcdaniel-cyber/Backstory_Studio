@@ -107,7 +107,8 @@ function toolPhrase(node: string): string {
   const dot = cleaned.indexOf('.')
   if (dot === -1) return cleaned.replace(/[_-]+/g, ' ')
   const provider = titleCase(cleaned.slice(0, dot).replace(/[_-]+/g, ' '))
-  const tool = cleaned.slice(dot + 1).replace(/[_-]+/g, ' ')
+  // Multi-dot tool paths (google.calendar.create_event) read as spaces too.
+  const tool = cleaned.slice(dot + 1).replace(/[._-]+/g, ' ')
   return provider ? `${tool} in ${provider}` : tool
 }
 

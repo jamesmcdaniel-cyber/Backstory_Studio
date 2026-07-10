@@ -90,7 +90,7 @@ function OutputView({ value }: { value: unknown }) {
  * changes (`active`/`executionId` flip) and on unmount — the panel is only
  * mounted while open, so closing it stops the polling too.
  */
-function useAgentProcessFeed(executionId: string | null | undefined, active: boolean): ProcessFeedRow[] {
+function useAgentProcessFeed(executionId: string | null | undefined, active: boolean, waiting = false): ProcessFeedRow[] {
   const [rows, setRows] = useState<ProcessFeedRow[]>([])
   useEffect(() => {
     setRows([]) // never show a previous execution's feed while the first fetch is in flight
@@ -108,12 +108,14 @@ function useAgentProcessFeed(executionId: string | null | undefined, active: boo
         })
         .catch(() => undefined)
     load()
-    const timer = window.setInterval(load, 2000)
+    // A waiting step's feed is static until the user replies — poll gently so
+    // a panel left open on a long-waiting run doesn't hammer the API.
+    const timer = window.setInterval(load, waiting ? 15000 : 2000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [executionId, active])
+  }, [executionId, active, waiting])
   return rows
 }
 
@@ -124,7 +126,7 @@ function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; w
   // an execution id (http/tool steps, or an id not yet written) keep the
   // typewriter.
   const live = (step.status === 'running' || step.status === 'waiting') && Boolean(step.agentExecutionId)
-  const feed = useAgentProcessFeed(step.agentExecutionId, live)
+  const feed = useAgentProcessFeed(step.agentExecutionId, live, step.status === 'waiting')
   // A paused step reads as what it needs, never the bare status word.
   const statusLabel = waitingKind ? (waitingKind === 'input' ? 'Waiting for your reply' : 'Waiting for approval') : step.status
   return (
@@ -141,7 +143,7 @@ function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; w
               key={row.key}
               className={cn(
                 'truncate text-xs',
-                i === feed.length - 1 ? 'animate-pulse text-foreground/70' : 'text-muted-foreground',
+                i === feed.length - 1 && step.status === 'running' ? 'animate-pulse text-foreground/70' : 'text-muted-foreground',
               )}
             >
               {row.label}
