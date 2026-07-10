@@ -21,6 +21,10 @@ Pipedream owns embedded account connections; Klavis owns agent-facing MCP tool s
 
 `POST /api/agents/draft` turns a plain-language description into an agent configuration (structured output) and can create the agent directly.
 
+## Flow Execution
+
+Flows execute inline in the calling process today (`runFlowExecution` in `src/features/flows/execute-flow.ts`) via the same routes agents use for triggering (manual execute, webhook trigger, cron dispatch, reply, approval decision). A resume (a reply or approval decision reaching a paused run) atomically claims the run — only a `waiting` run may be resumed — and pins execution to the exact graph the run started with (`FlowRun.graphSnapshot`), never the flow's current definition. A `flow-execution` BullMQ queue and worker exist (`dispatchFlowExecution`/`executeFlowJob`) but are not yet wired into any caller — flows still run inline everywhere in practice.
+
 ## Shared Server Utilities
 
 - `src/lib/prisma.ts`: process-wide Prisma client
