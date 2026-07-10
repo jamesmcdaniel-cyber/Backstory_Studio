@@ -5,7 +5,7 @@ import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { runFlowExecution } from '@/features/flows/execute-flow'
 import { inlineExecution } from '@/lib/queue/execution-mode'
-import { executionVisibilityScope } from '@/lib/server/visibility'
+import { executionVisibilityScope, agentVisibilityScope } from '@/lib/server/visibility'
 import { deriveRunWaiting } from '@/lib/flows/run-waiting'
 import { resolveReplyTarget, type ReplyTarget } from '@/lib/flows/reply-target'
 
@@ -26,9 +26,17 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   // replying from the agent activity pane must resume the FLOW — resuming
   // only the bare agent would leave the FlowRun stranded `waiting` forever.
   // The most recent step row wins (a resume creates a NEW row for the re-run
-  // node with the same agentExecutionId). Org-scoped through the run.
+  // node with the same agentExecutionId). Org-scoped through the run, and
+  // visibility-scoped through the FLOW: a private flow's run may only be
+  // resumed by its owner even when the agent step is org-visible in the pane
+  // — otherwise any org member could drive the whole private flow. A
+  // non-matching lookup falls through to the bare agent resume, which is the
+  // pre-existing access this caller already had.
   const flowStep = await prisma.flowRunStep.findFirst({
-    where: { agentExecutionId: execution.id, run: { organizationId: auth.organizationId } },
+    where: {
+      agentExecutionId: execution.id,
+      run: { organizationId: auth.organizationId, flow: agentVisibilityScope(auth.dbUser.id) },
+    },
     orderBy: { startedAt: 'desc' },
     include: { run: { select: { id: true, flowId: true, status: true, userId: true, trigger: true } } },
   })
