@@ -40,6 +40,8 @@ People.ai webhook deliveries are verified per-tenant: each organization has its 
 
 `prisma/schema.prisma` intentionally contains only organizations, users, agents, executions, execution messages, workflow steps/events, templates, integrations, and Klavis MCP connections. Executions carry the resumable model transcript, token counts, and the model that ran them.
 
+Organization deletion is complete: every org-owned model cascades via FK (WS-R4 closed the gaps — flows, custom signals, push subscriptions, knowledge, shared skills), and `teardownOrganization` (`src/lib/org-teardown.ts`) deprovisions external Klavis/Nango resources and clears the org's Neo4j nodes before deleting the row. The daily retention cron prunes `run:`/`signal:` graph nodes in lockstep with the Postgres rows it deletes.
+
 ## Known follow-ups (tracked tech debt)
 
 - **MCP transport consolidation.** There are three near-duplicate MCP clients — `klavis-client.ts`, `mcp-client.ts`, and `backstory-mcp.ts` — each reimplementing JSON-RPC, SSE parsing, session handling, and the initialize handshake. They should collapse into one transport with pluggable auth (none / api-key / oauth2-client-credentials / oauth2-authcode / static-bearer). The `MCPAgent` (Klavis, per-user) vs `McpConnection` (custom, per-org) model split is the same divide surfacing in the schema.
