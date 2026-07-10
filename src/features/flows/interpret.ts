@@ -1,5 +1,6 @@
 import type { FlowGraph, FlowNode, FlowEdge } from '@/lib/flows/graph'
 import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from './context'
+import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
 
 export type StepOutcome = {
@@ -20,6 +21,9 @@ export type InterpretResult = {
   steps: StepOutcome[]
   output: unknown
   waiting?: { nodeId: string; question?: string }
+  // Why a failed run failed — the failing node's error (e.g. the timeout
+  // message) so callers can persist it on the run record.
+  error?: string
 }
 
 type Opts = {
@@ -148,10 +152,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       // A timeout only ABANDONS the live agent execution — Promise.race cannot
       // cancel it, so it may still be running (and spending tokens / performing
       // side effects). Retrying would start a SECOND concurrent execution, so
-      // timeouts are terminal for agent steps — shouldRetryAfterTimeout('agent')
-      // is false by policy; `retries` still applies to hard errors below.
+      // the shared policy (shouldRetryAfterTimeout) keeps agent timeouts
+      // terminal; `retries` still applies to hard errors below.
       if (raced === TIMED_OUT) {
-        return { error: `Timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s — the agent may still be finishing in the background.` }
+        const error = `Timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s — the agent may still be finishing in the background.`
+        if (!shouldRetryAfterTimeout('agent') || attempt >= retries) return { error }
+        attempt += 1
+        await sleep(Math.min(8000, 250 * 2 ** attempt))
+        continue
       }
       const res = raced
       // Retry only hard errors (never a waiting/paused result).
@@ -382,7 +390,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
   while (current) {
     if (current.type === 'condition') {
-      if (overBudget()) return { status: 'failed', steps, output: lastOutput }
+      if (overBudget()) return { status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' }
       const branch = evalCondition(current.data, ctx) ? 'true' : 'false'
       const edge = outgoing(current.id, branch)
       current = edge ? byId.get(edge.target) : undefined
@@ -390,7 +398,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     if (current.type === 'switch') {
-      if (overBudget()) return { status: 'failed', steps, output: lastOutput }
+      if (overBudget()) return { status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' }
       // First matching case wins; otherwise follow the 'default' edge.
       const hit = current.data.cases.find((c) => evalClause({ left: c.left, op: c.op, right: c.right }, ctx))
       emit({ nodeId: current.id, status: 'succeeded', output: hit?.id ?? 'default' })
@@ -400,7 +408,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     const res = await execNode(current, ctx)
-    if (res.kind === 'fail') return { status: 'failed', steps, output: lastOutput }
+    if (res.kind === 'fail') return { status: 'failed', steps, output: lastOutput, error: res.error }
     if (res.kind === 'pause') return { status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } }
     // A stop node or a main-chain filter that didn't pass ends the flow cleanly.
     if (res.kind === 'stop' || res.kind === 'drop') return { status: 'succeeded', steps, output: lastOutput }

@@ -220,6 +220,14 @@ export async function runFlowExecution(
         startedAt: new Date(),
       },
     })
+    // Terminal writes below target this row ONLY while it is still 'running'.
+    // A step timeout makes the interpreter abandon this promise and the
+    // end-of-run sweep closes the row as failed; if the abandoned agent later
+    // finishes, its late write must not resurrect the swept row inside a
+    // failed run — the sweep is authoritative.
+    const finishStep = async (data: Record<string, unknown>) => {
+      await prisma.flowRunStep.updateMany({ where: { id: step.id, status: 'running' }, data })
+    }
     // Link the agent execution to this step row the moment the execution row
     // exists (not only at the end of the run), so the runs panel can follow
     // the agent's live process events while the step is still running.
@@ -244,29 +252,20 @@ export async function runFlowExecution(
         // The resume scan only reuses output for succeeded/skipped steps, so
         // this waiting-info output never leaks into resumed step data.
         const kind = result.status === 'waiting_for_approval' ? 'approval' : 'input'
-        await prisma.flowRunStep.update({
-          where: { id: step.id },
-          data: {
-            status: 'waiting',
-            agentExecutionId: result.executionId ?? null,
-            output: jsonValue({ waiting: { kind, question: result.question, approvalId: (result as { approvalId?: string }).approvalId } }),
-            finishedAt: new Date(),
-          },
+        await finishStep({
+          status: 'waiting',
+          agentExecutionId: result.executionId ?? null,
+          output: jsonValue({ waiting: { kind, question: result.question, approvalId: (result as { approvalId?: string }).approvalId } }),
+          finishedAt: new Date(),
         })
         return { waiting: { status: result.status, question: result.question } }
       }
       const output = result?.summary ?? ''
-      await prisma.flowRunStep.update({
-        where: { id: step.id },
-        data: { status: 'succeeded', output: jsonValue(output), agentExecutionId: result.executionId ?? null, finishedAt: new Date() },
-      })
+      await finishStep({ status: 'succeeded', output: jsonValue(output), agentExecutionId: result.executionId ?? null, finishedAt: new Date() })
       return { output }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      await prisma.flowRunStep.update({
-        where: { id: step.id },
-        data: { status: 'failed', error: message.slice(0, 300), finishedAt: new Date() },
-      })
+      await finishStep({ status: 'failed', error: message.slice(0, 300), finishedAt: new Date() })
       return { error: message }
     }
   }
@@ -286,9 +285,11 @@ export async function runFlowExecution(
         startedAt: new Date(),
       },
     })
+    // Conditional on 'running' for the same reason as agent steps: the
+    // end-of-run failure sweep is authoritative over any late adapter write.
     const finish = async (patch: { status: string; output?: unknown; error?: string }) => {
-      await prisma.flowRunStep.update({
-        where: { id: step.id },
+      await prisma.flowRunStep.updateMany({
+        where: { id: step.id, status: 'running' },
         data: {
           status: patch.status,
           output: patch.output !== undefined ? jsonValue(patch.output) : undefined,
@@ -456,10 +457,32 @@ export async function runFlowExecution(
   })
   await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'
+  // A failed run persists WHY it failed (e.g. the step-timeout message) — the
+  // runs API surfaces FlowRun.error, so it must never stay null on failure.
+  const runError = status === 'failed' ? (result.error ?? 'The flow failed.').slice(0, 300) : null
   await prisma.flowRun.update({
     where: { id: run.id },
-    data: { status, output: jsonValue(result.output), finishedAt: status === 'waiting' ? null : new Date() },
+    data: { status, output: jsonValue(result.output), error: runError, finishedAt: status === 'waiting' ? null : new Date() },
   })
+  if (status === 'failed') {
+    // Sweep phantom 'running' rows: a timed-out agent step's adapter promise
+    // was abandoned by the interpreter, so its FlowRunStep would stay stuck
+    // 'running' forever. Close every such row for THIS run. The sweep wins
+    // over the abandoned adapter: its terminal writes are conditional on the
+    // row still being 'running' (finishStep/finish above), so a zombie
+    // completion can never flip a swept step back inside a failed run.
+    // Best-effort — sweep failure must not mask the run's real outcome.
+    await prisma.flowRunStep
+      .updateMany({
+        where: { flowRunId: run.id, status: 'running' },
+        data: {
+          status: 'failed',
+          error: runError ?? 'The flow stopped before this step finished.',
+          finishedAt: new Date(),
+        },
+      })
+      .catch(() => undefined)
+  }
 
   // Fire the flow.completed signal for other flows listening in this org.
   // Dynamic import: signals.ts imports runFlowExecution statically (it fires

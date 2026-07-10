@@ -602,6 +602,23 @@ test('an agent timeout fails the step without starting a second concurrent execu
   const step = result.steps.find((s) => s.nodeId === 'n1')
   assert.equal(step?.status, 'failed')
   assert.match(step?.error ?? '', /Timed out after 1s — the agent may still be finishing in the background\./)
+  // The run-level result carries the same message so callers can persist it
+  // on the run record (FlowRun.error) — it must not live only in the step.
+  assert.match(result.error ?? '', /Timed out after 1s — the agent may still be finishing in the background\./)
+})
+
+test('a failed result carries the failing step error at the run level', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'x' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async () => ({ error: 'boom' })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'failed')
+  assert.equal(result.error, 'boom')
 })
 
 test('agent hard errors still retry up to the configured budget', async () => {
