@@ -23,6 +23,8 @@ import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
 import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
 import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
+import { reapStuckFlowRuns } from '@/lib/flows/reap'
+import { captureError } from '@/lib/observability/sentry'
 
 export const runtime = 'nodejs'
 export const maxDuration = 1200
@@ -84,6 +86,16 @@ export async function GET(request: Request) {
         completedAt: new Date(),
       },
     })
+
+    // Same recovery for flows: a crashed inline flow execution leaves its run
+    // `running` forever, which also wedges that flow's schedule via the
+    // overlap guard. Isolated so a reaper failure never aborts the tick.
+    try {
+      await reapStuckFlowRuns()
+    } catch (error) {
+      apiLogger.error('cron/dispatch: flow reaper failed', { error: capError(error) })
+      captureError(error, { source: 'cron.dispatch.flowReaper' })
+    }
 
     // Single-owner scheduling: when the BullMQ worker is live in queue mode it
     // owns RECURRING dispatch (via its JobScheduler), so this cron must not also
