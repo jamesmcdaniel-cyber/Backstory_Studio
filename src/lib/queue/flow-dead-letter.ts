@@ -25,9 +25,13 @@ export interface FlowDeadLetterInput {
 export async function recordFlowDeadLetter(input: FlowDeadLetterInput): Promise<void> {
   if (input.flowRunId) {
     // systemPrisma: id-keyed terminal write from worker job data; flow run id was minted org-scoped upstream.
+    // Status-guarded: only a run still `running` may be terminalized here. A
+    // resume that rolled back to `waiting` (claim rollback), an already-settled
+    // run, or a per-attempt BullMQ failure mid-retry must never be clobbered
+    // to failed by the dead-letter path.
     await systemPrisma.flowRun
-      .update({
-        where: { id: input.flowRunId },
+      .updateMany({
+        where: { id: input.flowRunId, status: 'running' },
         data: { status: 'failed', error: input.error.slice(0, 300), finishedAt: new Date() },
       })
       .catch(() => undefined)
