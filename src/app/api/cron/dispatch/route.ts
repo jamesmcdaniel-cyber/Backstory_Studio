@@ -108,7 +108,7 @@ export async function GET(request: Request) {
     const workerOwnsRecurring = workersEnabled && EXECUTION_MODE === 'queue'
 
     // Load all active agents (capped at 200 to avoid huge fetches)
-    // systemPrisma: global reaper sweep — scans across all orgs by design (CRON_SECRET-gated).
+    // systemPrisma: global scheduling scan — reads active agents across all orgs by design (CRON_SECRET-gated).
     const agents = await systemPrisma.agentTask.findMany({
       where: { status: 'ACTIVE' },
       take: 200,
@@ -231,7 +231,7 @@ export async function GET(request: Request) {
     // its most-recent flow_run.startedAt is the "last run" marker. Recurring
     // flows are owned by this cron (no BullMQ scheduler for flows), so run them
     // even in worker mode.
-    // systemPrisma: global reaper sweep — scans across all orgs by design (CRON_SECRET-gated).
+    // systemPrisma: global scheduling scan — reads active flows across all orgs by design (CRON_SECRET-gated).
     const flows = await systemPrisma.flow.findMany({
       where: { status: 'ACTIVE' },
       include: { runs: { orderBy: { startedAt: 'desc' }, take: 1, select: { startedAt: true, status: true } } },
