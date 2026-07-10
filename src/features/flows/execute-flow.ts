@@ -15,7 +15,7 @@ import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/tri
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { shouldReuseInput, storedRunInput } from '@/lib/flows/reuse-input'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
-import { flowActionRetries, flowActionTimeoutMs, runWithRetries } from './action-reliability'
+import { flowActionRetries, flowActionTimeoutMs, runWithRetries, shouldRetryAfterTimeout } from './action-reliability'
 import { prepareHttpRequest, responseOutput, redactHttpStepInput, withBearerAuthorization } from './http'
 import { resolveHttpConnectionToken } from './http-auth'
 import { shouldPersistInterpreterStep } from './run-step-persistence'
@@ -372,12 +372,19 @@ export async function runFlowExecution(
 
         const retries = flowActionRetries(node.config.retries)
         const timeoutMs = flowActionTimeoutMs(node.config.timeoutMs)
+        // retryOnTimeout=false: a timed-out tool call is only abandoned, not
+        // cancelled — the write may still land, so retrying could execute the
+        // side effect twice. Hard errors keep the retry budget. (HTTP steps
+        // below abort the request on timeout, so they may retry.)
         const output = await runWithRetries(
           async () => flowToolOutput(await executor.execute(toolName, args)),
           {
             retries,
             timeoutMs,
-            timeoutMessage: timeoutMs ? `Tool ${toolName} timed out after ${timeoutMs}ms` : undefined,
+            retryOnTimeout: shouldRetryAfterTimeout('tool'),
+            timeoutMessage: timeoutMs
+              ? `Tool ${toolName} timed out after ${Math.round(timeoutMs / 1000)}s — the call may still be finishing in the background.`
+              : undefined,
           },
         )
         // Immutable audit trail, mirroring the agent loop's tool execution:

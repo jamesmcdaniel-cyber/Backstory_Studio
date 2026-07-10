@@ -581,3 +581,44 @@ test('humanAssistance defaults to allowing the pause', async () => {
   assert.equal(result.status, 'waiting')
   assert.equal(result.waiting?.nodeId, 'n1')
 })
+
+test('an agent timeout fails the step without starting a second concurrent execution', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'x', retries: 3, timeoutMs: 1000 } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  let calls = 0
+  // Never resolves: simulates a live execution that outruns the step timeout.
+  const runAgent: RunAgentFn = async () => {
+    calls += 1
+    return new Promise(() => {})
+  }
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'failed')
+  assert.equal(calls, 1) // retries: 3 must NOT re-run the still-live agent
+  const step = result.steps.find((s) => s.nodeId === 'n1')
+  assert.equal(step?.status, 'failed')
+  assert.match(step?.error ?? '', /Timed out after 1s — the agent may still be finishing in the background\./)
+})
+
+test('agent hard errors still retry up to the configured budget', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'x', retries: 1, timeoutMs: 30000 } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  let calls = 0
+  const runAgent: RunAgentFn = async () => {
+    calls += 1
+    return calls < 2 ? { error: 'boom' } : { output: 'recovered' }
+  }
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(calls, 2)
+  assert.equal(result.output, 'recovered')
+})

@@ -24,6 +24,7 @@ import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
 import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 import { reapStuckFlowRuns } from '@/lib/flows/reap'
+import { blocksSchedule } from '@/lib/flows/schedule-blocking'
 import { captureError } from '@/lib/observability/sentry'
 
 export const runtime = 'nodejs'
@@ -243,9 +244,12 @@ export async function GET(request: Request) {
         if (flow.publishedGraph == null) continue
         if (!isDue(schedule, flow.runs[0]?.startedAt ?? null, now)) continue
         // Overlap guard: a still-active previous run means skip this tick —
-        // a slow flow must never stack concurrent scheduled executions.
+        // a slow flow must never stack concurrent scheduled executions. A
+        // `waiting` run older than 24h stops blocking (blocksSchedule): it
+        // stays answerable, but an unanswered approval/question must not
+        // wedge the schedule forever.
         const lastRun = flow.runs[0]
-        if (lastRun && (lastRun.status === 'running' || lastRun.status === 'waiting')) {
+        if (lastRun && blocksSchedule(lastRun, now)) {
           apiLogger.warn('cron/dispatch: flow run still active, skipping tick', { flowId: flow.id })
           continue
         }

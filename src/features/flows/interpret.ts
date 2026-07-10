@@ -48,6 +48,25 @@ type NodeResult =
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+// Sentinel a timed-out race resolves to — distinguishable from a RunAgentResult
+// that happens to carry an error.
+const TIMED_OUT = Symbol('flow-step-timed-out')
+
+/** Race `promise` against a deadline; the timer is cleared either way. */
+const raceTimeout = async <T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /** Run `fn` over `items` with at most `limit` in flight, preserving order. */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length)
@@ -125,9 +144,16 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     let attempt = 0
     for (;;) {
       const call = opts.runAgent({ id: node.id, agentId: node.data.agentId, input: resolvedInput, resume })
-      const res: RunAgentResult = timeoutMs
-        ? await Promise.race([call, sleep(timeoutMs).then((): RunAgentResult => ({ error: `Step timed out after ${timeoutMs}ms` }))])
-        : await call
+      const raced = timeoutMs ? await raceTimeout(call, timeoutMs) : await call
+      // A timeout only ABANDONS the live agent execution — Promise.race cannot
+      // cancel it, so it may still be running (and spending tokens / performing
+      // side effects). Retrying would start a SECOND concurrent execution, so
+      // timeouts are terminal for agent steps — shouldRetryAfterTimeout('agent')
+      // is false by policy; `retries` still applies to hard errors below.
+      if (raced === TIMED_OUT) {
+        return { error: `Timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s — the agent may still be finishing in the background.` }
+      }
+      const res = raced
       // Retry only hard errors (never a waiting/paused result).
       if (!res.error || res.waiting || attempt >= retries) return res
       attempt += 1
