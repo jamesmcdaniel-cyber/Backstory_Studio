@@ -175,13 +175,19 @@ function coerceVariableValue(name: string, varType: VariableType, resolved: unkn
 
 /**
  * Apply one variable step to the run's symbol table. Initialize coerces to the
- * declared type; set coerces to the variable's current type family (so a var
- * that started numeric stays numeric and JSON parses into objects/arrays);
- * increment/decrement take an optional templated amount (default 1); appends
- * require the matching array/string shape. Returns the variable's new value —
- * the step's output — or a plain-english error.
+ * declared type; set/increment coerce against the DECLARED type from the
+ * variable's initialize node (so a float var stays float even while its current
+ * value happens to be whole), falling back to the current value's runtime
+ * family only when no initialize node exists; increment/decrement take an
+ * optional templated amount (default 1); appends require the matching
+ * array/string shape. Returns the variable's new value — the step's output —
+ * or a plain-english error.
  */
-function applyVariableOp(node: Extract<FlowNode, { type: 'variable' }>, ctx: FlowContext): { output: unknown } | { error: string } {
+function applyVariableOp(
+  node: Extract<FlowNode, { type: 'variable' }>,
+  ctx: FlowContext,
+  declaredTypes: ReadonlyMap<string, VariableType>,
+): { output: unknown } | { error: string } {
   const variables = (ctx.variables ??= {})
   const name = node.data.name.trim()
   if (!name) return { error: 'This variable step needs a name.' }
@@ -196,8 +202,17 @@ function applyVariableOp(node: Extract<FlowNode, { type: 'variable' }>, ctx: Flo
     return { error: `Variable "${name}" hasn't been initialized yet.` }
   }
   const current = variables[name]
+  const declared = declaredTypes.get(name) ?? runtimeTypeOf(current)
   if (node.data.op === 'set') {
-    const coerced = coerceVariableValue(name, runtimeTypeOf(current), resolveTemplateValue(node.data.value ?? '', ctx))
+    const raw = node.data.value ?? ''
+    const resolved = resolveTemplateValue(raw, ctx)
+    // A configured value (e.g. a token) that resolves to nothing is a broken
+    // reference — fail instead of silently resetting to the type default. A
+    // raw-empty field stays a legitimate "set to the default" (empty string,
+    // empty object/array).
+    const blank = resolved === undefined || (typeof resolved === 'string' && resolved.trim() === '')
+    if (blank && raw.trim()) return { error: `Variable "${name}" needs a value — the value came back empty.` }
+    const coerced = coerceVariableValue(name, declared, resolved)
     if ('error' in coerced) return coerced
     variables[name] = coerced.value
     return { output: coerced.value }
@@ -208,8 +223,13 @@ function applyVariableOp(node: Extract<FlowNode, { type: 'variable' }>, ctx: Flo
     let amount = 1
     if (node.data.value?.trim()) {
       const resolvedAmount = resolveTemplate(node.data.value, ctx).trim()
+      // Number('') is 0 — a broken token amount must fail, not silently no-op.
+      if (!resolvedAmount) return { error: `Variable "${name}" needs a number for the amount — the value came back empty.` }
       amount = Number(resolvedAmount)
       if (!Number.isFinite(amount)) return { error: `Variable "${name}" needs a number amount — "${resolvedAmount}" isn't one.` }
+      if (declared === 'integer' && !Number.isInteger(amount)) {
+        return { error: `Variable "${name}" needs a whole number amount — "${resolvedAmount}" isn't one.` }
+      }
     }
     const next = node.data.op === 'increment' ? current + amount : current - amount
     variables[name] = next
@@ -247,6 +267,15 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   const maxSteps = opts.maxSteps ?? 100
   const maxLoop = opts.maxLoopIterations ?? 500
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
+  // Declared variable types: each name's initialize node (anywhere in the
+  // graph, container bodies included) governs how later set/increment values
+  // are coerced.
+  const declaredTypes = new Map<string, VariableType>()
+  for (const node of graph.nodes) {
+    if (node.type !== 'variable' || node.data.op !== 'initialize') continue
+    const name = node.data.name.trim()
+    if (name && !declaredTypes.has(name)) declaredTypes.set(name, node.data.varType ?? 'string')
+  }
   const outgoing = (id: string, branch?: string): FlowEdge | undefined =>
     graph.edges.find((edge) => edge.source === id && (branch === undefined || edge.branch === branch || edge.branch === undefined))
 
@@ -298,16 +327,13 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'trigger') return { kind: 'skip' }
 
     // Resume: a node finished on the prior run is reused, not re-executed.
+    // Variable state was already reconstructed by the pre-walk replay (which
+    // covers container bodies the walk never enters), so a replayed variable
+    // step must NOT re-apply here — that would rewind the symbol table to a
+    // value from before a later completed write.
     if (opts.completed && Object.prototype.hasOwnProperty.call(opts.completed, node.id)) {
       const output = opts.completed[node.id]
       ctx.step[node.id] = { output }
-      // Replayed variable steps re-apply their stored result so the symbol
-      // table is reconstructed on resume: the map itself is never persisted,
-      // but each step's output IS the variable's value after that step, and
-      // replay follows execution order, so the last write per name wins.
-      if (node.type === 'variable' && node.data.name.trim()) {
-        ;(ctx.variables ??= {})[node.data.name.trim()] = output
-      }
       emit({ nodeId: node.id, status: 'skipped', output })
       return { kind: 'ok', output }
     }
@@ -344,7 +370,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     if (node.type === 'variable') {
-      const res = applyVariableOp(node, ctx)
+      const res = applyVariableOp(node, ctx, declaredTypes)
       if ('error' in res) {
         emit({ nodeId: node.id, status: 'failed', error: res.error })
         return { kind: 'fail', error: res.error }
@@ -526,6 +552,22 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   )
 
   const ctx: FlowContext = { trigger: { input }, step: {}, variables: {} }
+
+  // Resume: rebuild the symbol table from EVERY completed variable step before
+  // walking. A completed loop/parallel short-circuits without entering its
+  // body, so writes made inside container bodies would otherwise be lost.
+  // `completed` preserves execution order (execute-flow builds it from step
+  // rows ordered `order asc`), and each stored output IS the variable's
+  // post-op value, so replay assigns outputs in that order — it never re-runs
+  // the op — leaving the correct last write per name in place.
+  if (opts.completed) {
+    const variables = (ctx.variables ??= {})
+    for (const [nodeId, output] of Object.entries(opts.completed)) {
+      const node = byId.get(nodeId)
+      if (node?.type === 'variable' && node.data.name.trim()) variables[node.data.name.trim()] = output
+    }
+  }
+
   let lastOutput: unknown = input
   let current: FlowNode | undefined = byId.get('trigger') ?? graph.nodes[0]
 

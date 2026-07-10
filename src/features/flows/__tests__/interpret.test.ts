@@ -885,3 +885,194 @@ test('resume replays completed variable steps back into the symbol table', async
   assert.deepEqual(ran, ['ask', 'n2'])
   assert.equal(result.output, 'count=2 reply=ANSWERED')
 })
+
+test('resume restores variable writes made inside a completed loop body', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '0' } },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['inc'] } },
+      { id: 'inc', type: 'variable', data: { op: 'increment', name: 'count' } },
+      { id: 'ask', type: 'agent', data: { agentId: 'ask', input: 'x' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'e', input: 'count={{var.count}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'loop' },
+      { id: 'e2', source: 'loop', target: 'ask' },
+      { id: 'e3', source: 'ask', target: 'n2' },
+    ],
+  }
+  const ran: string[] = []
+  const runAgent: RunAgentFn = async (n) => {
+    ran.push(n.id)
+    if (n.id === 'ask') return { output: 'ANSWERED' }
+    return { output: n.input }
+  }
+  // Prior run: v1 wrote 0, the loop body incremented count to 3 (a stored
+  // output is the LAST post-op value for that node), the loop completed, then
+  // `ask` paused. The resumed walk short-circuits the completed loop without
+  // entering its body — `inc` lives in `contained` — so its write must be
+  // replayed from the completed map up front, not during the walk.
+  const result = await interpretFlow(graph, ['a', 'b', 'c'], {
+    runAgent,
+    completed: { v1: 0, inc: 3, loop: [1, 2, 3] },
+    resumeNodeId: 'ask',
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(ran, ['ask', 'n2'])
+  assert.equal(result.output, 'count=3')
+})
+
+test('resume restores variable writes made inside completed parallel branches', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'total', varType: 'integer', value: '0' } },
+      { id: 'par', type: 'parallel', data: { branches: [['va'], ['vb']] } },
+      { id: 'va', type: 'variable', data: { op: 'increment', name: 'total', value: '1' } },
+      { id: 'vb', type: 'variable', data: { op: 'increment', name: 'total', value: '2' } },
+      { id: 'ask', type: 'agent', data: { agentId: 'ask', input: 'x' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'e', input: 'total={{var.total}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'par' },
+      { id: 'e2', source: 'par', target: 'ask' },
+      { id: 'e3', source: 'ask', target: 'n2' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.id === 'ask' ? 'ANSWERED' : n.input })
+  const result = await interpretFlow(graph, '', {
+    runAgent,
+    completed: { v1: 0, va: 1, vb: 3, par: { va: 1, vb: 3 } },
+    resumeNodeId: 'ask',
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'total=3')
+})
+
+test('resume replays completed variable steps in execution order — the later set wins', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'greeting', varType: 'string', value: 'first' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'greeting', value: 'second' } },
+      { id: 'ask', type: 'agent', data: { agentId: 'ask', input: 'x' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'e', input: 'greeting={{var.greeting}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'ask' },
+      { id: 'e3', source: 'ask', target: 'n2' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.id === 'ask' ? 'ANSWERED' : n.input })
+  // `completed` preserves execution order (rows load `order asc`), so the
+  // initialize replays first and the set's value is what survives.
+  const result = await interpretFlow(graph, '', {
+    runAgent,
+    completed: { v1: 'first', v2: 'second' },
+    resumeNodeId: 'ask',
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'greeting=second')
+})
+
+test('declared float type governs set and increment even when the current value is whole', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'pi', varType: 'float' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'pi', value: '3.5' } },
+      { id: 'v3', type: 'variable', data: { op: 'increment', name: 'pi', value: '0.25' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'e', input: 'pi={{var.pi}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'v3' },
+      { id: 'e3', source: 'v3', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  // The blank initialize defaults pi to 0 — a whole number — but the DECLARED
+  // float type must keep governing later coercions.
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'pi=3.75')
+})
+
+test('set on a declared integer variable still rejects a non-whole value', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '0' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'count', value: '3.7' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: stub({}) })
+  assert.equal(result.status, 'failed')
+  assert.match(result.error ?? '', /whole number/)
+})
+
+test('increment amount that resolves empty fails instead of silently adding 0', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '5' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'count', value: '{{step.missing.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: stub({}) })
+  assert.equal(result.status, 'failed')
+  assert.equal(result.error, 'Variable "count" needs a number for the amount — the value came back empty.')
+})
+
+test('set value that resolves empty fails instead of resetting to the type default', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'label', varType: 'string', value: 'x' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'label', value: '{{step.missing.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: stub({}) })
+  assert.equal(result.status, 'failed')
+  assert.equal(result.error, 'Variable "label" needs a value — the value came back empty.')
+})
+
+test('set with a literally empty value field still clears a string variable', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'greeting', varType: 'string', value: 'hello' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'greeting', value: '' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'e', input: 'greeting=[{{var.greeting}}]' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  // The user configured an empty value on purpose — an empty string is a
+  // legitimate set, unlike a token that resolved to nothing.
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'greeting=[]')
+})
