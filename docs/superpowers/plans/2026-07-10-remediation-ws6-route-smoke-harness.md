@@ -272,3 +272,17 @@ API routes are smoke-tested end to end: `src/app/api/__tests__/route-smoke.test.
 - [ ] **Step 4: Push + CI green** — the smoke suite runs for the first time in CI on the pgvector image; watch it.
 
 - [ ] **Step 5: Final whole-workstream review** (controller dispatches; capable model; verify the seam is production-inert by inspection and that the smoke net actually asserts <500, not something weaker).
+
+---
+
+## Phase 2 (deferred): Flow-editor reducer
+
+**Not implemented in WS-R6.** Recorded here so it isn't lost.
+
+**Goal:** Carve `src/app/flows/[id]/page.tsx` (1,186 lines, 26 `useState`, 21 `useCallback`, manual undo/redo via `useRef` stacks) into a typed `useReducer` + a small context, so editor state transitions are reasoned about in one place and the child prop-drilling (FlowCanvas 22 props, StepDrawer 14 props) shrinks.
+
+**Why deferred, not done now:**
+- **No component-test harness exists.** Every test in the repo is a `.test.ts` logic test; there is zero `.test.tsx` / Testing-Library / Playwright-component coverage. Refactoring a 1,186-line stateful component blind — with no test to catch a regression — is exactly the "ship unverified" pattern that caused the 2026-07-10 incident. The reducer refactor must be preceded by a component-test harness that pins the editor's current behavior (select node, edit, undo/redo, publish, run).
+- **Concurrent-hot file.** `page.tsx` changed in 5 of the last recent commits (variables, data-ops, waiting-run reply, etc.); a large rewrite needs coordination to avoid a merge nightmare.
+
+**Suggested sequencing when picked up:** (1) add a component-test tool (Testing Library + jsdom, or Playwright component testing) as its own task; (2) characterization tests for the editor's load-bearing interactions; (3) introduce `flowEditorReducer` + `FlowEditorProvider`, migrating state clusters one at a time (metadata/persistence → panels → selection/canvas → run/exec → catalog), keeping the characterization tests green at each step.

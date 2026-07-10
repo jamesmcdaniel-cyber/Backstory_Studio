@@ -42,8 +42,13 @@ People.ai webhook deliveries are verified per-tenant: each organization has its 
 
 Organization deletion is complete: every org-owned model cascades via FK (WS-R4 closed the gaps — flows, custom signals, push subscriptions, knowledge, shared skills), and `teardownOrganization` (`src/lib/org-teardown.ts`) deprovisions external Klavis/Nango resources and clears the org's Neo4j nodes before deleting the row. The daily retention cron prunes `run:`/`signal:` graph nodes in lockstep with the Postgres rows it deletes.
 
+## Testing
+
+Most logic is unit-tested with `node:test` (`npm test`). API routes are additionally smoke-tested end to end: `src/app/api/__tests__/route-smoke.test.ts` invokes every `withAuthenticatedApi`-wrapped GET handler against a seeded test DB — via a production-inert auth seam in `src/lib/server/auth.ts` (`setTestAuthContext`, gated on `NODE_ENV !== 'production' && TEST_DATABASE_URL`) — and fails on any 5xx. This is the regression net for unscoped-query / tenant-guard failures (the class that caused a production incident on 2026-07-10). It runs in CI, where `TEST_DATABASE_URL` is set against the pgvector Postgres image.
+
 ## Known follow-ups (tracked tech debt)
 
+- **Flow-editor reducer (WS-R6 Phase 2, deferred).** `src/app/flows/[id]/page.tsx` is a 1,186-line god-component with 26 `useState` hooks and manual undo/redo. It should carve into a typed reducer + context, but that refactor needs a React component-test harness first (none exists — all tests are `.test.ts` logic tests) so it's regression-covered; see `docs/superpowers/plans/2026-07-10-remediation-ws6-route-smoke-harness.md`.
 - **MCP transport consolidation.** There are three near-duplicate MCP clients — `klavis-client.ts`, `mcp-client.ts`, and `backstory-mcp.ts` — each reimplementing JSON-RPC, SSE parsing, session handling, and the initialize handshake. They should collapse into one transport with pluggable auth (none / api-key / oauth2-client-credentials / oauth2-authcode / static-bearer). The `MCPAgent` (Klavis, per-user) vs `McpConnection` (custom, per-org) model split is the same divide surfacing in the schema.
 - **Per-org credentials for built-in tools.** Slack, Granola, and Email are keyed to single global env vars, so every organization shares one account — acceptable single-tenant, blocking for multi-tenant. The per-user `Integration` table already exists and should hold these.
 - **Tool-discovery caching.** `loadTools` runs `initialize` + `tools/list` against every server on every run (drops past the per-server 20 / global 64 caps are now logged). Cache the discovered tool lists (the Klavis path already persists them for the capability cards) and run discovery in parallel.
