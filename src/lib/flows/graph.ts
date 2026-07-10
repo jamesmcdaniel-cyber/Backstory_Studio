@@ -5,6 +5,18 @@ import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 export const CONDITION_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'matches'] as const
 export type ConditionOp = (typeof CONDITION_OPS)[number]
 
+/** Plain-english operator labels — the ONLY strings the UI may show for ops. */
+export const CONDITION_OP_LABELS: Record<ConditionOp, string> = {
+  eq: 'equals',
+  neq: 'does not equal',
+  gt: 'is greater than',
+  gte: 'is at least',
+  lt: 'is less than',
+  lte: 'is at most',
+  contains: 'contains',
+  matches: 'matches pattern',
+}
+
 /** Field types a step's output schema can declare (for the datatree picker). */
 export const FIELD_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'any'] as const
 export type FieldType = (typeof FIELD_TYPES)[number]

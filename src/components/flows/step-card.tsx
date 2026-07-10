@@ -39,7 +39,7 @@ import {
 import { toast } from 'sonner'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
-import { CONDITION_OPS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type ConditionClause, type ConditionOp, type DataOp, type FlowNode, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
+import { CONDITION_OPS, CONDITION_OP_LABELS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type ConditionClause, type ConditionOp, type DataOp, type FlowNode, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 import { DATA_OP_HELPER, DATA_OP_INPUT_PLACEHOLDER, VARIABLE_VALUE_PLACEHOLDER, variableValueOptional } from '@/lib/flows/step-copy'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
@@ -1306,7 +1306,7 @@ function ConditionBody({
         <select value={clause.op} onChange={(event) => setClause({ op: event.target.value as ConditionOp })} className={controlClass}>
           {CONDITION_OPS.map((op) => (
             <option key={op} value={op}>
-              {op}
+              {CONDITION_OP_LABELS[op]}
             </option>
           ))}
         </select>
@@ -1449,7 +1449,7 @@ function SwitchBody({
         <select value={first.op} onChange={(event) => setFirst({ op: event.target.value as ConditionOp })} className={controlClass}>
           {CONDITION_OPS.map((op) => (
             <option key={op} value={op}>
-              {op}
+              {CONDITION_OP_LABELS[op]}
             </option>
           ))}
         </select>
@@ -1687,7 +1687,7 @@ function DataBody({
               >
                 {CONDITION_OPS.map((entry) => (
                   <option key={entry} value={entry}>
-                    {entry}
+                    {CONDITION_OP_LABELS[entry]}
                   </option>
                 ))}
               </select>

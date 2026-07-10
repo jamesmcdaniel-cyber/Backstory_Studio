@@ -4,7 +4,7 @@ import { Fragment, useState } from 'react'
 import { Plus, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
-import { VARIABLE_OP_LABELS, VARIABLE_TYPE_LABELS, type DataOp, type FlowGraph, type FlowNode, type VariableOp } from '@/lib/flows/graph'
+import { CONDITION_OP_LABELS, VARIABLE_OP_LABELS, VARIABLE_TYPE_LABELS, type DataOp, type FlowGraph, type FlowNode, type VariableOp } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
 import type { DataField } from '@/lib/flows/datatree'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
@@ -194,7 +194,7 @@ export function FlowCanvas({
       case 'condition': {
         const clause = node.data.clauses?.[0] ?? (node.data.left !== undefined ? { left: node.data.left, op: node.data.op, right: node.data.right } : null)
         const extra = (node.data.clauses?.length ?? 1) > 1 ? ` +${node.data.clauses!.length - 1}` : ''
-        return node.data.label || (clause?.left ? `If ${clause.left} ${clause.op} ${clause.right}${extra}` : 'If / else')
+        return node.data.label || (clause?.left ? `If ${clause.left} ${CONDITION_OP_LABELS[clause.op ?? 'eq']} ${clause.right}${extra}` : 'If / else')
       }
       case 'loop':
         return node.data.label || 'For each'
@@ -383,7 +383,7 @@ export function FlowCanvas({
       }
       if (node.type === 'switch') {
         const branches = [
-          ...node.data.cases.map((c) => ({ key: c.id, label: c.label || humanize(`${c.left} ${c.op} ${c.right}`) })),
+          ...node.data.cases.map((c) => ({ key: c.id, label: c.label || humanize(`${c.left} ${CONDITION_OP_LABELS[c.op]} ${c.right}`) })),
           { key: 'default', label: 'default' },
         ]
         parts.push(
