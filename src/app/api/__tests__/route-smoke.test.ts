@@ -1,0 +1,94 @@
+import { test, before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import { NextRequest } from 'next/server'
+
+const TEST_DB = process.env.TEST_DATABASE_URL
+if (TEST_DB) {
+  process.env.DATABASE_URL = TEST_DB
+  process.env.DIRECT_URL = TEST_DB
+  process.env.ENTITLEMENT_GATE = 'off' // seam skips gates anyway; belt-and-suspenders
+
+  let prisma: any
+  let seeded: any
+  let agentId: string
+  let flowId: string
+
+  before(async () => {
+    ;({ prisma } = await import('@/lib/prisma'))
+    const { seedTestOrg, installTestAuth } = await import('@/lib/server/__tests__/test-auth')
+    seeded = await seedTestOrg(prisma)
+    installTestAuth(seeded.auth)
+    const agent = await prisma.agentTask.create({
+      data: { description: 'a', objective: 'o', status: 'ACTIVE', agentType: 'assistant', organizationId: seeded.organizationId, userId: seeded.userId },
+    })
+    agentId = agent.id
+    const flow = await prisma.flow.create({
+      data: { name: 'Smoke flow', organizationId: seeded.organizationId, userId: seeded.userId },
+    })
+    flowId = flow.id
+  })
+
+  after(async () => {
+    await seeded.cleanup()
+  })
+
+  const req = (path: string) => new NextRequest(new URL(`http://test${path}`))
+
+  // (handler import, request) — every authenticated GET route that doesn't
+  // need a request body or a live external call (see report for skips).
+  const cases: Array<{ name: string; run: () => Promise<Response> }> = [
+    { name: 'GET /api/agent-templates', run: async () => (await import('../agent-templates/route')).GET(req('/api/agent-templates')) },
+    { name: 'GET /api/notifications', run: async () => (await import('../notifications/route')).GET(req('/api/notifications')) },
+    { name: 'GET /api/snapshot', run: async () => (await import('../snapshot/route')).GET(req('/api/snapshot')) },
+    { name: 'GET /api/flows', run: async () => (await import('../flows/route')).GET(req('/api/flows')) },
+    { name: 'GET /api/agents', run: async () => (await import('../agents/route')).GET(req('/api/agents')) },
+    { name: 'GET /api/agents/activity', run: async () => (await import('../agents/activity/route')).GET(req('/api/agents/activity')) },
+    { name: 'GET /api/approvals', run: async () => (await import('../approvals/route')).GET(req('/api/approvals')) },
+    { name: 'GET /api/audit/export', run: async () => (await import('../audit/export/route')).GET(req('/api/audit/export')) },
+    { name: 'GET /api/auth/context', run: async () => (await import('../auth/context/route')).GET(req('/api/auth/context')) },
+    { name: 'GET /api/flows/tool-catalog', run: async () => (await import('../flows/tool-catalog/route')).GET(req('/api/flows/tool-catalog')) },
+    { name: 'GET /api/granola/notes', run: async () => (await import('../granola/notes/route')).GET(req('/api/granola/notes')) },
+    { name: 'GET /api/integrations/available', run: async () => (await import('../integrations/available/route')).GET(req('/api/integrations/available')) },
+    { name: 'GET /api/integrations/granola', run: async () => (await import('../integrations/granola/route')).GET(req('/api/integrations/granola')) },
+    { name: 'GET /api/integrations/status', run: async () => (await import('../integrations/status/route')).GET(req('/api/integrations/status')) },
+    { name: 'GET /api/mcp-connections', run: async () => (await import('../mcp-connections/route')).GET(req('/api/mcp-connections')) },
+    { name: 'GET /api/mcp-connections/oauth/start', run: async () => (await import('../mcp-connections/oauth/start/route')).GET(req('/api/mcp-connections/oauth/start')) },
+    { name: 'GET /api/mcp/connections', run: async () => (await import('../mcp/connections/route')).GET(req('/api/mcp/connections')) },
+    { name: 'GET /api/mcp/strata-catalog', run: async () => (await import('../mcp/strata-catalog/route')).GET(req('/api/mcp/strata-catalog')) },
+    // nango/integrations, nango/status: skipped — no NANGO_SECRET_KEY in the
+    // test env, so both deliberately throw a 503 ApiError (NANGO_UNAVAILABLE)
+    // before any network call. Correct behavior, but 503 >= 500 trips this
+    // suite's strict <500 threshold; this is the "needs an external service"
+    // skip category, not a guard/logic bug.
+    { name: 'GET /api/organizations', run: async () => (await import('../organizations/route')).GET(req('/api/organizations')) },
+    { name: 'GET /api/peopleai/webhook-secret', run: async () => (await import('../peopleai/webhook-secret/route')).GET(req('/api/peopleai/webhook-secret')) },
+    { name: 'GET /api/push/key', run: async () => (await import('../push/key/route')).GET(req('/api/push/key')) },
+    { name: 'GET /api/search', run: async () => (await import('../search/route')).GET(req('/api/search?q=smoke')) },
+    { name: 'GET /api/setup/status', run: async () => (await import('../setup/status/route')).GET(req('/api/setup/status')) },
+    { name: 'GET /api/signal-subscriptions', run: async () => (await import('../signal-subscriptions/route')).GET(req('/api/signal-subscriptions')) },
+    { name: 'GET /api/signals', run: async () => (await import('../signals/route')).GET(req('/api/signals')) },
+    { name: 'GET /api/signals/custom', run: async () => (await import('../signals/custom/route')).GET(req('/api/signals/custom')) },
+    { name: 'GET /api/skills', run: async () => (await import('../skills/route')).GET(req('/api/skills')) },
+    { name: 'GET /api/usage', run: async () => (await import('../usage/route')).GET(req('/api/usage')) },
+    { name: 'GET /api/workflows/executions', run: async () => (await import('../workflows/executions/route')).GET(req('/api/workflows/executions')) },
+    // Dynamic [id] routes — real seeded ids.
+    { name: 'GET /api/agents/[id]/knowledge', run: async () => (await import('../agents/[id]/knowledge/route')).GET(req(`/api/agents/${agentId}/knowledge`)) },
+    { name: 'GET /api/agents/[id]/memories', run: async () => (await import('../agents/[id]/memories/route')).GET(req(`/api/agents/${agentId}/memories`)) },
+    // granola/notes/[id]: skipped — with no Granola key configured for the
+    // seeded org, the route deliberately throws a 503 ApiError
+    // (INTEGRATION_UNAVAILABLE) before touching the network. Same
+    // "needs an external service" skip category as the Nango routes above.
+    { name: 'GET /api/flows/[id]/runs', run: async () => (await import('../flows/[id]/runs/route')).GET(req(`/api/flows/${flowId}/runs`)) },
+    { name: 'GET /api/flows/[id]/versions', run: async () => (await import('../flows/[id]/versions/route')).GET(req(`/api/flows/${flowId}/versions`)) },
+    // Incident regressions: these 500'd under the tenant guard before the sweep.
+    { name: 'GET /api/agents/[id]/chat/sessions', run: async () => (await import('../agents/[id]/chat/sessions/route')).GET(req(`/api/agents/${agentId}/chat/sessions`)) },
+    { name: 'GET /api/agents/[id]/chat', run: async () => (await import('../agents/[id]/chat/route')).GET(req(`/api/agents/${agentId}/chat`)) },
+  ]
+
+  for (const c of cases) {
+    test(`${c.name} does not 500`, async () => {
+      const res = await c.run()
+      assert.ok(res.status < 500, `${c.name} returned ${res.status}: ${await res.clone().text().catch(() => '')}`)
+    })
+  }
+}
