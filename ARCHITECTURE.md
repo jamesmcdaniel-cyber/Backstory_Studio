@@ -32,7 +32,9 @@ Flows execute inline in the calling process today (`runFlowExecution` in `src/fe
 - `src/lib/server/api-handler.ts`: authenticated API wrapper and consistent errors
 - `src/lib/supabase/middleware.ts`: session refresh and page protection
 
-All tenant data queries must include `organizationId`. The only session-less API route is the agent trigger endpoint, which authenticates with a per-agent secret.
+All tenant data queries must include `organizationId` — enforced at runtime by a tenant guard on the shared Prisma client (`src/lib/tenant-guard.ts`): org-carrying models refuse reads/updates/deletes whose `where` lacks `organizationId`. Enumerated system-wide paths (cron sweeps, reapers, tenant resolution, worker-internal id-keyed writes) use the unguarded `systemPrisma` export, each with a justification comment. The only session-less API route is the agent trigger endpoint, which authenticates with a per-agent secret.
+
+People.ai webhook deliveries are verified per-tenant: each organization has its own signing secret (`Organization.peopleAiWebhookSecret`, encrypted at rest), minted at connect time and rotatable by an org admin (`/api/peopleai/webhook-secret`); an org with a secret never accepts the global fallback secret.
 
 ## Core Data
 
