@@ -108,4 +108,39 @@ if (TEST_DB) {
   test('reapStuckFlowRuns is idempotent — second pass reaps nothing', async () => {
     assert.equal(await reapStuckFlowRuns(), 0)
   })
+
+  test('mixed batch: a diverted run keeps its step, a genuinely-stuck sibling in the same call is reaped', async () => {
+    const stale = new Date(Date.now() - 31 * 60 * 1000)
+    const divertedRun = await prisma.flowRun.create({
+      data: { flowId: ids.flow, organizationId: ids.org, status: 'running', startedAt: stale },
+    })
+    const divertedStep = await prisma.flowRunStep.create({
+      data: { flowRunId: divertedRun.id, nodeId: 'n3', status: 'running', startedAt: stale },
+    })
+    const stuckRun = await prisma.flowRun.create({
+      data: { flowId: ids.flow, organizationId: ids.org, status: 'running', startedAt: stale },
+    })
+    const stuckStep = await prisma.flowRunStep.create({
+      data: { flowRunId: stuckRun.id, nodeId: 'n4', status: 'running', startedAt: stale },
+    })
+
+    // Both enter runIds as running+stale candidates; the hook diverts only
+    // divertedRun before the transaction's write, leaving stuckRun as the
+    // sole genuine reap in this call — proving reapedRuns narrows the batch
+    // rather than the step update touching every id in runIds.
+    const reaped = await reapStuckFlowRuns(new Date(), async () => {
+      await prisma.flowRun.update({ where: { id: divertedRun.id }, data: { status: 'waiting' } })
+    })
+    assert.equal(reaped, 1)
+
+    const divertedRunAfter = await prisma.flowRun.findUnique({ where: { id: divertedRun.id } })
+    assert.equal(divertedRunAfter.status, 'waiting')
+    const divertedStepAfter = await prisma.flowRunStep.findUnique({ where: { id: divertedStep.id } })
+    assert.equal(divertedStepAfter.status, 'running')
+
+    const stuckRunAfter = await prisma.flowRun.findUnique({ where: { id: stuckRun.id } })
+    assert.equal(stuckRunAfter.status, 'failed')
+    const stuckStepAfter = await prisma.flowRunStep.findUnique({ where: { id: stuckStep.id } })
+    assert.equal(stuckStepAfter.status, 'failed')
+  })
 }
