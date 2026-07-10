@@ -33,3 +33,14 @@ test('indexExecution and indexAgent are no-ops without a key', async () => {
     id: 'ag1', organizationId: 'org1', title: 'Test', objective: 'do x', description: null,
   }))
 })
+
+test('removeRetiredFromGraph is a no-op when Neo4j is not configured', async () => {
+  delete process.env.NEO4J_URI
+  const { removeRetiredFromGraph } = await import(`../indexer?t=${Date.now()}-${Math.random()}`)
+  // Should resolve without touching any store, even with a non-empty group.
+  await assert.doesNotReject(
+    removeRetiredFromGraph([
+      { organizationId: 'org1', executionIds: ['r1', 'r2'], signalIds: ['s1'] },
+    ]),
+  )
+})

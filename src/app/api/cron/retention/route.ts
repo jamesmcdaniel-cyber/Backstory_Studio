@@ -14,6 +14,7 @@ import { timingSafeEqual } from 'crypto'
 import { Prisma } from '@prisma/client'
 import { systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
+import { removeRetiredFromGraph } from '@/lib/rag/indexer'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -44,17 +45,39 @@ export async function GET(request: Request) {
   try {
     // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
     const staleExecutions = await systemPrisma.agentExecution.findMany({
-      where: { startedAt: { lt: cutoff } }, select: { id: true }, take: CAP,
+      where: { startedAt: { lt: cutoff } }, select: { id: true, organizationId: true }, take: CAP,
     })
+    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
+    const staleSignals = await systemPrisma.signal.findMany({
+      where: { receivedAt: { lt: cutoff } }, select: { id: true, organizationId: true }, take: CAP,
+    })
+
+    // Graph parity: prune the run:/signal: nodes for the rows this sweep is
+    // about to delete — graph-first, because after the Postgres delete the
+    // ids are gone and a missed node would linger forever (audit: deleted
+    // PII resurfacing in RAG context).
+    const graphGroups = new Map<string, { organizationId: string; executionIds: string[]; signalIds: string[] }>()
+    for (const e of staleExecutions) {
+      const group = graphGroups.get(e.organizationId) ?? { organizationId: e.organizationId, executionIds: [], signalIds: [] }
+      group.executionIds.push(e.id)
+      graphGroups.set(e.organizationId, group)
+    }
+    for (const s of staleSignals) {
+      const group = graphGroups.get(s.organizationId) ?? { organizationId: s.organizationId, executionIds: [], signalIds: [] }
+      group.signalIds.push(s.id)
+      graphGroups.set(s.organizationId, group)
+    }
+    try {
+      await removeRetiredFromGraph(Array.from(graphGroups.values()))
+    } catch (error) {
+      apiLogger.error('cron/retention: graph cleanup failed', { error: error instanceof Error ? error.message : String(error) })
+    }
+
     // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
     const executionsDeleted = staleExecutions.length
       ? (await systemPrisma.agentExecution.deleteMany({ where: { id: { in: staleExecutions.map((e) => e.id) } } })).count
       : 0
 
-    // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
-    const staleSignals = await systemPrisma.signal.findMany({
-      where: { receivedAt: { lt: cutoff } }, select: { id: true }, take: CAP,
-    })
     // systemPrisma: global retention sweep — prunes across all orgs by design (CRON_SECRET-gated).
     const signalsDeleted = staleSignals.length
       ? (await systemPrisma.signal.deleteMany({ where: { id: { in: staleSignals.map((s) => s.id) } } })).count

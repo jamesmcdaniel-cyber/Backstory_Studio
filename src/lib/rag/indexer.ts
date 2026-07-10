@@ -352,6 +352,29 @@ export async function removeExecutionFromGraph(organizationId: string, execution
   }
 }
 
+/**
+ * Bulk graph cleanup for the retention job: delete the run:/signal: nodes for
+ * rows Postgres is about to (or just did) prune, grouped per org because the
+ * store API scopes deletes by organizationId. Best-effort — retention must
+ * never fail on graph cleanup; a missed node is re-swept the next day only if
+ * ids are still known, so callers should delete graph-first or tolerate loss.
+ */
+export async function removeRetiredFromGraph(
+  groups: Array<{ organizationId: string; executionIds: string[]; signalIds: string[] }>,
+): Promise<void> {
+  if (!graphRagPersistent()) return
+  const store = getGraphRagStore()
+  for (const group of groups) {
+    const ids = [...group.executionIds.map((id) => nid.run(id)), ...group.signalIds.map((id) => nid.signal(id))]
+    if (ids.length === 0) continue
+    try {
+      await store.deleteNodes(group.organizationId, ids)
+    } catch (error) {
+      warn('removeRetiredFromGraph', error)
+    }
+  }
+}
+
 function safeJson(value: unknown): string {
   try {
     return typeof value === 'string' ? value : JSON.stringify(value ?? {})
