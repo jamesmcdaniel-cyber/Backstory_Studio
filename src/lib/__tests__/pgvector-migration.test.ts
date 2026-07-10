@@ -24,6 +24,11 @@ if (TEST_DB) {
       data: { organizationId: org.id, filename: 'doc.txt', mimeType: 'text/plain' },
     })
     ids.document = document.id
+
+    const agent = await prisma.agentTask.create({
+      data: { organizationId: org.id, description: 'pgvector test agent', objective: 'test' },
+    })
+    ids.agent = agent.id
   })
 
   after(async () => {
@@ -51,6 +56,28 @@ if (TEST_DB) {
     assert.equal(rows[0]?.has_vec, true)
 
     await prisma.knowledgeChunk.delete({ where: { id: chunk.id } }).catch(() => {})
+  })
+
+  test('inserting an agent memory row then writing a 1024-dim vector round-trips', async () => {
+    if (!vectorReady) return
+
+    const memory = await prisma.agentMemory.create({
+      data: { organizationId: ids.org, agentId: ids.agent, kind: 'learning', title: 'test', content: 'pgvector test' },
+    })
+
+    const vec = `[${Array.from({ length: 1024 }, () => 0.1).join(', ')}]`
+    await prisma.$executeRawUnsafe(
+      `UPDATE "agent_memories" SET "embeddingVec" = $1::vector(1024) WHERE "id" = $2`,
+      vec,
+      memory.id,
+    )
+
+    const rows = await prisma.$queryRaw<Array<{ has_vec: boolean }>>`
+      SELECT "embeddingVec" IS NOT NULL AS has_vec FROM "agent_memories" WHERE "id" = ${memory.id}
+    `
+    assert.equal(rows[0]?.has_vec, true)
+
+    await prisma.agentMemory.delete({ where: { id: memory.id } }).catch(() => {})
   })
 
   test('a <=> distance query orders synthetic vectors nearest-first', async () => {
