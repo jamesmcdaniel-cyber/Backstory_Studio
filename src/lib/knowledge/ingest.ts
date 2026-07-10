@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
-import { embedTexts, embeddingsConfigured } from '@/lib/rag/embeddings'
+import { embedTexts, embeddingsConfigured, toSqlVector } from '@/lib/rag/embeddings'
 import { extractText, chunkText, isSupported } from './extract'
+import { Prisma } from '@prisma/client'
 
 // Bound the work per upload: cap extracted text and chunk count so one huge file
 // can't dominate storage or the embeddings bill.
@@ -67,6 +68,32 @@ export async function ingestKnowledgeFile(params: {
         embedding: embeddings ? embeddings[i] : undefined,
       })),
     })
+
+    // Write the pgvector column too (deploy-window symmetry with the legacy
+    // Json `embedding` above — the follow-up migration drops the Json column
+    // once reads no longer need it). createMany doesn't return generated ids,
+    // so re-fetch ordered by ordinal to line them back up with `embeddings`.
+    if (embeddings) {
+      const created = await prisma.knowledgeChunk.findMany({
+        where: { documentId: doc.id, organizationId: params.organizationId },
+        orderBy: { ordinal: 'asc' },
+        select: { id: true },
+      })
+      const values = created.map((row, i) => Prisma.sql`(${row.id}::text, ${toSqlVector(embeddings![i])}::vector(1024))`)
+      if (values.length) {
+        // search_path guard: see retrieveKnowledge for the Supabase
+        // extensions-schema note — SET LOCAL scopes it to this transaction.
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+          await tx.$executeRaw`
+            UPDATE "knowledge_chunks" AS c
+            SET "embeddingVec" = v.vec
+            FROM (VALUES ${Prisma.join(values)}) AS v(id, vec)
+            WHERE c."id" = v.id AND c."organizationId" = ${params.organizationId}::uuid
+          `
+        })
+      }
+    }
   }
   return { id: doc.id, filename: doc.filename, mimeType: doc.mimeType, sizeBytes: doc.sizeBytes, charCount: doc.charCount, chunkCount: chunks.length, createdAt: doc.createdAt }
 }

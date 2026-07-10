@@ -1,22 +1,7 @@
 import { prisma } from '@/lib/prisma'
-import { embedQuery, embeddingsConfigured } from '@/lib/rag/embeddings'
+import { embedQuery, embeddingsConfigured, toSqlVector } from '@/lib/rag/embeddings'
 
 export type KnowledgeHit = { content: string; filename: string; score: number }
-
-/** Cosine similarity of two equal-length vectors. */
-export function cosine(a: number[], b: number[]): number {
-  let dot = 0
-  let na = 0
-  let nb = 0
-  const len = Math.min(a.length, b.length)
-  for (let i = 0; i < len; i++) {
-    dot += a[i] * b[i]
-    na += a[i] * a[i]
-    nb += b[i] * b[i]
-  }
-  if (na === 0 || nb === 0) return 0
-  return dot / (Math.sqrt(na) * Math.sqrt(nb))
-}
 
 /** Fallback relevance when embeddings are unavailable: query-term overlap. */
 export function keywordScore(query: string, content: string): number {
@@ -36,9 +21,11 @@ export function renderKnowledge(hits: KnowledgeHit[]): string {
 }
 
 /**
- * Retrieve the most relevant knowledge chunks for an agent. Scores by cosine
- * over stored embeddings when available, else by keyword overlap. Best-effort:
- * never throws (returns [] on failure).
+ * Retrieve the most relevant knowledge chunks for an agent. Ranks in-database
+ * by pgvector cosine distance (HNSW index) over ALL of the org/agent's
+ * embedded chunks when embeddings are available, else falls back to keyword
+ * overlap over a bounded scan. Best-effort: never throws (returns [] on
+ * failure).
  */
 export async function retrieveKnowledge(params: {
   organizationId: string
@@ -48,14 +35,6 @@ export async function retrieveKnowledge(params: {
 }): Promise<KnowledgeHit[]> {
   const k = params.k ?? 5
   try {
-    const chunks = await prisma.knowledgeChunk.findMany({
-      // Agent-specific knowledge plus any org-wide knowledge (agentId null).
-      where: { organizationId: params.organizationId, OR: [{ agentId: params.agentId }, { agentId: null }] },
-      select: { content: true, embedding: true, document: { select: { filename: true } } },
-      take: 500,
-    })
-    if (!chunks.length) return []
-
     let queryVec: number[] | null = null
     if (embeddingsConfigured()) {
       try {
@@ -65,11 +44,42 @@ export async function retrieveKnowledge(params: {
       }
     }
 
-    const scored = chunks.map((chunk) => {
-      const emb = Array.isArray(chunk.embedding) ? (chunk.embedding as number[]) : null
-      const score = queryVec && emb ? cosine(queryVec, emb) : keywordScore(params.query, chunk.content)
-      return { content: chunk.content, filename: chunk.document.filename, score }
+    if (queryVec) {
+      const vectorLiteral = toSqlVector(queryVec)
+      // search_path guard: Supabase installs pgvector into `extensions`, and a
+      // client session's default search_path isn't guaranteed to include it.
+      // SET LOCAL scopes the widened path to this transaction only, so the
+      // `::vector(1024)` cast resolves regardless of the session default.
+      const rows = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        return tx.$queryRaw<Array<{ content: string; filename: string; distance: number }>>`
+          SELECT c."content" AS content, d."filename" AS filename,
+                 (c."embeddingVec" <=> ${vectorLiteral}::vector(1024)) AS distance
+          FROM "knowledge_chunks" c
+          JOIN "knowledge_documents" d ON d."id" = c."documentId"
+          WHERE c."organizationId" = ${params.organizationId}::uuid
+            AND (c."agentId" = ${params.agentId} OR c."agentId" IS NULL)
+            AND c."embeddingVec" IS NOT NULL
+          ORDER BY distance ASC
+          LIMIT ${k}
+        `
+      })
+      return rows.map((row) => ({ content: row.content, filename: row.filename, score: 1 - row.distance }))
+    }
+
+    // Keyword fallback: no embeddings configured (or the query embed call
+    // failed) — score a bounded scan of the org/agent's chunks by term overlap.
+    const chunks = await prisma.knowledgeChunk.findMany({
+      where: { organizationId: params.organizationId, OR: [{ agentId: params.agentId }, { agentId: null }] },
+      select: { content: true, document: { select: { filename: true } } },
+      take: 500,
     })
+    if (!chunks.length) return []
+    const scored = chunks.map((chunk) => ({
+      content: chunk.content,
+      filename: chunk.document.filename,
+      score: keywordScore(params.query, chunk.content),
+    }))
     scored.sort((a, b) => b.score - a.score)
     return scored.filter((s) => s.score > 0).slice(0, k)
   } catch {

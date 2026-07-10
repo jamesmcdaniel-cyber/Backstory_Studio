@@ -27,6 +27,11 @@ export function embeddingsConfigured(): boolean {
   return Boolean(process.env.VOYAGE_API_KEY)
 }
 
+/** Render a JS vector as a pgvector literal, e.g. "[0.1,0.2,0.3]" — shared by every raw SQL call site that casts to `::vector(1024)`. */
+export function toSqlVector(vec: number[]): string {
+  return `[${vec.join(',')}]`
+}
+
 export interface EmbedOptions {
   /** 'document' when indexing stored content, 'query' when embedding a search. */
   inputType?: 'document' | 'query'

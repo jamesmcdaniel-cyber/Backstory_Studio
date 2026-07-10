@@ -1,12 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { cosine, keywordScore, renderKnowledge } from '../retrieve'
-
-test('cosine is 1 for identical vectors and 0 for orthogonal', () => {
-  assert.equal(cosine([1, 0], [1, 0]), 1)
-  assert.equal(cosine([1, 0], [0, 1]), 0)
-  assert.ok(cosine([1, 1], [1, 0]) > 0.7 && cosine([1, 1], [1, 0]) < 0.72)
-})
+import { keywordScore, renderKnowledge } from '../retrieve'
 
 test('keywordScore reflects query-term overlap', () => {
   assert.equal(keywordScore('pricing tiers enterprise', 'Our enterprise pricing has three tiers'), 1)

@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
-import { embedQuery, embeddingsConfigured } from '@/lib/rag/embeddings'
-import { cosine, keywordScore } from '@/lib/knowledge/retrieve'
+import { embedQuery, embeddingsConfigured, cosineSimilarity, toSqlVector } from '@/lib/rag/embeddings'
+import { keywordScore } from '@/lib/knowledge/retrieve'
 
 export const MEMORY_SIMILARITY_THRESHOLD = 0.86
 export const KEYWORD_MATCH_THRESHOLD = 0.6
@@ -46,21 +46,33 @@ export async function saveAgentMemory(params: {
     const embedding = await tryEmbed(embedText)
 
     if (params.kind === 'suggestion' && embedding) {
-      const existing = await prisma.agentMemory.findMany({
-        where: { organizationId: params.organizationId, agentId: params.agentId, kind: 'suggestion', status: { in: ['open', 'dismissed'] } },
-        select: { id: true, embedding: true },
-        take: 100,
+      // Nearest-neighbor via pgvector: the single closest open/dismissed
+      // suggestion, compared against the threshold. SET LOCAL scopes the
+      // widened search_path to this transaction only (see retrieveKnowledge
+      // for the same Supabase extensions-schema note).
+      const vectorLiteral = toSqlVector(embedding)
+      const nearest = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        return tx.$queryRaw<Array<{ id: string; distance: number }>>`
+          SELECT "id", ("embeddingVec" <=> ${vectorLiteral}::vector(1024)) AS distance
+          FROM "agent_memories"
+          WHERE "organizationId" = ${params.organizationId}::uuid
+            AND "agentId" = ${params.agentId}
+            AND "kind" = 'suggestion'
+            AND "status" IN ('open', 'dismissed')
+            AND "embeddingVec" IS NOT NULL
+          ORDER BY distance ASC
+          LIMIT 1
+        `
       })
-      for (const candidate of existing) {
-        const vec = embeddingOf(candidate.embedding)
-        if (vec && cosine(embedding, vec) >= MEMORY_SIMILARITY_THRESHOLD) {
-          // Do NOT touch status here: a dismissed suggestion must stay dismissed.
-          await prisma.agentMemory.update({
-            where: { id: candidate.id },
-            data: { timesUsed: { increment: 1 }, lastUsedAt: new Date() },
-          })
-          return { id: candidate.id, deduped: true }
-        }
+      const match = nearest[0]
+      if (match && 1 - match.distance >= MEMORY_SIMILARITY_THRESHOLD) {
+        // Do NOT touch status here: a dismissed suggestion must stay dismissed.
+        await prisma.agentMemory.update({
+          where: { id: match.id, organizationId: params.organizationId },
+          data: { timesUsed: { increment: 1 }, lastUsedAt: new Date() },
+        })
+        return { id: match.id, deduped: true }
       }
     }
 
@@ -76,6 +88,17 @@ export async function saveAgentMemory(params: {
         sourceExecutionId: params.sourceExecutionId,
       },
     })
+
+    if (embedding) {
+      const vectorLiteral = toSqlVector(embedding)
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        await tx.$executeRaw`
+          UPDATE "agent_memories" SET "embeddingVec" = ${vectorLiteral}::vector(1024)
+          WHERE "id" = ${created.id} AND "organizationId" = ${params.organizationId}::uuid
+        `
+      })
+    }
 
     // Cap: supersede the oldest open learnings beyond the limit.
     const openCount = await prisma.agentMemory.count({
@@ -114,7 +137,12 @@ export async function saveAgentMemory(params: {
   }
 }
 
-/** Top-k open memories for this agent, cosine when embedded else keyword. Never throws. */
+/**
+ * Top-k open memories for this agent. Ranks in-database by pgvector cosine
+ * distance (HNSW index) over ALL of the agent's open memories when
+ * embeddings are available, else falls back to keyword overlap over a
+ * bounded scan. Never throws.
+ */
 export async function retrieveAgentMemory(params: {
   organizationId: string
   agentId: string
@@ -123,13 +151,6 @@ export async function retrieveAgentMemory(params: {
 }): Promise<MemoryHit[]> {
   const k = params.k ?? MEMORY_INJECTION_LIMIT
   try {
-    const rows = await prisma.agentMemory.findMany({
-      where: { organizationId: params.organizationId, agentId: params.agentId, status: 'open' },
-      select: { id: true, kind: true, title: true, content: true, question: true, embedding: true },
-      orderBy: { createdAt: 'desc' },
-      take: AGENT_MEMORY_CAP,
-    })
-    if (!rows.length) return []
     let queryVec: number[] | null = null
     if (embeddingsConfigured()) {
       try {
@@ -138,11 +159,38 @@ export async function retrieveAgentMemory(params: {
         queryVec = null
       }
     }
+
+    if (queryVec) {
+      const vectorLiteral = toSqlVector(queryVec)
+      const rows = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        return tx.$queryRaw<Array<{ id: string; kind: string; title: string; content: string; question: string | null; distance: number }>>`
+          SELECT "id", "kind", "title", "content", "question",
+                 ("embeddingVec" <=> ${vectorLiteral}::vector(1024)) AS distance
+          FROM "agent_memories"
+          WHERE "organizationId" = ${params.organizationId}::uuid
+            AND "agentId" = ${params.agentId}
+            AND "status" = 'open'
+            AND "embeddingVec" IS NOT NULL
+          ORDER BY distance ASC
+          LIMIT ${k}
+        `
+      })
+      return rows.map((row) => ({ id: row.id, kind: row.kind, title: row.title, content: row.content, question: row.question, score: 1 - row.distance }))
+    }
+
+    // Keyword fallback: no embeddings configured (or the query embed call
+    // failed) — score a bounded scan of the agent's open memories.
+    const rows = await prisma.agentMemory.findMany({
+      where: { organizationId: params.organizationId, agentId: params.agentId, status: 'open' },
+      select: { id: true, kind: true, title: true, content: true, question: true },
+      orderBy: { createdAt: 'desc' },
+      take: AGENT_MEMORY_CAP,
+    })
+    if (!rows.length) return []
     const scored = rows.map((row) => {
-      const vec = embeddingOf(row.embedding)
       const text = `${row.title}\n${row.question ?? ''}\n${row.content}`
-      const score = queryVec && vec ? cosine(queryVec, vec) : keywordScore(params.query, text)
-      return { id: row.id, kind: row.kind, title: row.title, content: row.content, question: row.question, score }
+      return { id: row.id, kind: row.kind, title: row.title, content: row.content, question: row.question, score: keywordScore(params.query, text) }
     })
     scored.sort((a, b) => b.score - a.score)
     return scored.filter((s) => s.score > 0).slice(0, k)
@@ -180,7 +228,7 @@ export function bestAnswerMatch(
     const vec = embeddingOf(candidate.embedding)
     const score =
       questionVec && vec
-        ? cosine(questionVec, vec)
+        ? cosineSimilarity(questionVec, vec)
         : candidate.question
           ? keywordScore(question, candidate.question)
           : 0
