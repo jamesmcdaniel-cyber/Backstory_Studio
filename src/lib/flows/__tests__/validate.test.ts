@@ -111,6 +111,24 @@ test('validateFlowGraph checks HTTP request configuration', () => {
   assert.ok(result.warnings.some((issue) => issue.code === 'HTTP_BODY_IGNORED'))
 })
 
+test('validateFlowGraph warns when an http step authenticates with an unavailable connection', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'h1', type: 'http', data: { method: 'POST', url: 'https://api.example.com', connectionId: 'gone' } },
+      { id: 'h2', type: 'http', data: { method: 'POST', url: 'https://api.example.com', connectionId: 'c1' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'h1' }, { id: 'e2', source: 'h1', target: 'h2' }],
+  }
+  const result = validateFlowGraph(graph, { toolCatalog: [{ id: 'c1', tools: [] }] })
+  assert.equal(result.ok, true) // warning only — never blocks a run
+  assert.ok(result.warnings.some((issue) => issue.code === 'UNKNOWN_HTTP_CONNECTION' && issue.nodeId === 'h1'))
+  assert.ok(!result.warnings.some((issue) => issue.code === 'UNKNOWN_HTTP_CONNECTION' && issue.nodeId === 'h2'))
+  // No catalog context (e.g. plain graph checks): no warning either
+  const noContext = validateFlowGraph(graph)
+  assert.ok(!noContext.warnings.some((issue) => issue.code === 'UNKNOWN_HTTP_CONNECTION'))
+})
+
 test('validateFlowGraph checks loop bodies and switch defaults', () => {
   const graph: FlowGraph = {
     nodes: [

@@ -212,6 +212,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
               timeoutMs: node.data.timeoutMs,
             }
           : {
+              ...(node.data.connectionId ? { connectionId: node.data.connectionId } : {}),
               method: node.data.method,
               url: resolveTemplate(node.data.url, ctx),
               query: resolveConfigValue(node.data.query, ctx),

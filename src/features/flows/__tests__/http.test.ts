@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { prepareHttpRequest, responseOutput } from '../http'
+import { prepareHttpRequest, responseOutput, withBearerAuthorization, redactAuthHeaders, redactHttpStepInput } from '../http'
 
 test('prepareHttpRequest appends query params and sends JSON bodies', () => {
   const request = prepareHttpRequest({
@@ -54,6 +54,73 @@ test('prepareHttpRequest rejects invalid JSON bodies when JSON mode is explicit'
     () => prepareHttpRequest({ method: 'POST', url: 'https://api.example.com', bodyMode: 'json', body: '{broken' }),
     /not valid JSON/,
   )
+})
+
+test('withBearerAuthorization injects a bearer token when no auth header is set', () => {
+  const headers = { 'content-type': 'application/json' }
+  const next = withBearerAuthorization(headers, 'tok-123')
+  assert.deepEqual(next, { 'content-type': 'application/json', authorization: 'Bearer tok-123' })
+  // Input is not mutated
+  assert.deepEqual(headers, { 'content-type': 'application/json' })
+})
+
+test('withBearerAuthorization never overrides an explicit Authorization header', () => {
+  assert.deepEqual(
+    withBearerAuthorization({ authorization: 'Bearer mine' }, 'tok-123'),
+    { authorization: 'Bearer mine' },
+  )
+  // Case-insensitive: any casing of the user's header wins
+  assert.deepEqual(
+    withBearerAuthorization({ Authorization: 'Basic abc' }, 'tok-123'),
+    { Authorization: 'Basic abc' },
+  )
+  assert.deepEqual(
+    withBearerAuthorization({ 'Proxy-Authorization': 'Basic abc' }, 'tok-123'),
+    { 'Proxy-Authorization': 'Basic abc' },
+  )
+})
+
+test('redactAuthHeaders replaces auth header values in objects, any casing', () => {
+  assert.deepEqual(
+    redactAuthHeaders({ Authorization: 'Bearer secret', 'x-count': 5 }),
+    { Authorization: 'redacted', 'x-count': 5 },
+  )
+  assert.deepEqual(
+    redactAuthHeaders({ authorization: 'Basic secret', 'proxy-authorization': 'secret' }),
+    { authorization: 'redacted', 'proxy-authorization': 'redacted' },
+  )
+})
+
+test('redactAuthHeaders handles JSON strings and non-JSON strings', () => {
+  assert.equal(
+    redactAuthHeaders('{"authorization":"Bearer secret","x-id":"1"}'),
+    '{"authorization":"redacted","x-id":"1"}',
+  )
+  // Non-JSON string that mentions an auth header: drop it entirely
+  assert.equal(redactAuthHeaders('Authorization: Bearer secret'), 'redacted')
+  // Harmless strings and non-header values pass through
+  assert.equal(redactAuthHeaders('x-count: 5'), 'x-count: 5')
+  assert.equal(redactAuthHeaders(undefined), undefined)
+})
+
+test('redactHttpStepInput redacts only the headers field and keeps the rest', () => {
+  const config = {
+    method: 'POST',
+    url: 'https://api.example.com',
+    headers: { authorization: 'Bearer secret', 'x-id': 'a' },
+    body: '{"ok":true}',
+    connectionId: 'conn-1',
+  }
+  const safe = redactHttpStepInput(config)
+  assert.deepEqual(safe.headers, { authorization: 'redacted', 'x-id': 'a' })
+  assert.equal(safe.url, 'https://api.example.com')
+  assert.equal(safe.body, '{"ok":true}')
+  assert.equal(safe.connectionId, 'conn-1')
+  // Original config untouched
+  assert.deepEqual(config.headers, { authorization: 'Bearer secret', 'x-id': 'a' })
+  // No headers set: config passes through unchanged
+  const bare = { method: 'GET', url: 'https://api.example.com' }
+  assert.deepEqual(redactHttpStepInput(bare), bare)
 })
 
 test('responseOutput auto-parses JSON responses and keeps raw body text', async () => {

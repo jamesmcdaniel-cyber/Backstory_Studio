@@ -291,6 +291,9 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
 
     if (node.type === 'http') {
       validateHttpUrl(issues, node.data.url, node.id)
+      if (node.data.connectionId && context.toolCatalog && !connectionIds.has(node.data.connectionId)) {
+        add(issues, 'warning', 'UNKNOWN_HTTP_CONNECTION', `${nodeLabel(node)} authenticates with a connection that is not available — pick another connection or reconnect it in Integrations.`, node.id)
+      }
       validateJsonObjectField(issues, node.data.headers, `${nodeLabel(node)} headers must be a JSON object.`, node.id)
       validateJsonObjectField(issues, node.data.query, `${nodeLabel(node)} query params must be a JSON object.`, node.id)
       if ((node.data.bodyMode ?? 'json') === 'json') {

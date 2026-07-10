@@ -15,7 +15,8 @@ import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/tri
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 import { flowActionRetries, flowActionTimeoutMs, runWithRetries } from './action-reliability'
-import { prepareHttpRequest, responseOutput } from './http'
+import { prepareHttpRequest, responseOutput, redactHttpStepInput, withBearerAuthorization } from './http'
+import { resolveHttpConnectionToken } from './http-auth'
 import { shouldPersistInterpreterStep } from './run-step-persistence'
 import { prepareToolArgs } from './tool-args'
 import { flowToolOutput } from './tool-output'
@@ -60,7 +61,9 @@ export async function runFlowExecution(
   const graph = flowGraphSchema.parse(source)
   const input = job.input ?? ''
   const resuming = Boolean(job.flowRunId && job.reply !== undefined)
-  const usedConnectionIds = Array.from(new Set(graph.nodes.filter((node) => node.type === 'tool').map((node) => node.data.connectionId).filter(Boolean)))
+  const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
+    node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
+  ).filter((id): id is string => Boolean(id))))
   const [agents, toolCatalog] = await Promise.all([
     prisma.agentTask.findMany({
       where: { organizationId: job.organizationId, status: 'ACTIVE' },
@@ -226,7 +229,9 @@ export async function runFlowExecution(
         nodeId: node.id,
         order: order++,
         status: 'running',
-        input: jsonValue(node.config),
+        // Persisted request details must never contain credentials: an http
+        // step's Authorization header value is replaced with 'redacted'.
+        input: jsonValue(node.kind === 'http' ? redactHttpStepInput(node.config) : node.config),
         startedAt: new Date(),
       },
     })
@@ -338,6 +343,19 @@ export async function runFlowExecution(
       }
       // http
       const request = prepareHttpRequest(node.config)
+      // Optional connection auth: resolve a fresh token server-side and inject
+      // it as the Authorization header — unless the user set their own, which
+      // wins. The token lives only in the outbound request, never in the
+      // persisted step input/output or logs.
+      const httpConnectionId = typeof node.config.connectionId === 'string' ? node.config.connectionId.trim() : ''
+      if (httpConnectionId) {
+        const token = await resolveHttpConnectionToken({
+          connectionId: httpConnectionId,
+          organizationId: job.organizationId,
+          userId: job.userId,
+        })
+        request.init.headers = withBearerAuthorization(request.init.headers as Record<string, string>, token)
+      }
       const retries = flowActionRetries(node.config.retries)
       const output = await runWithRetries(async () => {
         await assertPublicUrl(request.url) // SSRF guard: re-check before every attempt

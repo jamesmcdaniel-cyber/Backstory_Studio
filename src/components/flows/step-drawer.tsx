@@ -5,6 +5,7 @@ import { X, Trash2, Plus, Copy, Link2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { CONDITION_OPS, FIELD_TYPES, type FlowNode, type ConditionOp, type ConditionClause, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
+import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 import { KNOWN_SIGNALS } from '@/lib/flows/trigger'
 import { nextOccurrence, type AgentSchedule } from '@/lib/scheduling/due'
 import { DataTree } from '@/components/flows/data-tree'
@@ -691,6 +692,24 @@ export function StepDrawer({
               blockActive={blockActive}
               unblockActive={unblockActive}
             />
+            <div>
+              <label className={labelClass}>Authenticate with (optional)</label>
+              <select
+                className={fieldClass}
+                value={node.data.connectionId ?? ''}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, connectionId: e.target.value || undefined } })}
+              >
+                <option value="">No authentication</option>
+                {toolCatalog.filter((conn) => parseFlowToolConnectionId(conn.id).plane === 'mcp').map((conn) => (
+                  <option key={conn.id} value={conn.id}>
+                    {conn.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Uses this connection&apos;s login to authorize the request — connections shared with your workspace, plus your own. Your own Authorization header always takes precedence.
+              </p>
+            </div>
             <div>
               <label className={labelClass}>Body</label>
               {(node.data.bodyMode ?? 'json') === 'none' ? (

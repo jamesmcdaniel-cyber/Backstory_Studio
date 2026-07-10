@@ -85,12 +85,16 @@ const toolNode = z.object({
   }),
 })
 // Plain HTTP request (webhook-out) step. URL/headers/body may use {{tokens}}.
+// `connectionId` optionally names an MCP connection whose fresh OAuth token is
+// injected as the Authorization header at fetch time — the token itself never
+// enters the graph, run rows, or logs.
 const httpNode = z.object({
   id: z.string(),
   type: z.literal('http'),
   data: z.object({
     label: z.string().optional(),
     note: z.string().optional(),
+    connectionId: z.string().optional(),
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('POST'),
     url: z.string(),
     query: z.string().optional(),

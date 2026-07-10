@@ -38,6 +38,7 @@ import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import { CONDITION_OPS, FIELD_TYPES, type ConditionClause, type ConditionOp, type FlowNode, type OutputField, type TriggerInputField } from '@/lib/flows/graph'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
+import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import type { ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
@@ -716,7 +717,7 @@ function renderNodeBody({
     case 'agent':
       return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'http':
-      return <HttpBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
+      return <HttpBody node={node} toolCatalog={toolCatalog} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'tool':
       return <ToolBody node={node} toolCatalog={toolCatalog} update={update} showErrors={showErrors} />
     case 'condition':
@@ -1023,17 +1024,20 @@ function AgentBody({
 
 function HttpBody({
   node,
+  toolCatalog,
   update,
   tokenWiring,
   showErrors,
 }: {
   node: Extract<FlowNode, { type: 'http' }>
+  toolCatalog: ToolCatalog
   update: (node: FlowNode) => void
   tokenWiring: TokenEditorWiring
   showErrors?: boolean
 }) {
   const { labelCtx, registerEditor, focusEditor } = tokenWiring
   const urlInvalid = Boolean(showErrors && !node.data.url)
+  const authConnections = toolCatalog.filter((entry) => parseFlowToolConnectionId(entry.id).plane === 'mcp')
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-[1fr_150px]">
@@ -1073,6 +1077,24 @@ function HttpBody({
         onChange={(headers) => update({ ...node, data: { ...node.data, headers } })}
         tokenWiring={tokenWiring}
       />
+      <div className="grid gap-2">
+        <label className={labelClass}>Authenticate with (optional)</label>
+        <select
+          value={node.data.connectionId ?? ''}
+          onChange={(event) => update({ ...node, data: { ...node.data, connectionId: event.target.value || undefined } })}
+          className={controlClass}
+        >
+          <option value="">No authentication</option>
+          {authConnections.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.name}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-slate-500">
+          Uses this connection&apos;s login to authorize the request — connections shared with your workspace, plus your own. Your own Authorization header always takes precedence.
+        </p>
+      </div>
       <InlineKeyValue
         label="Queries"
         editorKey="http.query"

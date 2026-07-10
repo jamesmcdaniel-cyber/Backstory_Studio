@@ -1,4 +1,5 @@
 export type FlowHttpConfig = {
+  connectionId?: unknown
   method?: unknown
   url?: unknown
   query?: unknown
@@ -126,6 +127,56 @@ export function prepareHttpRequest(config: FlowHttpConfig): { url: string; init:
     failOnHttpError: config.failOnHttpError !== false,
     responseType,
   }
+}
+
+// ── Connection auth: pure header helpers ────────────────────────────────────
+// Injection happens server-side at fetch time only; the token never enters the
+// graph JSON or persisted step rows. Redaction covers the user-supplied case.
+
+const AUTH_HEADER_RE = /^(authorization|proxy-authorization)$/i
+
+const hasAuthHeader = (headers: Record<string, string>) =>
+  Object.keys(headers).some((key) => AUTH_HEADER_RE.test(key))
+
+/**
+ * Add `authorization: Bearer <token>` unless the request already carries an
+ * Authorization header — an explicit user-supplied header always wins.
+ */
+export function withBearerAuthorization(headers: Record<string, string>, token: string): Record<string, string> {
+  if (hasAuthHeader(headers)) return headers
+  return { ...headers, authorization: `Bearer ${token}` }
+}
+
+/**
+ * Replace the value of any Authorization-like header with 'redacted' so
+ * persisted request details (FlowRunStep.input) never contain credentials.
+ * Accepts the shapes an http step's `headers` config can hold: a parsed
+ * object, a JSON string, or an arbitrary string.
+ */
+export function redactAuthHeaders(headers: unknown): unknown {
+  if (isRecord(headers)) {
+    return Object.fromEntries(
+      Object.entries(headers).map(([key, value]) => [key, AUTH_HEADER_RE.test(key.trim()) ? 'redacted' : value]),
+    )
+  }
+  if (typeof headers === 'string') {
+    try {
+      const parsed = JSON.parse(headers)
+      if (isRecord(parsed)) return JSON.stringify(redactAuthHeaders(parsed))
+    } catch {
+      /* fall through */
+    }
+    // Not a JSON object — if it mentions an auth header at all, drop the whole
+    // string rather than risk persisting a credential.
+    return /authorization/i.test(headers) ? 'redacted' : headers
+  }
+  return headers
+}
+
+/** An http step's config as safe to persist: auth header values redacted. */
+export function redactHttpStepInput(config: Record<string, unknown>): Record<string, unknown> {
+  if (config.headers === undefined || config.headers === null) return config
+  return { ...config, headers: redactAuthHeaders(config.headers) }
 }
 
 function shouldParseJson(contentType: string, responseType: 'auto' | 'json' | 'text', text: string) {

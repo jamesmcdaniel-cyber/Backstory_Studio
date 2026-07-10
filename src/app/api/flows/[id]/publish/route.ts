@@ -32,7 +32,9 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   }
 
   const graph = flowGraphSchema.parse(existing.graph)
-  const usedConnectionIds = Array.from(new Set(graph.nodes.filter((node) => node.type === 'tool').map((node) => node.data.connectionId).filter(Boolean)))
+  const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
+    node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
+  ).filter((id): id is string => Boolean(id))))
   const [agents, connections] = await Promise.all([
     prisma.agentTask.findMany({
       where: { organizationId: auth.organizationId, status: 'ACTIVE', ...agentVisibilityScope(auth.dbUser.id) },
