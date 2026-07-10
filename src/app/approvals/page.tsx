@@ -125,6 +125,10 @@ export default function ApprovalsPage() {
         const data = await response.json().catch(() => ({}))
         if (!response.ok) {
           toast.error(data.error || 'Could not record your decision — try again.')
+          // A failed approve may still have marked the approval (e.g. delivery
+          // threw after the claim) — refetch so the row shows its honest state
+          // instead of staying pending with live buttons.
+          setRefreshKey((key) => key + 1)
           return
         }
         // The API is idempotent and race-safe: a decision that lost the claim
