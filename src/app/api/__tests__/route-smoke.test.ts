@@ -1,5 +1,8 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { readdirSync, readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 import { NextRequest } from 'next/server'
 
 const TEST_DB = process.env.TEST_DATABASE_URL
@@ -29,7 +32,9 @@ if (TEST_DB) {
   })
 
   after(async () => {
-    await seeded.cleanup()
+    // Guard: if before() threw (seed failure), seeded is undefined — don't
+    // throw a secondary error over the real one.
+    if (seeded) await seeded.cleanup()
   })
 
   const req = (path: string) => new NextRequest(new URL(`http://test${path}`))
@@ -91,4 +96,45 @@ if (TEST_DB) {
       assert.ok(res.status < 500, `${c.name} returned ${res.status}: ${await res.clone().text().catch(() => '')}`)
     })
   }
+
+  // Routes deliberately not invoked, with the reason. A withAuthenticatedApi
+  // GET route absent from BOTH `cases` and this list fails the completeness
+  // test below — so a newly-added route can't silently ship untested (the
+  // exact blind spot behind the 2026-07-10 tenant-guard incident).
+  const skipped: Array<{ route: string; reason: string }> = [
+    { route: 'nango/integrations', reason: 'needs NANGO_SECRET_KEY — throws 503 before any network call' },
+    { route: 'nango/status', reason: 'needs NANGO_SECRET_KEY — throws 503 before any network call' },
+    { route: 'granola/notes/[id]', reason: 'needs a Granola key — throws 503 before any network call' },
+  ]
+
+  // Completeness self-check: enumerate every route.ts whose GET is wrapped in
+  // withAuthenticatedApi and require each to be covered or explicitly skipped.
+  // NOTE: session-auth GET routes that read getAuthWithUser() directly instead
+  // of withAuthenticatedApi (peopleai/status, peopleai/connect, peopleai/callback)
+  // are outside this set by construction — the seam can't reach them; that
+  // boundary is documented in the WS-R6 plan, not enforced here.
+  test('every withAuthenticatedApi GET route is covered or explicitly skipped', () => {
+    const apiDir = fileURLToPath(new URL('..', import.meta.url))
+    const walk = (dir: string): string[] => {
+      const out: string[] = []
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === '__tests__') continue
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) out.push(...walk(full))
+        else if (entry.name === 'route.ts') out.push(full)
+      }
+      return out
+    }
+    const authedGetRoutes = walk(apiDir)
+      .filter((file) => /export const GET = withAuthenticatedApi/.test(readFileSync(file, 'utf8')))
+      .map((file) => path.relative(apiDir, path.dirname(file)))
+    const covered = new Set(cases.map((c) => c.name.replace(/^GET \/api\//, '')))
+    const skippedSet = new Set(skipped.map((s) => s.route))
+    const uncovered = authedGetRoutes.filter((route) => !covered.has(route) && !skippedSet.has(route)).sort()
+    assert.deepEqual(
+      uncovered,
+      [],
+      `Authenticated GET route(s) with no smoke case: ${uncovered.join(', ')}. Add a case above, or add a documented skip.`,
+    )
+  })
 }
