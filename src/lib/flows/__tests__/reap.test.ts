@@ -80,6 +80,24 @@ if (TEST_DB) {
     assert.equal(waitingRun.status, 'waiting')
   })
 
+  test('reapStuckFlowRuns never touches steps of a run it did not itself reap', async () => {
+    const stale = new Date(Date.now() - 31 * 60 * 1000)
+    const pausedRun = await prisma.flowRun.create({
+      data: { flowId: ids.flow, organizationId: ids.org, status: 'waiting', startedAt: stale },
+    })
+    const pausedStep = await prisma.flowRunStep.create({
+      data: { flowRunId: pausedRun.id, nodeId: 'n2', status: 'waiting', startedAt: stale },
+    })
+
+    await reapStuckFlowRuns()
+
+    const stepAfter = await prisma.flowRunStep.findUnique({ where: { id: pausedStep.id } })
+    assert.equal(stepAfter.status, 'waiting')
+
+    const runAfter = await prisma.flowRun.findUnique({ where: { id: pausedRun.id } })
+    assert.equal(runAfter.status, 'waiting')
+  })
+
   test('reapStuckFlowRuns is idempotent — second pass reaps nothing', async () => {
     assert.equal(await reapStuckFlowRuns(), 0)
   })

@@ -25,17 +25,26 @@ export async function reapStuckFlowRuns(now = new Date()): Promise<number> {
   })
   if (stuck.length === 0) return 0
   const runIds = stuck.map((run) => run.id)
-  // Status re-checked in the updateMany so a run that legitimately finished
-  // between the read and the write is left alone.
-  const [reaped] = await prisma.$transaction([
-    prisma.flowRun.updateMany({
+  return prisma.$transaction(async (tx) => {
+    // Status re-checked here so a run that legitimately left `running`
+    // (e.g. paused for approval) between the read above and this write is
+    // left alone.
+    const reaped = await tx.flowRun.updateMany({
       where: { id: { in: runIds }, status: 'running' },
       data: { status: 'failed', error: STUCK_RUN_ERROR, finishedAt: now },
-    }),
-    prisma.flowRunStep.updateMany({
-      where: { flowRunId: { in: runIds }, status: { in: ['queued', 'running', 'waiting'] } },
+    })
+    if (reaped.count === 0) return 0
+    // Only fail steps belonging to runs THIS pass actually reaped — re-query
+    // rather than reuse runIds, since a run this pass skipped (already
+    // transitioned away from `running`) must keep its steps untouched.
+    const reapedRuns = await tx.flowRun.findMany({
+      where: { id: { in: runIds }, status: 'failed', error: STUCK_RUN_ERROR },
+      select: { id: true },
+    })
+    await tx.flowRunStep.updateMany({
+      where: { flowRunId: { in: reapedRuns.map((run) => run.id) }, status: { in: ['queued', 'running', 'waiting'] } },
       data: { status: 'failed', error: STUCK_RUN_ERROR, finishedAt: now },
-    }),
-  ])
-  return reaped.count
+    })
+    return reaped.count
+  })
 }
