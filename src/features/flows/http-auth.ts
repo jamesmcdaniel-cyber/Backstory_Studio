@@ -20,8 +20,6 @@ import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 export const HTTP_CONNECTION_UNAVAILABLE =
   'The connection for this HTTP step is unavailable — reconnect it in Integrations.'
 
-/** Clock-skew grace when judging a tracked token expiry as already past. */
-const EXPIRY_GRACE_MS = 60_000
 
 /**
  * Pure token selection: given a decrypted connection config, return the
@@ -30,10 +28,12 @@ const EXPIRY_GRACE_MS = 60_000
  *
  * ensureFreshConnectionToken never throws — when a refresh fails it hands the
  * row back unchanged, stale access token included. Where expiry is tracked
- * (oauth2 authcode `expiresAt`, ms since epoch), a token already past its
- * expiry beyond a small clock-skew grace is rejected here instead of being
- * injected, so the caller surfaces reconnect guidance rather than the
- * remote's bare 401. api_key connections track no expiry and are unaffected.
+ * (oauth2 authcode `expiresAt`, ms since epoch), a token at or past its expiry
+ * is rejected here instead of being injected, so the caller surfaces reconnect
+ * guidance rather than the remote's bare 401. No grace below `now`: the
+ * refresher already retries anything under now+60s, so a token reaching this
+ * point past expiry has a broken refresh — there is no valid token to protect.
+ * api_key connections track no expiry and are unaffected.
  */
 export function usableConnectionToken(
   config: {
@@ -51,7 +51,7 @@ export function usableConnectionToken(
   // Authorization header (no custom header name) — mirroring McpClient.
   if (config.authType === 'oauth2' && config.flow === 'authcode') {
     if (!config.accessToken) return undefined
-    if (typeof config.expiresAt === 'number' && config.expiresAt <= now - EXPIRY_GRACE_MS) return undefined
+    if (typeof config.expiresAt === 'number' && config.expiresAt <= now) return undefined
     return config.accessToken
   }
   if (config.authType === 'api_key' && (!config.headerName?.trim() || config.headerName === 'Authorization')) {

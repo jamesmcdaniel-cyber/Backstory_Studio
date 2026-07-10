@@ -31,13 +31,21 @@ test('usableConnectionToken rejects an authcode token expired beyond the clock-s
   )
 })
 
-test('usableConnectionToken tolerates expiry within the clock-skew grace', () => {
+test('usableConnectionToken rejects a token at or past its expiry — the refresher already failed it', () => {
   assert.equal(
     usableConnectionToken(
       { authType: 'oauth2', flow: 'authcode', accessToken: 'tok-edge', expiresAt: NOW - 30_000 },
       NOW,
     ),
-    'tok-edge',
+    undefined,
+  )
+  // Still valid for a few seconds → inject (the refresher handles renewal).
+  assert.equal(
+    usableConnectionToken(
+      { authType: 'oauth2', flow: 'authcode', accessToken: 'tok-live', expiresAt: NOW + 5_000 },
+      NOW,
+    ),
+    'tok-live',
   )
 })
 
