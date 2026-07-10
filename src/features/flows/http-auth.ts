@@ -20,6 +20,46 @@ import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 export const HTTP_CONNECTION_UNAVAILABLE =
   'The connection for this HTTP step is unavailable — reconnect it in Integrations.'
 
+/** Clock-skew grace when judging a tracked token expiry as already past. */
+const EXPIRY_GRACE_MS = 60_000
+
+/**
+ * Pure token selection: given a decrypted connection config, return the
+ * bearer token to inject, or undefined when the connection carries no usable
+ * token.
+ *
+ * ensureFreshConnectionToken never throws — when a refresh fails it hands the
+ * row back unchanged, stale access token included. Where expiry is tracked
+ * (oauth2 authcode `expiresAt`, ms since epoch), a token already past its
+ * expiry beyond a small clock-skew grace is rejected here instead of being
+ * injected, so the caller surfaces reconnect guidance rather than the
+ * remote's bare 401. api_key connections track no expiry and are unaffected.
+ */
+export function usableConnectionToken(
+  config: {
+    authType?: string
+    flow?: string
+    accessToken?: string
+    apiKey?: string
+    headerName?: string
+    expiresAt?: number
+  },
+  now = Date.now(),
+): string | undefined {
+  // OAuth authcode connections carry a (just-refreshed) access token; api_key
+  // connections qualify only when their key is presented as a Bearer
+  // Authorization header (no custom header name) — mirroring McpClient.
+  if (config.authType === 'oauth2' && config.flow === 'authcode') {
+    if (!config.accessToken) return undefined
+    if (typeof config.expiresAt === 'number' && config.expiresAt <= now - EXPIRY_GRACE_MS) return undefined
+    return config.accessToken
+  }
+  if (config.authType === 'api_key' && (!config.headerName?.trim() || config.headerName === 'Authorization')) {
+    return config.apiKey || undefined
+  }
+  return undefined
+}
+
 /**
  * Look up the org-scoped connection (org-shared rows plus the acting user's
  * own), refresh its OAuth token if needed, and return the bearer token value.
@@ -41,15 +81,7 @@ export async function resolveHttpConnectionToken(params: {
 
   const fresh = await ensureFreshConnectionToken(conn)
   const config = mcpConfigFromConnection(fresh)
-  // OAuth authcode connections carry a (just-refreshed) access token; api_key
-  // connections qualify only when their key is presented as a Bearer
-  // Authorization header (no custom header name) — mirroring McpClient.
-  const token =
-    config.authType === 'oauth2' && config.flow === 'authcode'
-      ? config.accessToken
-      : config.authType === 'api_key' && (!config.headerName?.trim() || config.headerName === 'Authorization')
-        ? config.apiKey
-        : undefined
+  const token = usableConnectionToken(config)
   if (!token) throw new Error(HTTP_CONNECTION_UNAVAILABLE)
   return token
 }

@@ -135,16 +135,23 @@ export function prepareHttpRequest(config: FlowHttpConfig): { url: string; init:
 
 const AUTH_HEADER_RE = /^(authorization|proxy-authorization)$/i
 
+// Header keys are trimmed to match redactAuthHeaders; values that are empty or
+// whitespace-only (e.g. a template that resolved to '') don't count as an
+// explicit auth header — they must not block injection or be sent blank.
 const hasAuthHeader = (headers: Record<string, string>) =>
-  Object.keys(headers).some((key) => AUTH_HEADER_RE.test(key))
+  Object.entries(headers).some(([key, value]) => AUTH_HEADER_RE.test(key.trim()) && value.trim() !== '')
 
 /**
- * Add `authorization: Bearer <token>` unless the request already carries an
- * Authorization header — an explicit user-supplied header always wins.
+ * Add `authorization: Bearer <token>` unless the request already carries a
+ * non-empty Authorization header — an explicit user-supplied header always
+ * wins. Empty/whitespace-only Authorization values are treated as absent and
+ * dropped so the request never carries a blank credential next to the
+ * injected one.
  */
 export function withBearerAuthorization(headers: Record<string, string>, token: string): Record<string, string> {
   if (hasAuthHeader(headers)) return headers
-  return { ...headers, authorization: `Bearer ${token}` }
+  const rest = Object.entries(headers).filter(([key]) => !AUTH_HEADER_RE.test(key.trim()))
+  return { ...Object.fromEntries(rest), authorization: `Bearer ${token}` }
 }
 
 /**

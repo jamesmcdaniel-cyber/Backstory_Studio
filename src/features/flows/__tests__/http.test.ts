@@ -78,6 +78,24 @@ test('withBearerAuthorization never overrides an explicit Authorization header',
     withBearerAuthorization({ 'Proxy-Authorization': 'Basic abc' }, 'tok-123'),
     { 'Proxy-Authorization': 'Basic abc' },
   )
+  // Header names with surrounding whitespace still count as explicit
+  assert.deepEqual(
+    withBearerAuthorization({ ' authorization': 'Bearer mine' }, 'tok-123'),
+    { ' authorization': 'Bearer mine' },
+  )
+})
+
+test('withBearerAuthorization treats empty Authorization values as absent', () => {
+  // A template that resolved to an empty string must not block injection or
+  // leave a blank credential on the request
+  assert.deepEqual(
+    withBearerAuthorization({ Authorization: '', 'x-id': 'a' }, 'tok-123'),
+    { 'x-id': 'a', authorization: 'Bearer tok-123' },
+  )
+  assert.deepEqual(
+    withBearerAuthorization({ authorization: '   ' }, 'tok-123'),
+    { authorization: 'Bearer tok-123' },
+  )
 })
 
 test('redactAuthHeaders replaces auth header values in objects, any casing', () => {
@@ -88,6 +106,11 @@ test('redactAuthHeaders replaces auth header values in objects, any casing', () 
   assert.deepEqual(
     redactAuthHeaders({ authorization: 'Basic secret', 'proxy-authorization': 'secret' }),
     { authorization: 'redacted', 'proxy-authorization': 'redacted' },
+  )
+  // Key trimming is symmetric with injection precedence; empty values still redact
+  assert.deepEqual(
+    redactAuthHeaders({ ' Authorization ': 'Bearer secret', authorization: '' }),
+    { ' Authorization ': 'redacted', authorization: 'redacted' },
   )
 })
 
