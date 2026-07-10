@@ -15,8 +15,18 @@ export function setErrorReporter(next: ErrorReporter): void {
   reporter = next
 }
 
+type ErrorFlusher = (timeoutMs: number) => Promise<void>
+
+let flusher: ErrorFlusher | null = null
+
+/** Test seam: inject a flusher the way setErrorReporter injects a reporter. */
+export function setErrorFlusher(next: ErrorFlusher): void {
+  flusher = next
+}
+
 export function resetErrorReporter(): void {
   reporter = null
+  flusher = null
 }
 
 export function captureError(error: unknown, context?: Record<string, unknown>): void {
@@ -31,17 +41,43 @@ export function captureError(error: unknown, context?: Record<string, unknown>):
   }
 }
 
-/** Initialize Sentry server-side and route captureError through it. */
-export async function initSentry(): Promise<void> {
+/**
+ * Drain any queued error reports (Sentry buffers sends). Call before a
+ * deliberate process exit — without it, the last errors of a worker's life
+ * are exactly the ones that get dropped. Safe no-op when never initialized.
+ */
+export async function flushErrorReporting(timeoutMs = 2000): Promise<void> {
+  if (!flusher) return
+  try {
+    await flusher(timeoutMs)
+  } catch {
+    // Flushing is best-effort; never take shutdown down with it.
+  }
+}
+
+/**
+ * Initialize Sentry server-side and route captureError through it.
+ * `processTag` distinguishes web (Next.js) from the standalone worker in the
+ * Sentry UI. Never throws: an observability failure must not stop the process.
+ */
+export async function initSentry(processTag = 'web'): Promise<void> {
   const dsn = process.env.SENTRY_DSN
   if (!dsn) return
-  const Sentry = await import('@sentry/nextjs')
-  Sentry.init({
-    dsn,
-    environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'development',
-    tracesSampleRate: 0,
-  })
-  setErrorReporter((error, context) => {
-    Sentry.captureException(error, context ? { extra: context } : undefined)
-  })
+  try {
+    const Sentry = await import('@sentry/nextjs')
+    Sentry.init({
+      dsn,
+      environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'development',
+      tracesSampleRate: 0,
+    })
+    Sentry.setTag('process', processTag)
+    setErrorReporter((error, context) => {
+      Sentry.captureException(error, context ? { extra: context } : undefined)
+    })
+    setErrorFlusher(async (timeoutMs) => {
+      await Sentry.flush(timeoutMs)
+    })
+  } catch (error) {
+    console.error('[sentry] init failed; falling back to console reporting', error)
+  }
 }

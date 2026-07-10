@@ -5,6 +5,7 @@ import { executeAgentJob } from '@/features/agents/execute-agent'
 import { getRedisConnection, QUEUE_NAMES, workerConfig } from '@/lib/queue/config'
 import { deadLetterFromJob } from '@/lib/queue/dead-letter'
 import { registerAgentSchedules } from '@/lib/workers/agent-schedule-registrar'
+import { initSentry, captureError, flushErrorReporting } from '@/lib/observability/sentry'
 
 class WorkerRuntime {
   private server = Fastify({ logger: true })
@@ -47,6 +48,7 @@ class WorkerRuntime {
       if (this.scheduleTimer) clearInterval(this.scheduleTimer)
       await this.server.close()
       await Promise.all(this.workers.map((worker) => worker.close()))
+      await flushErrorReporting()
       process.exit(0)
     }
     process.on('SIGINT', shutdown)
@@ -54,6 +56,14 @@ class WorkerRuntime {
   }
 
   async start(port = 3002) {
+    await initSentry('worker')
+    process.on('unhandledRejection', (reason) => {
+      captureError(reason, { source: 'worker.unhandledRejection' })
+    })
+    process.on('uncaughtException', (error) => {
+      captureError(error, { source: 'worker.uncaughtException' })
+      void flushErrorReporting().finally(() => process.exit(1))
+    })
     await registerAgentSchedules()
     this.scheduleTimer = setInterval(() => {
       registerAgentSchedules().catch((error) => this.server.log.error(error, 'Schedule reconciliation failed'))
@@ -63,8 +73,10 @@ class WorkerRuntime {
 }
 
 if (require.main === module) {
-  new WorkerRuntime().start(Number(process.env.WORKER_PORT) || 3002).catch((error) => {
+  new WorkerRuntime().start(Number(process.env.WORKER_PORT) || 3002).catch(async (error) => {
     console.error(error)
+    captureError(error, { source: 'worker.start' })
+    await flushErrorReporting()
     process.exit(1)
   })
 }
