@@ -220,13 +220,23 @@ export async function runFlowExecution(
         startedAt: new Date(),
       },
     })
+    // Link the agent execution to this step row the moment the execution row
+    // exists (not only at the end of the run), so the runs panel can follow
+    // the agent's live process events while the step is still running.
+    // Best-effort write — the end-of-run updates below remain authoritative
+    // (idempotent overwrite of the same id).
+    const onExecutionCreated = (executionId: string) => {
+      void prisma.flowRunStep
+        .update({ where: { id: step.id }, data: { agentExecutionId: executionId } })
+        .catch(() => undefined)
+    }
     try {
       // Resuming this node? Re-enter the paused agent execution with the reply.
       const resumeThis = node.resume && resumeNodeId === node.id && resumeExecutionId
       const result = (await runAgentExecution(
         resumeThis
-          ? { agentId: node.agentId, organizationId: job.organizationId, userId: job.userId, executionId: resumeExecutionId, resume: true, reply: job.reply }
-          : { agentId: node.agentId, organizationId: job.organizationId, userId: job.userId, input: node.input },
+          ? { agentId: node.agentId, organizationId: job.organizationId, userId: job.userId, executionId: resumeExecutionId, resume: true, reply: job.reply, onExecutionCreated }
+          : { agentId: node.agentId, organizationId: job.organizationId, userId: job.userId, input: node.input, onExecutionCreated },
       )) as { summary?: string; status?: string; question?: string; executionId?: string }
 
       if (typeof result?.status === 'string' && result.status.startsWith('waiting')) {

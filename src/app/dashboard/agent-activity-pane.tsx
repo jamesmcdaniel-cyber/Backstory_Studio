@@ -34,6 +34,12 @@ import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
 import { isCancellableRunStatus, isTerminalRunStatus } from '@/lib/agents/run-status'
+import {
+  buildProcessTimeline,
+  type ContextFact,
+  type ProcessToolStep,
+  type SuggestionItem,
+} from '@/lib/agents/process-feed'
 import type { Activity, Agent } from '@/lib/types'
 
 /**
@@ -42,16 +48,7 @@ import type { Activity, Agent } from '@/lib/types'
  * Reuses the existing execution-detail endpoint and follow-up reply plumbing.
  */
 
-export type RunStep = {
-  id: string
-  node: string
-  status: string
-  input?: any
-  output?: any
-  error?: any
-  startedAt?: string | null
-  completedAt?: string | null
-}
+export type RunStep = ProcessToolStep
 
 type RunDetails = {
   execution: Activity
@@ -479,8 +476,6 @@ function AutoAnswerCard({ question, answer }: { question: string; answer: string
   )
 }
 
-type SuggestionItem = { memoryId: string; title: string; rationale: string; actionType: string }
-
 // Suggestions the agent surfaced from this run (e.g. "remember this" or
 // "connect this integration"), rendered after the timeline with a per-row
 // dismiss so the user can act on or clear each one without leaving the pane.
@@ -558,65 +553,8 @@ function SuggestionsCard({
   )
 }
 
-// Merge thinking events and tool-call steps into one chronological process
-// timeline, so the log reads as the agent's reasoning interleaved with its calls.
-type ContextFact = { type: string; text: string }
-type TimelineItem =
-  | { key: string; ts: number; kind: 'thinking'; text: string }
-  | { key: string; ts: number; kind: 'tool'; step: RunStep }
-  | { key: string; ts: number; kind: 'context'; summary: string; hits: ContextFact[]; related: ContextFact[] }
-  | { key: string; ts: number; kind: 'plan'; text: string }
-  | { key: string; ts: number; kind: 'memory'; summary: string }
-  | { key: string; ts: number; kind: 'autoanswer'; question: string; answer: string }
-
-function buildTimeline(details: RunDetails | null): { items: TimelineItem[]; suggestions: SuggestionItem[] } {
-  if (!details) return { items: [], suggestions: [] }
-  const items: TimelineItem[] = []
-  const suggestionsById = new Map<string, SuggestionItem>()
-  for (const event of details.events ?? []) {
-    if (event.kind === 'agent.thinking' && event.payload?.text) {
-      items.push({ key: `t-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'thinking', text: String(event.payload.text) })
-    }
-    if (event.kind === 'context.retrieved') {
-      items.push({
-        key: `c-${event.id}`,
-        ts: new Date(event.ts).getTime(),
-        kind: 'context',
-        summary: String(event.payload?.summary ?? 'Retrieved correlated context'),
-        hits: Array.isArray(event.payload?.hits) ? (event.payload.hits as ContextFact[]) : [],
-        related: Array.isArray(event.payload?.related) ? (event.payload.related as ContextFact[]) : [],
-      })
-    }
-    if (event.kind === 'agent.plan' && event.payload?.text) {
-      items.push({ key: `p-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'plan', text: String(event.payload.text) })
-    }
-    if (event.kind === 'memory.retrieved' && event.payload?.summary) {
-      items.push({ key: `m-${event.id}`, ts: new Date(event.ts).getTime(), kind: 'memory', summary: String(event.payload.summary) })
-    }
-    if (event.kind === 'agent.question.autoanswered') {
-      items.push({
-        key: `a-${event.id}`,
-        ts: new Date(event.ts).getTime(),
-        kind: 'autoanswer',
-        question: String(event.payload?.question ?? ''),
-        answer: String(event.payload?.answer ?? ''),
-      })
-    }
-    if (event.kind === 'agent.suggestion' && event.payload?.memoryId) {
-      suggestionsById.set(String(event.payload.memoryId), {
-        memoryId: String(event.payload.memoryId),
-        title: String(event.payload.title ?? ''),
-        rationale: String(event.payload.rationale ?? ''),
-        actionType: String(event.payload.actionType ?? ''),
-      })
-    }
-  }
-  for (const step of details.steps ?? []) {
-    const ts = step.startedAt ? new Date(step.startedAt).getTime() : 0
-    items.push({ key: `s-${step.id}`, ts, kind: 'tool', step })
-  }
-  return { items: items.sort((a, b) => a.ts - b.ts), suggestions: [...suggestionsById.values()] }
-}
+// The event→timeline shaping lives in @/lib/agents/process-feed (shared with
+// the flow runs panel's compact live feed) — this pane renders it as cards.
 
 function RunRow({
   activity,
@@ -642,7 +580,7 @@ function RunRow({
   const isActive = ['running', 'pending', 'cancelling', 'waiting_for_input', 'waiting_for_approval'].includes(status)
   const isCancellable = isCancellableRunStatus(status)
   const isTerminal = isTerminalRunStatus(status)
-  const { items: timeline, suggestions } = buildTimeline(details)
+  const { items: timeline, suggestions } = buildProcessTimeline(details?.events ?? [], details?.steps ?? [])
   // The most recent question this run asked that carries a remembered prior
   // answer, so the reply box can offer a one-click prefill instead of making
   // the user retype an answer the agent already has on file.

@@ -89,6 +89,8 @@
 
 ### Task 5: Robustness — timeout race + reaper + stale-waiting scheduling
 
+> **Supersession (2026-07-10):** The *reaper* and *stale-waiting scheduling* behaviors are shipping in Remediation WS-R1 (`2026-07-10-remediation-ws1-worker-sentry-flow-reaper.md`) — see `src/lib/flows/reap.ts`. Do NOT re-implement them here. Only the *timeout race* behavior remains for this task.
+
 **Files:**
 - Modify: `src/features/flows/interpret.ts` (~lines 124-134: the retry `Promise.race` that abandons a live execution and re-runs CONCURRENTLY), `src/features/flows/execute-flow.ts`, `src/app/api/cron/dispatch/route.ts`
 

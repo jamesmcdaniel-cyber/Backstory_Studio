@@ -349,7 +349,13 @@ export async function resumeAgentExecution(params: {
   await queue.add('resume-agent', { ...params, resume: true }, { jobId: `${params.executionId}-resume-${Date.now()}` })
 }
 
-export async function runAgentExecution(data: AgentExecutionJob) {
+export async function runAgentExecution(
+  // Inline callers (e.g. the flow runtime) may pass onExecutionCreated to learn
+  // the execution id as soon as its row exists — long before the run finishes —
+  // so live UIs can start following the run. It is intentionally NOT part of
+  // AgentExecutionJob: queue jobs are serialized and can't carry a function.
+  data: AgentExecutionJob & { onExecutionCreated?: (executionId: string) => void | Promise<void> },
+) {
   const { agentId, organizationId, userId } = data
   const agent = await prisma.agentTask.findFirst({
     where: { id: agentId, organizationId, status: 'ACTIVE' },
@@ -471,6 +477,17 @@ export async function runAgentExecution(data: AgentExecutionJob) {
           organizationId,
         },
       })
+
+  // The execution row now exists: hand its id to the caller. Fire-and-forget
+  // and fully fenced — a callback failure (sync or async) must never fail or
+  // delay the run itself.
+  if (data.onExecutionCreated) {
+    try {
+      void Promise.resolve(data.onExecutionCreated(execution.id)).catch(() => undefined)
+    } catch {
+      // Best-effort notification only.
+    }
+  }
 
   if (!resuming) {
     await prisma.executionMessage.create({

@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ChevronRight, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
 import { TypewriterStatus } from '@/components/ui/typewriter-status'
+import { buildProcessTimeline, processFeedRows, type ProcessFeedRow } from '@/lib/agents/process-feed'
 import type { StepStatus } from './step-card'
 
 export type RunStep = {
@@ -17,6 +18,9 @@ export type RunStep = {
   output?: unknown
   startedAt?: string | null
   finishedAt?: string | null
+  // Agent steps: the underlying agent execution, linked as soon as it starts,
+  // so the panel can show the agent's real live process instead of a spinner.
+  agentExecutionId?: string | null
 }
 export type FlowRunDetail = {
   id: string
@@ -79,8 +83,48 @@ function OutputView({ value }: { value: unknown }) {
   return <pre className="max-h-40 overflow-auto rounded bg-muted px-2 py-1.5 text-xs">{preview(value)}</pre>
 }
 
+/**
+ * Live process feed for an in-flight agent step: polls the agent execution's
+ * real events (thinking, plan, tool calls) every 2 seconds while `active`.
+ * The interval is cleared when the step goes terminal or the run selection
+ * changes (`active`/`executionId` flip) and on unmount — the panel is only
+ * mounted while open, so closing it stops the polling too.
+ */
+function useAgentProcessFeed(executionId: string | null | undefined, active: boolean): ProcessFeedRow[] {
+  const [rows, setRows] = useState<ProcessFeedRow[]>([])
+  useEffect(() => {
+    setRows([]) // never show a previous execution's feed while the first fetch is in flight
+    if (!executionId || !active) return
+    let cancelled = false
+    const load = () =>
+      fetch(`/api/workflows/executions?executionId=${encodeURIComponent(executionId)}`, { cache: 'no-store' })
+        .then((response) => response.json())
+        .then((data) => {
+          if (cancelled) return
+          const item = data?.items?.[0]
+          if (!item) return
+          const { items } = buildProcessTimeline(item.events ?? [], item.steps ?? [])
+          setRows(processFeedRows(items))
+        })
+        .catch(() => undefined)
+    load()
+    const timer = window.setInterval(load, 2000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [executionId, active])
+  return rows
+}
+
 function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; waitingKind?: 'input' | 'approval' }) {
   const [open, setOpen] = useState(false)
+  // An in-flight agent step with a linked execution shows the agent's REAL
+  // process (below) instead of the decorative typewriter word. Steps without
+  // an execution id (http/tool steps, or an id not yet written) keep the
+  // typewriter.
+  const live = (step.status === 'running' || step.status === 'waiting') && Boolean(step.agentExecutionId)
+  const feed = useAgentProcessFeed(step.agentExecutionId, live)
   // A paused step reads as what it needs, never the bare status word.
   const statusLabel = waitingKind ? (waitingKind === 'input' ? 'Waiting for your reply' : 'Waiting for approval') : step.status
   return (
@@ -88,8 +132,23 @@ function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; w
       <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50">
         <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
         <span className="flex-1 truncate text-sm">{label}</span>
-        <span className={cn('text-xs font-medium', !waitingKind && 'capitalize', STATUS_TEXT[step.status] || 'text-muted-foreground')}>{step.status === 'running' ? <TypewriterStatus seed={step.nodeId.length ? step.nodeId.charCodeAt(step.nodeId.length - 1) : 0} /> : statusLabel}</span>
+        <span className={cn('text-xs font-medium', !waitingKind && 'capitalize', STATUS_TEXT[step.status] || 'text-muted-foreground')}>{step.status === 'running' && !live ? <TypewriterStatus seed={step.nodeId.length ? step.nodeId.charCodeAt(step.nodeId.length - 1) : 0} /> : statusLabel}</span>
       </button>
+      {live && feed.length > 0 && (
+        <ul className="space-y-1 px-3 pb-2 pl-8">
+          {feed.map((row, i) => (
+            <li
+              key={row.key}
+              className={cn(
+                'truncate text-xs',
+                i === feed.length - 1 ? 'animate-pulse text-foreground/70' : 'text-muted-foreground',
+              )}
+            >
+              {row.label}
+            </li>
+          ))}
+        </ul>
+      )}
       {open && (
         <div className="space-y-2 px-3 pb-3 pl-8">
           {step.error && <p className="rounded bg-red-50 px-2 py-1 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-300">{step.error}</p>}
