@@ -4,10 +4,6 @@ import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { apiLogger } from '@/lib/logger'
-import { KlavisClient } from '@/lib/mcp/klavis-client'
-import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
-import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/peopleai/client'
-import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection } from '@/lib/nango/delivery'
 import { recordAudit } from '@/lib/audit'
 import { createApproval, requiresApproval } from '@/lib/agents/approval'
 import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
@@ -15,20 +11,22 @@ import { retrieveKnowledge, renderKnowledge } from '@/lib/knowledge/retrieve'
 import { embeddingsConfigured, embedQuery, embedTexts, cosineSimilarity } from '@/lib/rag/embeddings'
 import { getGraphRagStore } from '@/lib/rag/get-store'
 import { indexExecution } from '@/lib/rag/indexer'
-import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
-import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
-import { isStrataUrl, selectedStrataServers } from '@/lib/mcp/strata'
-import { mcpConnectionScope } from '@/lib/flows/tool-catalog'
-import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
-import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
-import { HttpToolClient, httpTools } from '@/lib/integrations/http'
-import { EmailToolClient, emailTools } from '@/lib/integrations/email'
-import { BUILTIN_CONNECTORS, nangoConnector, isSelected } from '@/lib/connectors/registry'
+import { selectedStrataServers } from '@/lib/mcp/strata'
+import {
+  loadKlavisPlaneGroups,
+  loadPeopleAiPlaneGroup,
+  loadMcpConnectionPlaneGroups,
+  loadNativePlaneGroups,
+  loadNangoPlaneGroups,
+  toolName,
+  type McpToolClient,
+  type ToolBinding,
+  type ToolPlaneGroup,
+} from './tool-planes'
 import { resolveAgentConnectorKeys } from '@/lib/connectors/agent-connectors'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { notify } from '@/lib/notifications/service'
 import { checkMonthlyTokenBudget, recordTokenUsage } from '@/lib/usage/budget'
-import { cacheGet, cacheSet } from '@/lib/cache'
 import { buildAgentSystemPrompt } from './system-prompt'
 import {
   createModelRunner,
@@ -61,19 +59,6 @@ export type AgentExecutionJob = {
 const MAX_SUBAGENT_DEPTH = 2
 const MAX_SUBAGENTS_PER_RUN = 15
 
-// Minimal interface that both KlavisClient and BackstoryMcpClient satisfy,
-// so ToolBinding.client can hold either without casting.
-interface McpToolClient {
-  executeTool(serverUrl: string, name: string, args: Record<string, unknown>): Promise<any>
-}
-
-type ToolBinding = {
-  provider: string
-  serverUrl: string
-  toolName: string
-  client: McpToolClient
-}
-
 type PendingQuestion = {
   toolCallId: string
   question: string
@@ -98,27 +83,9 @@ function jsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? null))
 }
 
-function toolName(provider: string, name: string) {
-  return `${provider}_${name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64)
-}
-
-// MCP tool lists are near-static, but loadTools re-discovered them (initialize +
-// tools/list round-trips) on EVERY run. Cache the discovery per server URL so a
-// warm run skips the network entirely; busted on connection create/update.
-const TOOL_DISCOVERY_TTL_MS = 10 * 60 * 1000
-// Keyed by org too: MCP servers can gate tools/list by identity, so one org's
-// discovery must not pin another's tool set on a shared serverUrl.
-export const toolDiscoveryCacheKey = (organizationId: string, serverUrl: string) => `mcptools:${organizationId}:${serverUrl}`
-async function cachedToolDiscovery<T>(organizationId: string, serverUrl: string, fetchTools: () => Promise<T[]>): Promise<T[]> {
-  const key = toolDiscoveryCacheKey(organizationId, serverUrl)
-  const hit = await cacheGet<T[]>(key)
-  if (hit && hit.length > 0) return hit
-  const fresh = await fetchTools()
-  // Never cache an empty result — a transient empty/errored discovery must not
-  // pin "no tools" for the whole TTL and silently disable the integration.
-  if (fresh.length > 0) await cacheSet(key, fresh, TOOL_DISCOVERY_TTL_MS)
-  return fresh
-}
+// Re-exported for callers that historically imported these from here (the
+// definitions moved to ./tool-planes, shared with the flow tool catalog).
+export { toolDiscoveryCacheKey } from './tool-planes'
 
 function metadataOf(value: unknown): Record<string, any> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {}
@@ -258,8 +225,24 @@ export async function selectDiscoveredTools(
 
 async function loadTools(organizationId: string, providers: string[], ownerUserId?: string | null, query?: string) {
   // Every plane contributes to one list; the cap/priority policy is applied once
-  // at the end (capDiscoveredTools) so write tools aren't crowded out.
+  // at the end (capDiscoveredTools) so write tools aren't crowded out. Plane
+  // discovery/binding lives in ./tool-planes, shared with the flow tool catalog
+  // and the flow tool-step executor.
   const discovered: DiscoveredTool[] = []
+  const pushGroup = (group: ToolPlaneGroup, options: { cap?: number; namePrefix?: string } = {}) => {
+    if (!group.client) return
+    const prefix = options.namePrefix ?? group.provider
+    const tools = options.cap ? group.tools.slice(0, options.cap) : group.tools
+    for (const tool of tools) {
+      discovered.push({
+        name: toolName(prefix, tool.name),
+        description: tool.description,
+        inputSchema: (tool.inputSchema as Record<string, unknown>) || { type: 'object', properties: {} },
+        binding: { provider: group.provider, serverUrl: group.serverUrl, toolName: tool.name, client: group.client },
+        isWrite: group.isWrite,
+      })
+    }
+  }
 
   // ---- Klavis-managed MCP servers ----------------------------------------
   // Non-Backstory providers that Klavis handles (Backstory/Sales AI is loaded
@@ -267,137 +250,26 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   const klavisProviders = providers.filter((p) => !/backstory/i.test(p))
 
   if (process.env.KLAVIS_API_KEY && klavisProviders.length > 0) {
-    const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'backstory' })
-    const agents = await prisma.mCPAgent.findMany({
-      where: {
-        organizationId,
-        isActive: true,
-        agentType: { in: klavisProviders.map((provider) => provider.toUpperCase()) },
-      },
+    const klavisGroups = await loadKlavisPlaneGroups(organizationId, {
+      agentTypes: klavisProviders.map((provider) => provider.toUpperCase()),
     })
-
-    // Discover all Klavis providers in parallel (cached per server URL); a
-    // failing discovery for one provider degrades to empty, never aborts the
-    // run. Bindings are built afterward, sequentially, so dedup + order stay
-    // deterministic regardless of which discovery resolved first.
-    const klavisResults = await Promise.all(agents.map(async (agent) => {
-      const provider = String(agent.agentType).toLowerCase()
-      try {
-        const available = await cachedToolDiscovery(organizationId, agent.mcpServerUrl, () => client.getServerTools(agent.mcpServerUrl))
-        return { provider, serverUrl: agent.mcpServerUrl, available }
-      } catch (error) {
-        apiLogger.warn('loadTools: Klavis tool discovery failed, skipping provider', {
-          provider, organizationId, error: error instanceof Error ? error.message : String(error),
-        })
-        return { provider, serverUrl: agent.mcpServerUrl, available: [] as Awaited<ReturnType<typeof client.getServerTools>> }
-      }
-    }))
-
-    for (const { provider, serverUrl, available } of klavisResults) {
-      if (available.length > 20) {
+    for (const group of klavisGroups) {
+      if (group.tools.length > 20) {
         apiLogger.warn('loadTools: per-provider tool cap reached; some tools not exposed to the agent', {
-          provider, organizationId, discovered: available.length, cap: 20, dropped: available.length - 20,
+          provider: group.provider, organizationId, discovered: group.tools.length, cap: 20, dropped: group.tools.length - 20,
         })
       }
-      for (const tool of available.slice(0, 20)) {
-        discovered.push({
-          name: toolName(provider, tool.name),
-          description: tool.description || `${tool.name} via ${provider}`,
-          inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-          binding: { provider, serverUrl, toolName: tool.name, client },
-          isWrite: false,
-        })
-      }
+      pushGroup(group, { cap: 20 })
     }
   }
 
   // ---- People.ai Sales AI MCP (a.k.a. Backstory MCP) -----------------------
   // Sales AI read tools are this product's core data spine, so they load for
   // EVERY agent whenever a People.ai client resolves — the same "connect once,
-  // available everywhere" model as the org MCP connections below. (Previously
-  // gated on the agent's providers list containing "backstory", but the agent
-  // config UI never surfaced that toggle, so agents could never actually
-  // receive these tools.) When no client resolves — an unentitled org with no
-  // connection and no service key — nothing loads, which is harmless.
-  //
-  // Identity order matters for data isolation:
-  //  1. The agent OWNER's delegated connection (mcp_* token) — the agent reads
-  //     People.ai exactly as that rep.
-  //  2. The org service key (PAI-Client-Id/Secret) for ownerless runs.
-  //  3. Legacy env-configured service account (BACKSTORY_MCP_*), logged loudly
-  //     because it is not tenant-isolated.
-  try {
-    let paiClient = ownerUserId ? await getPeopleAiClientForUser(ownerUserId, organizationId) : null
-    let identity: 'user' | 'service' | 'legacy-env' = 'user'
-    if (!paiClient) {
-      paiClient = getPeopleAiServiceClient()
-      identity = 'service'
-    }
-
-    if (paiClient) {
-      const adapter: McpToolClient = {
-        executeTool: (_serverUrl, name, args) => paiClient!.callTool(name, args),
-      }
-      if (identity !== 'user') {
-        apiLogger.warn('loadTools: People.ai tools using service identity (no owner connection)', {
-          organizationId, ownerUserId: ownerUserId ?? null,
-        })
-      }
-      const available = await cachedToolDiscovery(organizationId, paiClient.serverUrl, () => paiClient!.listTools())
-      for (const tool of available.slice(0, 20)) {
-        discovered.push({
-          name: toolName('backstory', tool.name),
-          description: tool.description || `${tool.name} via Backstory`,
-          inputSchema:
-            tool.inputSchema && typeof tool.inputSchema === 'object'
-              ? (tool.inputSchema as Record<string, unknown>)
-              : { type: 'object', properties: {} },
-          binding: { provider: 'backstory', serverUrl: paiClient.serverUrl, toolName: tool.name, client: adapter },
-          isWrite: false,
-        })
-      }
-    } else if (backstoryMcpConfigured()) {
-      // A per-user Backstory connection row is the tenant-isolated path (see
-      // above); if this owner already has one bound and ready, don't also load
-      // the legacy env-wide service account — it would double up tools and,
-      // worse, isn't scoped to this org/user.
-      const boundUserConnection = ownerUserId
-        ? await prisma.mcpConnection.findFirst({
-            where: { organizationId, userId: ownerUserId, provider: 'backstory', isActive: true },
-            select: { id: true },
-          })
-        : null
-      if (boundUserConnection) {
-        apiLogger.info('Backstory MCP bound via per-user connection; env service-account path skipped', {
-          organizationId, ownerUserId,
-        })
-      } else {
-        // Deprecated: this env-wide service account bypasses per-user/tenant
-        // isolation. Prefer the per-user Backstory connection above.
-        apiLogger.warn('loadTools: People.ai tools using legacy env service account (no tenant isolation)', {
-          organizationId,
-        })
-        const backstoryUrl = process.env.BACKSTORY_MCP_URL!
-        const backstoryClient = new BackstoryMcpClient()
-        const available = await cachedToolDiscovery(organizationId, backstoryUrl, () => backstoryClient.getServerTools(backstoryUrl))
-        for (const tool of available.slice(0, 20)) {
-          discovered.push({
-            name: toolName('backstory', tool.name),
-            description: tool.description || `${tool.name} via backstory`,
-            inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-            binding: { provider: 'backstory', serverUrl: backstoryUrl, toolName: tool.name, client: backstoryClient },
-            isWrite: false,
-          })
-        }
-      }
-    }
-  } catch (error) {
-    apiLogger.warn('loadTools: People.ai tool discovery failed, skipping provider', {
-      provider: 'backstory',
-      organizationId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-  }
+  // available everywhere" model as the org MCP connections below. Identity
+  // order (owner connection → org service key → legacy env) lives in the loader.
+  const peopleAiGroup = await loadPeopleAiPlaneGroup(organizationId, ownerUserId)
+  if (peopleAiGroup) pushGroup(peopleAiGroup, { cap: 20 })
 
   // ---- Per-org MCP connections (all active connections, any authType) ------
   // Custom MCP connections load for every agent regardless of the providers
@@ -407,186 +279,22 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
   // (see the system-prompt note added in the run). A failing/unreachable server
   // must NOT abort the run or block others.
   const strataSelected = selectedStrataServers(providers)
-  const connections = (await prisma.mcpConnection.findMany({
-    where: mcpConnectionScope(organizationId, ownerUserId ?? undefined),
-  })).filter((conn) => !isStrataUrl(conn.serverUrl) || strataSelected.length > 0)
+  const mcpGroups = await loadMcpConnectionPlaneGroups(organizationId, ownerUserId, {
+    includeStrata: strataSelected.length > 0,
+  })
+  for (const group of mcpGroups) pushGroup(group, { cap: 20 })
 
-  // Discover all org MCP connections in parallel (cached per server URL); token
-  // refresh + client build happen per-connection, discovery is cached. Failures
-  // degrade to null and are skipped. Bindings built afterward, sequentially, so
-  // dedup + the 64-tool cap apply deterministically.
-  const orgMcp = await Promise.all(connections.map(async (conn) => {
-    const slug = conn.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
-    try {
-      const fresh = await ensureFreshConnectionToken(conn)
-      const config = mcpConfigFromConnection(fresh)
-      // For authcode connections, let a mid-run token refresh persist the
-      // rotated tokens back to this row so the next run reuses them.
-      if (config.flow === 'authcode') {
-        const connectionId = fresh.id
-        const baseAuthConfig = fresh.authConfig as Record<string, unknown>
-        const fallbackRefresh = config.refreshToken ?? ''
-        config.persistTokens = async (tokens) => {
-          await persistRefreshedAuthcodeTokens(connectionId, baseAuthConfig, tokens, fallbackRefresh)
-        }
-      }
-      const client = new McpClient(config)
-      const available = await cachedToolDiscovery(organizationId, fresh.serverUrl, () => client.getServerTools(fresh.serverUrl))
-      return { slug, serverUrl: fresh.serverUrl, name: fresh.name, client, available }
-    } catch (error) {
-      apiLogger.warn('loadTools: org MCP connection tool discovery failed, skipping', {
-        connectionId: conn.id, connectionName: conn.name, serverUrl: conn.serverUrl,
-        organizationId, error: error instanceof Error ? error.message : String(error),
-      })
-      return null
-    }
-  }))
-
-  for (const entry of orgMcp) {
-    if (!entry) continue
-    for (const tool of entry.available.slice(0, 20)) {
-      discovered.push({
-        name: toolName(entry.slug, tool.name),
-        description: tool.description || `${tool.name} via ${entry.name}`,
-        inputSchema: tool.inputSchema || { type: 'object', properties: {} },
-        binding: { provider: entry.slug, serverUrl: entry.serverUrl, toolName: tool.name, client: entry.client },
-        isWrite: false,
-      })
-    }
-  }
-
-  // ---- Granola REST API (built-in; no Klavis / MCP server required) --------
-  // Gate: a Granola key must resolve for this org (saved key first, then the
-  // GRANOLA_API_KEY env fallback) AND the agent's providers list must include
-  // an entry matching /granola/i. A failure here must not abort the run or
-  // prevent other tools from loading.
-  const granolaConn = BUILTIN_CONNECTORS.find((c) => c.providerId === 'granola')!
-  if (isSelected(granolaConn, providers)) {
-    try {
-      const granolaKey = await getGranolaApiKey(organizationId)
-      if (granolaKey) {
-        const client = new GranolaToolClient(granolaKey.apiKey)
-        const serverUrl = 'https://public-api.granola.ai/v1'
-        for (const def of granolaTools()) {
-          discovered.push({
-            name: toolName('granola', def.name),
-            description: def.description,
-            inputSchema: def.inputSchema,
-            binding: { provider: 'granola', serverUrl, toolName: def.name, client },
-            isWrite: granolaConn.isWrite,
-          })
-        }
-      }
-    } catch (error) {
-      apiLogger.warn('loadTools: Granola tool setup failed, skipping provider', {
-        provider: 'granola',
-        organizationId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  // ---- Slack REST API (built-in; delivery integration) --------------------
-  // Gate: SLACK_BOT_TOKEN must be set AND the agent's providers list must
-  // include an entry matching /slack/i. A failure here must not abort the
-  // run or prevent other tools from loading.
-  const slackConn = BUILTIN_CONNECTORS.find((c) => c.kind === 'builtin' && c.providerId === 'slack')!
-  if (slackConn.available() && isSelected(slackConn, providers)) {
-    try {
-      const client = new SlackToolClient()
-      const serverUrl = 'https://slack.com/api'
-      for (const def of slackTools()) {
-        discovered.push({
-          name: toolName('slack', def.name),
-          description: def.description,
-          inputSchema: def.inputSchema,
-          binding: { provider: 'slack', serverUrl, toolName: def.name, client },
-          isWrite: slackConn.isWrite,
-        })
-      }
-    } catch (error) {
-      apiLogger.warn('loadTools: Slack tool setup failed, skipping provider', {
-        provider: 'slack',
-        organizationId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  // ---- HTTP API (built-in) --------------------------------------------------
-  // Lets an agent call external REST/JSON APIs mid-run. Always available (no
-  // credentials to configure); SSRF-guarded + response-capped in the client.
-  const httpConn = BUILTIN_CONNECTORS.find((c) => c.kind === 'builtin' && c.providerId === 'http')!
-  if (isSelected(httpConn, providers)) {
-    const client = new HttpToolClient()
-    for (const def of httpTools()) {
-      discovered.push({
-        name: toolName('http', def.name),
-        description: def.description,
-        inputSchema: def.inputSchema,
-        binding: { provider: 'http', serverUrl: '', toolName: def.name, client },
-        isWrite: httpConn.isWrite,
-      })
-    }
-  }
-
-  // ---- Email via Resend REST API (built-in; delivery integration) ----------
-  // Gate: RESEND_API_KEY must be set AND the agent's providers list must
-  // include an entry matching /email/i. A failure here must not abort the
-  // run or prevent other tools from loading.
-  const emailConn = BUILTIN_CONNECTORS.find((c) => c.providerId === 'email')!
-  if (emailConn.available() && isSelected(emailConn, providers)) {
-    try {
-      const client = new EmailToolClient()
-      const serverUrl = 'https://api.resend.com'
-      for (const def of emailTools()) {
-        discovered.push({
-          name: toolName('email', def.name),
-          description: def.description,
-          inputSchema: def.inputSchema,
-          binding: { provider: 'email', serverUrl, toolName: def.name, client },
-          isWrite: emailConn.isWrite,
-        })
-      }
-    } catch (error) {
-      apiLogger.warn('loadTools: Email tool setup failed, skipping provider', {
-        provider: 'email',
-        organizationId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
+  // ---- Native built-ins (Granola / Slack / HTTP / Email) --------------------
+  // Each gated on its availability AND a matching providers entry.
+  for (const group of await loadNativePlaneGroups(organizationId, { providers })) pushGroup(group)
 
   // ---- Nango delivery (outbound writes as the acting user) -----------------
   // Slack/Gmail/Salesforce writes through the org's Nango connections,
   // preferring the agent owner's own connection so messages arrive as the rep.
   // Gated per capability on both a matching providers entry and a resolvable
   // connection. Failures never abort the run.
-  if (nangoConfigured()) {
-    for (const spec of DELIVERY_TOOLS) {
-      const connector = nangoConnector(spec.capability)
-      if (!connector || !isSelected(connector, providers)) continue
-      try {
-        const connection = await resolveDeliveryConnection(organizationId, spec.capability, ownerUserId)
-        if (!connection) continue
-        const deliveryClient: McpToolClient = {
-          executeTool: (_serverUrl, _toolName, args) => spec.run(connection, args),
-        }
-        discovered.push({
-          name: toolName('nango', spec.name),
-          description: spec.description,
-          inputSchema: spec.inputSchema,
-          binding: { provider: connector.providerId, serverUrl: 'nango', toolName: spec.name, client: deliveryClient },
-          isWrite: connector.isWrite,
-        })
-      } catch (error) {
-        apiLogger.warn('loadTools: Nango delivery setup failed, skipping capability', {
-          capability: spec.capability,
-          organizationId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-    }
+  for (const group of await loadNangoPlaneGroups(organizationId, ownerUserId, { providers })) {
+    pushGroup(group, { namePrefix: 'nango' })
   }
 
   // Select which tools to expose: over the cap, rank by relevance to the

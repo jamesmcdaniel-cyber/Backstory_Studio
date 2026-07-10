@@ -75,12 +75,25 @@ export interface ResumeInfo {
   reply: string
 }
 
+export interface FlowResumeInfo {
+  flowRunId: string
+  flowId: string
+  organizationId: string
+  userId: string
+  reply: string
+  /** Non-manual runs executed the published graph; resume against the same. */
+  usePublished: boolean
+}
+
 export interface DecideResult {
   status: 'approved' | 'rejected'
   executed: boolean
   /** Set when a suspended run should be resumed with the decision result — the
    *  caller (approval route) triggers resumeAgentExecution to avoid a cycle. */
   resume?: ResumeInfo
+  /** Set when a FLOW run is paused on this approval (tool-step approval) — the
+   *  caller (approval route) triggers runFlowExecution to avoid a cycle. */
+  resumeFlow?: FlowResumeInfo
 }
 
 /** Resume info for a run suspended on this approval, or undefined if not suspended. */
@@ -88,6 +101,32 @@ async function resumeInfoFor(executionId: string, organizationId: string, reply:
   const execution = await prisma.agentExecution.findFirst({ where: { id: executionId, organizationId } })
   if (!execution || execution.status !== 'waiting_for_approval' || !execution.agentTaskId) return undefined
   return { executionId: execution.id, agentId: execution.agentTaskId, organizationId, userId: execution.userId, reply }
+}
+
+/** Resume info for a FLOW run paused on this approval (its tool step created
+ *  the approval with executionId = the FlowRun id), or undefined. */
+async function flowResumeInfoFor(
+  executionId: string,
+  organizationId: string,
+  reply: string,
+  fallbackUserId?: string,
+): Promise<FlowResumeInfo | undefined> {
+  const run = await prisma.flowRun.findFirst({
+    where: { id: executionId, organizationId, status: 'waiting' },
+    select: { id: true, flowId: true, userId: true, trigger: true },
+  })
+  if (!run) return undefined
+  const userId = run.userId ?? fallbackUserId
+  if (!userId) return undefined
+  const triggerType = (run.trigger as { type?: string } | null)?.type
+  return {
+    flowRunId: run.id,
+    flowId: run.flowId,
+    organizationId,
+    userId,
+    reply,
+    usePublished: Boolean(triggerType && triggerType !== 'manual'),
+  }
 }
 
 /**
@@ -124,12 +163,11 @@ export async function decideApproval(input: {
       tool: approval.tool,
       resourceId: approval.id,
     })
-    const resume = await resumeInfoFor(
-      approval.executionId,
-      input.organizationId,
-      JSON.stringify({ status: 'rejected', message: 'The approver rejected this action. Do not retry it; continue without it.' }),
-    )
-    return { status: 'rejected', executed: false, ...(resume ? { resume } : {}) }
+    const rejectedReply = JSON.stringify({ status: 'rejected', message: 'The approver rejected this action. Do not retry it; continue without it.' })
+    const resume = await resumeInfoFor(approval.executionId, input.organizationId, rejectedReply)
+    const requesterUserId = (approval.payload as { userId?: string } | null)?.userId
+    const resumeFlow = resume ? undefined : await flowResumeInfoFor(approval.executionId, input.organizationId, rejectedReply, requesterUserId)
+    return { status: 'rejected', executed: false, ...(resume ? { resume } : {}), ...(resumeFlow ? { resumeFlow } : {}) }
   }
 
   // Approve: atomically claim the pending request (pending→approving) so exactly
@@ -189,12 +227,10 @@ export async function decideApproval(input: {
     resourceId: approval.id,
     payload: payload.args,
   })
-  const resume = await resumeInfoFor(
-    approval.executionId,
-    input.organizationId,
-    JSON.stringify({ status: 'approved', executed, result: writeResult }),
-  )
-  return { status: 'approved', executed, ...(resume ? { resume } : {}) }
+  const approvedReply = JSON.stringify({ status: 'approved', executed, result: writeResult })
+  const resume = await resumeInfoFor(approval.executionId, input.organizationId, approvedReply)
+  const resumeFlow = resume ? undefined : await flowResumeInfoFor(approval.executionId, input.organizationId, approvedReply, payload.userId)
+  return { status: 'approved', executed, ...(resume ? { resume } : {}), ...(resumeFlow ? { resumeFlow } : {}) }
 }
 
 /** Report the settled decision for a request another caller already claimed. */

@@ -152,6 +152,18 @@ function includesQuery(text: string, query: string): boolean {
   return text.toLowerCase().includes(query)
 }
 
+// Logo slug for a catalog connection. MCP rows use their raw id (unchanged
+// behavior); plane-prefixed ids (native:slack, nango:gmail, people_ai:backstory,
+// klavis:<rowId> — see lib/flows/tool-connection-id) use the ref, except Klavis
+// whose ref is an opaque row id — its display name (e.g. "GitHub") slugifies to
+// a recognizable icon key instead.
+function connectionLogoSlug(connection: Connection): string {
+  const sep = connection.id.indexOf(':')
+  if (sep === -1) return connection.id
+  const plane = connection.id.slice(0, sep)
+  return plane === 'klavis' ? connection.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') : connection.id.slice(sep + 1)
+}
+
 export function FlowPicker({
   mode,
   agents,
@@ -227,7 +239,7 @@ export function FlowPicker({
       id: favoriteId,
       label: tool.name,
       description: tool.description || 'Run this connected action.',
-      logo: { slug: connection.id, name: connection.name },
+      logo: { slug: connectionLogoSlug(connection), name: connection.name },
       favoriteId,
       onSelect: () => {
         onPick('tool', { connectionId: connection.id, toolName: tool.name, label: tool.name })
@@ -252,7 +264,7 @@ export function FlowPicker({
     description: connection.tools.length
       ? `${connection.tools.length} available action${connection.tools.length === 1 ? '' : 's'}`
       : 'Choose an action from this connection.',
-    logo: { slug: connection.id, name: connection.name },
+    logo: { slug: connectionLogoSlug(connection), name: connection.name },
     chevron: true,
     onSelect: () => setDrill({ kind: 'connector', connection }),
   })

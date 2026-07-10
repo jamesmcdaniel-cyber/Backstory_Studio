@@ -3,8 +3,9 @@ import { runAgentExecution } from '@/features/agents/execute-agent'
 import { flowGraphSchema } from '@/lib/flows/graph'
 import { validateFlowGraph, validationErrorMessage } from '@/lib/flows/validate'
 import { loadFlowToolCatalog } from '@/lib/flows/tool-catalog'
-import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
-import { ensureFreshConnectionToken } from '@/lib/mcp/connection-token'
+import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
+import { resolveFlowToolExecutor } from '@/features/agents/tool-planes'
+import { createApproval, capabilityFromProvider } from '@/lib/agents/approval'
 import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
 import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
@@ -36,6 +37,18 @@ const HTTP_MAX_RESPONSE_CHARS = 50_000
 
 function jsonValue(value: unknown) {
   return JSON.parse(JSON.stringify(value ?? null))
+}
+
+// The approvals route resumes a flow paused on a tool-step approval with a
+// JSON reply of { status: 'approved'|'rejected', executed, result } (the same
+// payload injected into a resumed agent run). Anything else → null.
+function parseApprovalDecision(reply: string): { status?: string; executed?: boolean; result?: unknown } | null {
+  try {
+    const parsed = JSON.parse(reply)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as { status?: string; executed?: boolean; result?: unknown }) : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -228,19 +241,62 @@ export async function runFlowExecution(
     }
     try {
       if (node.kind === 'tool') {
+        // Tool steps route by connection-id prefix to the right tool plane
+        // (People.ai / Klavis / MCP / native / Nango) — the same planes and
+        // executors the agent runtime uses. See @/lib/flows/tool-connection-id.
         const connectionId = String(node.config.connectionId || '')
-        const conn = await prisma.mcpConnection.findFirst({
-          where: { id: connectionId, organizationId: job.organizationId, isActive: true },
-        })
-        if (!conn) throw new Error('The selected connection no longer exists — pick another in the step config.')
-        const fresh = await ensureFreshConnectionToken(conn)
-        const client = new McpClient(mcpConfigFromConnection(fresh))
-        const args = prepareToolArgs(node.config.args)
+        const { plane, ref } = parseFlowToolConnectionId(connectionId)
         const toolName = String(node.config.toolName)
+
+        // Re-entering a step paused on an approval: the reply carries the
+        // decision (decideApproval already executed an approved write, exactly
+        // as it does for agent runs) — consume it, never re-execute the write.
+        if (node.resume && typeof job.reply === 'string') {
+          const decision = parseApprovalDecision(job.reply)
+          if (decision?.status === 'approved') {
+            const output = decision.result ?? { status: 'approved', executed: decision.executed === true }
+            await finish({ status: 'succeeded', output })
+            return { output }
+          }
+          const message =
+            decision?.status === 'rejected'
+              ? 'The approver rejected this action.'
+              : 'The approval decision could not be interpreted — run the flow again.'
+          await finish({ status: 'failed', error: message })
+          return { error: message }
+        }
+
+        const args = prepareToolArgs(node.config.args)
+        const executor = await resolveFlowToolExecutor({
+          organizationId: job.organizationId,
+          userId: job.userId,
+          plane,
+          ref,
+          toolName,
+        })
+
+        // Approval gate — the same semantics as agent tool calls: an outbound
+        // write plane (Nango delivery) is queued for approval instead of
+        // executed, and the run pauses `waiting` (kind 'approval'). The
+        // decision resumes this run via the approvals route.
+        if (capabilityFromProvider(executor.provider)) {
+          const approval = await createApproval({
+            organizationId: job.organizationId,
+            executionId: run.id,
+            userId: job.userId,
+            provider: executor.provider,
+            tool: toolName,
+            args,
+          })
+          const question = `Approve ${toolName}?`
+          await finish({ status: 'waiting', output: { waiting: { kind: 'approval', approvalId: approval.id, question } } })
+          return { waiting: { status: 'waiting_for_approval', question } }
+        }
+
         const retries = flowActionRetries(node.config.retries)
         const timeoutMs = flowActionTimeoutMs(node.config.timeoutMs)
         const output = await runWithRetries(
-          async () => flowToolOutput(await client.executeTool(fresh.serverUrl, toolName, args)),
+          async () => flowToolOutput(await executor.execute(toolName, args)),
           {
             retries,
             timeoutMs,

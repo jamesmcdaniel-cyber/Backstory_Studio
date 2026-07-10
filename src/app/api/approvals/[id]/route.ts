@@ -4,6 +4,7 @@ import { withAuthenticatedApi, ApiError } from '@/lib/server/api-handler'
 import { apiLogger } from '@/lib/logger'
 import { decideApproval } from '@/lib/agents/approval'
 import { resumeAgentExecution } from '@/features/agents/execute-agent'
+import { runFlowExecution } from '@/features/flows/execute-flow'
 
 const schema = z.object({ decision: z.enum(['approve', 'reject']) })
 
@@ -14,7 +15,7 @@ export const POST = withAuthenticatedApi(async (request: NextRequest, auth) => {
   const id = request.nextUrl.pathname.split('/').pop() || ''
   const { decision } = schema.parse(await request.json())
   try {
-    const { resume, ...result } = await decideApproval({
+    const { resume, resumeFlow, ...result } = await decideApproval({
       approvalId: id,
       organizationId: auth.organizationId,
       deciderUserId: auth.dbUser.id,
@@ -25,6 +26,20 @@ export const POST = withAuthenticatedApi(async (request: NextRequest, auth) => {
     if (resume) {
       void resumeAgentExecution(resume).catch((error) =>
         apiLogger.error('approval resume failed', { executionId: resume.executionId, error: error instanceof Error ? error.message : String(error) }),
+      )
+    }
+    // A flow run paused on a tool-step approval resumes the same way: the
+    // decision payload rides in as the reply and the paused step consumes it.
+    if (resumeFlow) {
+      void runFlowExecution({
+        flowId: resumeFlow.flowId,
+        organizationId: resumeFlow.organizationId,
+        userId: resumeFlow.userId,
+        flowRunId: resumeFlow.flowRunId,
+        reply: resumeFlow.reply,
+        usePublished: resumeFlow.usePublished,
+      }).catch((error) =>
+        apiLogger.error('approval flow resume failed', { flowRunId: resumeFlow.flowRunId, error: error instanceof Error ? error.message : String(error) }),
       )
     }
     return { success: true, ...result }

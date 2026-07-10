@@ -10,9 +10,11 @@ export type StepOutcome = {
 }
 export type RunAgentResult = { output?: unknown; error?: string; waiting?: { status: string; question?: string } }
 export type RunAgentFn = (node: { id: string; agentId: string; input: string; resume?: boolean }) => Promise<RunAgentResult>
-// Deterministic (non-agent) steps: MCP tool calls and HTTP requests. `config`
+// Deterministic (non-agent) steps: tool calls and HTTP requests. `config`
 // arrives with every template already resolved against the flow context.
-export type RunActionFn = (node: { id: string; kind: 'tool' | 'http'; config: Record<string, unknown> }) => Promise<RunAgentResult>
+// `resume` marks the node a paused run is re-entering (e.g. after an approval
+// decision) so the adapter can consume the decision instead of re-executing.
+export type RunActionFn = (node: { id: string; kind: 'tool' | 'http'; config: Record<string, unknown>; resume?: boolean }) => Promise<RunAgentResult>
 export type InterpretResult = {
   status: 'succeeded' | 'failed' | 'waiting'
   steps: StepOutcome[]
@@ -222,8 +224,13 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
               timeoutMs: node.data.timeoutMs,
             }
       const res: RunAgentResult = opts.runAction
-        ? await opts.runAction({ id: node.id, kind: node.type, config })
+        ? await opts.runAction({ id: node.id, kind: node.type, config, resume: opts.resumeNodeId === node.id })
         : { error: `${node.type} steps are not supported in this runtime.` }
+      if (res.waiting) {
+        // A write tool queued for approval pauses the run, same as an agent step.
+        emit({ nodeId: node.id, status: 'waiting' })
+        return { kind: 'pause', nodeId: node.id, question: res.waiting.question }
+      }
       if (res.error) {
         emit({ nodeId: node.id, status: 'failed', error: res.error })
         if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
