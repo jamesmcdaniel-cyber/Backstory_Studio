@@ -57,6 +57,10 @@ class WorkerRuntime {
 
   async start(port = 3002) {
     await initSentry('worker')
+    // Reports and keeps running — does NOT exit, unlike uncaughtException
+    // below. A single unhandled rejection in one BullMQ job must not take
+    // down every other in-flight job on this worker; we'd rather report and
+    // stay up than let one bad promise kill the process.
     process.on('unhandledRejection', (reason) => {
       captureError(reason, { source: 'worker.unhandledRejection' })
     })
