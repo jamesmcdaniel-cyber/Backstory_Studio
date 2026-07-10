@@ -17,6 +17,7 @@ const STATUS_DOT: Record<StepStatus, string> = {
   waiting: 'bg-blue-500 animate-pulse',
   skipped: 'bg-gray-300',
   stopped: 'bg-slate-500',
+  resumed: 'bg-gray-300',
 }
 
 const STATUS_TEXT: Record<StepStatus, string> = {
@@ -27,6 +28,7 @@ const STATUS_TEXT: Record<StepStatus, string> = {
   waiting: 'text-blue-600',
   skipped: 'text-gray-400',
   stopped: 'text-slate-500',
+  resumed: 'text-gray-400',
 }
 
 export type TestStep = { nodeId: string; status: StepStatus }

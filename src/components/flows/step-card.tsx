@@ -53,7 +53,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped'
+export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped' | 'resumed'
 
 type Agent = { id: string; title: string }
 type TriggerData = { type?: 'manual' | 'schedule' | 'webhook' | 'signal'; inputFields?: TriggerInputField[]; input?: string }
@@ -96,6 +96,7 @@ const STATUS_DOT: Record<StepStatus, string> = {
   waiting: 'bg-blue-500 animate-pulse',
   skipped: 'bg-gray-300',
   stopped: 'bg-slate-500',
+  resumed: 'bg-gray-300',
 }
 
 const INPUT_TYPES: {

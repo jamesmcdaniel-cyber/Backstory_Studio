@@ -10,7 +10,16 @@ export function deriveRunWaiting(
   steps: { nodeId: string; status: string; output?: unknown }[],
 ): RunWaiting | null {
   if (status !== 'waiting') return null
-  const step = steps.find((s) => s.status === 'waiting')
+  // Steps arrive ordered by `order` asc; the LAST waiting step is the live
+  // pause. A resume resolves old waiting rows, but if a stale one survives
+  // (legacy runs) the latest pause must still win so reply UIs target it.
+  let step: (typeof steps)[number] | undefined
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].status === 'waiting') {
+      step = steps[i]
+      break
+    }
+  }
   if (!step) return null
   const info = (step.output as { waiting?: { kind?: string; question?: string } } | null | undefined)?.waiting
   return {

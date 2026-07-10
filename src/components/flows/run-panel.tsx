@@ -36,6 +36,7 @@ const STATUS_TEXT: Record<string, string> = {
   skipped: 'text-gray-400',
   stopped: 'text-slate-500',
   queued: 'text-gray-400',
+  resumed: 'text-gray-400',
 }
 
 function preview(value: unknown): string {

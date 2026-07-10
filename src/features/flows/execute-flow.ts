@@ -103,6 +103,7 @@ export async function runFlowExecution(
   const completed: Record<string, unknown> = {}
   let resumeNodeId: string | undefined
   let resumeExecutionId: string | undefined
+  let order = 0
   if (resuming) {
     const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
     for (const step of priorSteps) {
@@ -112,10 +113,18 @@ export async function runFlowExecution(
         resumeExecutionId = step.agentExecutionId ?? undefined
       }
     }
+    // Resuming creates NEW step rows for the re-run node — resolve every stale
+    // waiting row now so it can never shadow a later pause in deriveRunWaiting,
+    // and continue the order counter after all prior rows so new steps always
+    // sort after old ones.
+    await prisma.flowRunStep.updateMany({
+      where: { flowRunId: run.id, status: 'waiting' },
+      data: { status: 'resumed', finishedAt: new Date() },
+    })
+    if (priorSteps.length) order = Math.max(...priorSteps.map((step) => step.order)) + 1
   }
 
   const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
-  let order = 0
   // Container (condition/loop/parallel/stop) outcomes are reported via onStep;
   // persist them so runs are fully inspectable. Agent/tool/http steps are
   // persisted by their adapters because they need started/running rows.
