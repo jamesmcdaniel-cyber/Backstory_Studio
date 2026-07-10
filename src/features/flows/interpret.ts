@@ -1,4 +1,4 @@
-import type { FlowGraph, FlowNode, FlowEdge } from '@/lib/flows/graph'
+import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/graph'
 import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from './context'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
@@ -107,6 +107,127 @@ function loopItems(value: unknown): unknown[] {
   return [trimmed]
 }
 
+// ── Variable steps: a typed symbol table shared across the whole run ────────
+
+const VARIABLE_DEFAULTS: Record<VariableType, () => unknown> = {
+  boolean: () => false,
+  integer: () => 0,
+  float: () => 0,
+  string: () => '',
+  object: () => ({}),
+  array: () => [],
+}
+
+const asText = (value: unknown): string => (typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value))
+
+const safeJson = (value: string): unknown => {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
+}
+
+/** The type family a variable's current runtime value belongs to. */
+function runtimeTypeOf(value: unknown): VariableType {
+  if (typeof value === 'boolean') return 'boolean'
+  if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'float'
+  if (Array.isArray(value)) return 'array'
+  if (value && typeof value === 'object') return 'object'
+  return 'string'
+}
+
+/** Coerce a resolved value to a variable type. Blank values take the type's default. */
+function coerceVariableValue(name: string, varType: VariableType, resolved: unknown): { value: unknown } | { error: string } {
+  const text = typeof resolved === 'string' ? resolved.trim() : undefined
+  if (resolved === undefined || text === '') return { value: VARIABLE_DEFAULTS[varType]() }
+  switch (varType) {
+    case 'boolean': {
+      if (typeof resolved === 'boolean') return { value: resolved }
+      if (text?.toLowerCase() === 'true') return { value: true }
+      if (text?.toLowerCase() === 'false') return { value: false }
+      return { error: `Variable "${name}" needs true or false — "${asText(resolved)}" isn't either.` }
+    }
+    case 'integer': {
+      const n = typeof resolved === 'number' ? resolved : Number(text)
+      if (Number.isInteger(n)) return { value: n }
+      return { error: `Variable "${name}" needs a whole number — "${asText(resolved)}" isn't one.` }
+    }
+    case 'float': {
+      const n = typeof resolved === 'number' ? resolved : Number(text)
+      if (Number.isFinite(n)) return { value: n }
+      return { error: `Variable "${name}" needs a number — "${asText(resolved)}" isn't one.` }
+    }
+    case 'string':
+      return { value: typeof resolved === 'string' ? resolved : asText(resolved) }
+    case 'object': {
+      const parsed = typeof resolved === 'string' ? safeJson(text ?? '') : resolved
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return { value: parsed }
+      return { error: `Variable "${name}" needs a JSON object value.` }
+    }
+    case 'array': {
+      const parsed = typeof resolved === 'string' ? safeJson(text ?? '') : resolved
+      if (Array.isArray(parsed)) return { value: parsed }
+      return { error: `Variable "${name}" needs a JSON array value.` }
+    }
+  }
+}
+
+/**
+ * Apply one variable step to the run's symbol table. Initialize coerces to the
+ * declared type; set coerces to the variable's current type family (so a var
+ * that started numeric stays numeric and JSON parses into objects/arrays);
+ * increment/decrement take an optional templated amount (default 1); appends
+ * require the matching array/string shape. Returns the variable's new value —
+ * the step's output — or a plain-english error.
+ */
+function applyVariableOp(node: Extract<FlowNode, { type: 'variable' }>, ctx: FlowContext): { output: unknown } | { error: string } {
+  const variables = (ctx.variables ??= {})
+  const name = node.data.name.trim()
+  if (!name) return { error: 'This variable step needs a name.' }
+  if (node.data.op === 'initialize') {
+    const resolved = node.data.value?.trim() ? resolveTemplateValue(node.data.value, ctx) : undefined
+    const coerced = coerceVariableValue(name, node.data.varType ?? 'string', resolved)
+    if ('error' in coerced) return coerced
+    variables[name] = coerced.value
+    return { output: coerced.value }
+  }
+  if (!Object.prototype.hasOwnProperty.call(variables, name)) {
+    return { error: `Variable "${name}" hasn't been initialized yet.` }
+  }
+  const current = variables[name]
+  if (node.data.op === 'set') {
+    const coerced = coerceVariableValue(name, runtimeTypeOf(current), resolveTemplateValue(node.data.value ?? '', ctx))
+    if ('error' in coerced) return coerced
+    variables[name] = coerced.value
+    return { output: coerced.value }
+  }
+  if (node.data.op === 'increment' || node.data.op === 'decrement') {
+    const verb = node.data.op === 'increment' ? 'incremented' : 'decremented'
+    if (typeof current !== 'number') return { error: `Variable "${name}" isn't a number, so it can't be ${verb}.` }
+    let amount = 1
+    if (node.data.value?.trim()) {
+      const resolvedAmount = resolveTemplate(node.data.value, ctx).trim()
+      amount = Number(resolvedAmount)
+      if (!Number.isFinite(amount)) return { error: `Variable "${name}" needs a number amount — "${resolvedAmount}" isn't one.` }
+    }
+    const next = node.data.op === 'increment' ? current + amount : current - amount
+    variables[name] = next
+    return { output: next }
+  }
+  if (node.data.op === 'appendArray') {
+    if (!Array.isArray(current)) return { error: `Variable "${name}" isn't an array, so nothing can be appended.` }
+    const next = [...current, resolveTemplateValue(node.data.value ?? '', ctx)]
+    variables[name] = next
+    return { output: next }
+  }
+  // appendString
+  if (typeof current !== 'string') return { error: `Variable "${name}" isn't text, so nothing can be appended.` }
+  const next = current + resolveTemplate(node.data.value ?? '', ctx)
+  variables[name] = next
+  return { output: next }
+}
+
 function resolveConfigValue(value: string | undefined, ctx: FlowContext): unknown {
   if (!value?.trim()) return undefined
   try {
@@ -180,6 +301,13 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (opts.completed && Object.prototype.hasOwnProperty.call(opts.completed, node.id)) {
       const output = opts.completed[node.id]
       ctx.step[node.id] = { output }
+      // Replayed variable steps re-apply their stored result so the symbol
+      // table is reconstructed on resume: the map itself is never persisted,
+      // but each step's output IS the variable's value after that step, and
+      // replay follows execution order, so the last write per name wins.
+      if (node.type === 'variable' && node.data.name.trim()) {
+        ;(ctx.variables ??= {})[node.data.name.trim()] = output
+      }
       emit({ nodeId: node.id, status: 'skipped', output })
       return { kind: 'ok', output }
     }
@@ -213,6 +341,17 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'succeeded', output })
       return { kind: 'ok', output }
+    }
+
+    if (node.type === 'variable') {
+      const res = applyVariableOp(node, ctx)
+      if ('error' in res) {
+        emit({ nodeId: node.id, status: 'failed', error: res.error })
+        return { kind: 'fail', error: res.error }
+      }
+      ctx.step[node.id] = { output: res.output }
+      emit({ nodeId: node.id, status: 'succeeded', output: res.output })
+      return { kind: 'ok', output: res.output }
     }
 
     if (node.type === 'filter') {
@@ -318,7 +457,9 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'loop') {
       const items = loopItems(resolveTemplate(node.data.over, ctx)).slice(0, maxLoop)
       const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item, index) => {
-        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length } }
+        // `variables` is shared by reference: writes inside the body persist
+        // past the loop (one flow-global symbol table, MS parity).
+        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables }
         return execBody(node.data.body, itemCtx)
       })
       // Propagate the first hard control (stop / fail / pause); a 'drop' (filter)
@@ -337,7 +478,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'parallel') {
       const results = await Promise.all(
         node.data.branches.map(async (branch) => {
-          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop }
+          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables }
           const res = await execBody(branch, branchCtx)
           return { key: branch[0] ?? node.id, res }
         }),
@@ -384,7 +525,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     ),
   )
 
-  const ctx: FlowContext = { trigger: { input }, step: {} }
+  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {} }
   let lastOutput: unknown = input
   let current: FlowNode | undefined = byId.get('trigger') ?? graph.nodes[0]
 

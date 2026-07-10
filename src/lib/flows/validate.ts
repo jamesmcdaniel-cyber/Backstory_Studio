@@ -49,6 +49,21 @@ function nodeLabel(node: FlowNode | undefined) {
       return 'Filter'
     case 'stop':
       return 'Stop'
+    case 'variable':
+      switch (node.data.op) {
+        case 'initialize':
+          return 'Initialize variable'
+        case 'set':
+          return 'Set variable'
+        case 'increment':
+          return 'Increment variable'
+        case 'decrement':
+          return 'Decrement variable'
+        case 'appendArray':
+          return 'Append to array variable'
+        case 'appendString':
+          return 'Append to string variable'
+      }
   }
 }
 
@@ -197,7 +212,8 @@ function isAgentStructured(agent: Extract<FlowNode, { type: 'agent' }> | undefin
   return false
 }
 
-function reachableNodeIds(graph: FlowGraph): Set<string> {
+/** Nodes reachable from `startId` via edges + container membership (inclusive). */
+function reachableFrom(graph: FlowGraph, startId: string): Set<string> {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]))
   const seen = new Set<string>()
   const visit = (id: string) => {
@@ -209,8 +225,61 @@ function reachableNodeIds(graph: FlowGraph): Set<string> {
     if (node.type === 'parallel') node.data.branches.flat().forEach(visit)
     graph.edges.filter((edge) => edge.source === id).forEach((edge) => visit(edge.target))
   }
-  visit('trigger')
+  visit(startId)
   return seen
+}
+
+function reachableNodeIds(graph: FlowGraph): Set<string> {
+  return reachableFrom(graph, 'trigger')
+}
+
+/**
+ * Variable step checks. "Initialized earlier" is validated cheaply: the graph
+ * has no full topological order helper, so a mutation is flagged when NO
+ * initialize of its name exists, or when every initialize sits strictly
+ * downstream of it (reachable from the mutation — definitely later). An
+ * initialize in a sibling branch can't be ordered cheaply and is allowed;
+ * the interpreter fails those cleanly at runtime ("hasn't been initialized").
+ */
+function validateVariableNodes(graph: FlowGraph, issues: FlowValidationIssue[]) {
+  const variableNodes = graph.nodes.filter((node): node is Extract<FlowNode, { type: 'variable' }> => node.type === 'variable')
+  if (!variableNodes.length) return
+  const initializers = variableNodes.filter((node) => node.data.op === 'initialize')
+  const initNames = initializers.map((node) => node.data.name.trim()).filter(Boolean)
+  for (const name of unique(initNames)) {
+    if (initNames.filter((entry) => entry === name).length > 1) {
+      const dupes = initializers.filter((node) => node.data.name.trim() === name)
+      for (const dupe of dupes.slice(1)) {
+        add(issues, 'error', 'DUPLICATE_VARIABLE', `Two steps initialize the variable "${name}" — give each its own name.`, dupe.id)
+      }
+    }
+  }
+  for (const node of variableNodes) {
+    const name = node.data.name.trim()
+    if (!name) {
+      add(issues, 'error', 'MISSING_VARIABLE_NAME', `${nodeLabel(node)} needs a variable name.`, node.id)
+      continue
+    }
+    if (['set', 'appendArray', 'appendString'].includes(node.data.op) && !node.data.value?.trim()) {
+      add(issues, 'error', 'MISSING_VARIABLE_VALUE', `${nodeLabel(node)} needs a value.`, node.id)
+    }
+    if (node.data.op === 'initialize') continue
+    const declarations = initializers.filter((init) => init.data.name.trim() === name)
+    const downstream = reachableFrom(graph, node.id)
+    // Not downstream of the mutation = earlier on its path, or in a sibling
+    // branch we can't cheaply order (allowed; the interpreter fails cleanly).
+    const earlier = declarations.filter((init) => !downstream.has(init.id))
+    if (!earlier.length) {
+      add(issues, 'error', 'UNINITIALIZED_VARIABLE', `${nodeLabel(node)} needs the variable "${name}" to be initialized earlier in the flow.`, node.id)
+      continue
+    }
+    if (node.data.op === 'increment' || node.data.op === 'decrement') {
+      const numeric = earlier.some((init) => ['integer', 'float'].includes(init.data.varType ?? 'string'))
+      if (!numeric) {
+        add(issues, 'error', 'VARIABLE_NOT_NUMERIC', `${nodeLabel(node)} needs "${name}" to be a number variable.`, node.id)
+      }
+    }
+  }
 }
 
 export function validateFlowGraph(graph: FlowGraph, context: FlowValidationContext = {}): FlowValidationResult {
@@ -361,6 +430,8 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
       }
     }
   }
+
+  validateVariableNodes(graph, issues)
 
   // Approval-gated writes (the Nango delivery plane) pause the whole run on
   // ONE approval at a time. Inside a loop/parallel every item needs its own

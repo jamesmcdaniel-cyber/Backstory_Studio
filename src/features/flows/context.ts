@@ -10,11 +10,25 @@ export type FlowContext = {
   item?: unknown
   // Present inside a loop body: `{{loop.index}}` (0-based) + total count.
   loop?: { index: number; count: number }
+  // The flow's typed symbol table, written by variable steps and read via
+  // `{{var.<name>}}` tokens. One shared map per run (loop/parallel bodies
+  // mutate the same object so writes persist past the container).
+  variables?: Record<string, unknown>
 }
 
 /** Read a dot-path off the context (e.g. 'trigger.input', 'step.n1.output.score', 'item'). */
 export function readPath(ctx: FlowContext, path: string): unknown {
   const parts = path.trim().split('.')
+  // `var.<name>` roots into the variables map; deeper parts walk the value.
+  if (parts[0] === 'var') {
+    parts.shift()
+    let cursor: unknown = ctx.variables ?? {}
+    for (const part of parts) {
+      if (cursor == null || typeof cursor !== 'object') return undefined
+      cursor = (cursor as Record<string, unknown>)[part]
+    }
+    return cursor
+  }
   let cursor: unknown = ctx
   for (const part of parts) {
     if (cursor == null || typeof cursor !== 'object') return undefined

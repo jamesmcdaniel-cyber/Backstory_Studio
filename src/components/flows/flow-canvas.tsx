@@ -207,6 +207,9 @@ export function FlowCanvas({
         return node.data.label || 'Filter'
       case 'switch':
         return node.data.label || 'Switch'
+      // Neutral placeholder title; Task 4 adds the per-op treatment.
+      case 'variable':
+        return node.data.label || 'Variable'
     }
   }
 

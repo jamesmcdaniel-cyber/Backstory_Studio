@@ -73,6 +73,8 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   transform: SlidersHorizontal,
   filter: Filter,
   switch: Split,
+  // Placeholder pending Task 4's dedicated Variables treatment.
+  variable: SlidersHorizontal,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -87,6 +89,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   transform: 'bg-violet-500 text-white',
   filter: 'bg-lime-600 text-white',
   switch: 'bg-fuchsia-600 text-white',
+  variable: 'bg-purple-600 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {

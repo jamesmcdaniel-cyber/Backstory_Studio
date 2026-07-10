@@ -639,3 +639,249 @@ test('agent hard errors still retry up to the configured budget', async () => {
   assert.equal(calls, 2)
   assert.equal(result.output, 'recovered')
 })
+
+// ── Variables: a typed symbol table threaded through the run ──────────────
+
+test('variable initialize + set + read across steps', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'greeting', varType: 'string', value: 'hello' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'greeting', value: 'hi {{trigger.input}}' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'e', input: '{{var.greeting}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, 'Acme', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'hi Acme') // the agent read {{var.greeting}} after set
+  // Step output mirrors the new variable value, so {{step.<id>.output}} works too.
+  assert.equal(result.steps.find((s) => s.nodeId === 'v1')?.output, 'hello')
+  assert.equal(result.steps.find((s) => s.nodeId === 'v2')?.output, 'hi Acme')
+})
+
+test('variable increment defaults to 1 and honors an explicit amount', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '10' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'count' } },
+      { id: 'v3', type: 'variable', data: { op: 'increment', name: 'count', value: '5' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'e', input: 'count={{var.count}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'v3' },
+      { id: 'e3', source: 'v3', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'v2')?.output, 11)
+  assert.equal(result.steps.find((s) => s.nodeId === 'v3')?.output, 16)
+  assert.equal(result.output, 'count=16')
+})
+
+test('variable decrement subtracts the amount', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '10' } },
+      { id: 'v2', type: 'variable', data: { op: 'decrement', name: 'count', value: '3' } },
+      { id: 'v3', type: 'variable', data: { op: 'decrement', name: 'count' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'v3' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: async () => ({ output: '' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'v2')?.output, 7)
+  assert.equal(result.steps.find((s) => s.nodeId === 'v3')?.output, 6)
+})
+
+test('variable appendArray pushes onto an initialized array', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'tags', varType: 'array', value: '["a"]' } },
+      { id: 'v2', type: 'variable', data: { op: 'appendArray', name: 'tags', value: 'b' } },
+      { id: 'v3', type: 'variable', data: { op: 'appendArray', name: 'tags', value: '{{trigger.input}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'v3' },
+    ],
+  }
+  const result = await interpretFlow(graph, { name: 'Acme' }, { runAgent: async () => ({ output: '' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.steps.find((s) => s.nodeId === 'v3')?.output, ['a', 'b', { name: 'Acme' }])
+})
+
+test('variable appendString concatenates onto an initialized string', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'log', value: 'start' } },
+      { id: 'v2', type: 'variable', data: { op: 'appendString', name: 'log', value: ' then {{trigger.input}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = await interpretFlow(graph, 'Acme', { runAgent: async () => ({ output: '' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'v2')?.output, 'start then Acme')
+})
+
+test('variable set resolves a templated value referencing a prior step', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'score', varType: 'integer', value: '0' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'score', input: 'x' } },
+      { id: 'v2', type: 'variable', data: { op: 'set', name: 'score', value: '{{step.n1.output.score}}' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'e', input: 'score={{var.score}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'n1' },
+      { id: 'e2', source: 'n1', target: 'v2' },
+      { id: 'e3', source: 'v2', target: 'n2' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.agentId === 'score' ? '{"score":91}' : n.input })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'v2')?.output, 91) // stays numeric
+  assert.equal(result.output, 'score=91')
+})
+
+test('variable initialize integer with a non-numeric value fails with a plain message', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: 'abc' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'v1' }],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: async () => ({ output: '' }) })
+  assert.equal(result.status, 'failed')
+  const step = result.steps.find((s) => s.nodeId === 'v1')
+  assert.equal(step?.status, 'failed')
+  assert.match(step?.error ?? '', /whole number/)
+  assert.match(step?.error ?? '', /"abc"/)
+})
+
+test('variable increment on a string variable fails', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'greeting', varType: 'string', value: 'hi' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'greeting' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: async () => ({ output: '' }) })
+  assert.equal(result.status, 'failed')
+  assert.match(result.steps.find((s) => s.nodeId === 'v2')?.error ?? '', /isn't a number/)
+})
+
+test('variable ops on a never-initialized name fail cleanly', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'set', name: 'ghost', value: 'x' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'v1' }],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: async () => ({ output: '' }) })
+  assert.equal(result.status, 'failed')
+  assert.match(result.steps.find((s) => s.nodeId === 'v1')?.error ?? '', /hasn't been initialized/)
+})
+
+test('{{var.x}} resolves inside an agent step input, including object fields', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'deal', varType: 'object', value: '{"name":"Acme","stage":"closed"}' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'e', input: 'deal {{var.deal.name}} is {{var.deal.stage}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.output, 'deal Acme is closed')
+})
+
+test('variables mutated inside a loop body persist after the loop', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '0' } },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['inc'] } },
+      { id: 'inc', type: 'variable', data: { op: 'increment', name: 'count' } },
+      { id: 'n1', type: 'agent', data: { agentId: 'e', input: 'count={{var.count}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'loop' },
+      { id: 'e2', source: 'loop', target: 'n1' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, ['a', 'b', 'c'], { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'count=3')
+})
+
+test('resume replays completed variable steps back into the symbol table', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '1' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'count' } },
+      { id: 'ask', type: 'agent', data: { agentId: 'ask', input: 'x' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'e', input: 'count={{var.count}} reply={{step.ask.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'ask' },
+      { id: 'e3', source: 'ask', target: 'n2' },
+    ],
+  }
+  const ran: string[] = []
+  const runAgent: RunAgentFn = async (n) => {
+    ran.push(n.id)
+    if (n.id === 'ask') return { output: n.resume ? 'ANSWERED' : 'ignored' }
+    return { output: n.input }
+  }
+  // Resume: v1/v2 replay from stored outputs (they are NOT re-executed), so the
+  // variables map must be reconstructed from those outputs for n2 to read.
+  const result = await interpretFlow(graph, '', {
+    runAgent,
+    completed: { v1: 1, v2: 2 },
+    resumeNodeId: 'ask',
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(ran, ['ask', 'n2'])
+  assert.equal(result.output, 'count=2 reply=ANSWERED')
+})

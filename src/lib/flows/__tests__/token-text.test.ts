@@ -53,3 +53,8 @@ test('stepLabelsOf resolves agent titles and typed fallbacks', () => {
   assert.equal(labels[h.nodeId], 'Http')
   assert.equal('trigger' in labels, false)
 })
+
+test('friendlyTokenLabel humanizes variable tokens', () => {
+  assert.equal(friendlyTokenLabel('var.deal_count', ctx), 'Variable › deal_count')
+  assert.equal(friendlyTokenLabel('var.deal.stage', ctx), 'Variable › deal › stage')
+})

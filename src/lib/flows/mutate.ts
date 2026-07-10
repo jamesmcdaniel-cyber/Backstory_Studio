@@ -38,6 +38,8 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
       return { match: 'all', clauses: [{ left: '', op: 'contains', right: '' }] }
     case 'switch':
       return { cases: [{ id: 'case1', left: '', op: 'contains', right: '' }] }
+    case 'variable':
+      return { op: 'initialize', name: '', varType: 'string', value: '' }
     case 'trigger':
       return { trigger: { type: 'manual' } }
   }

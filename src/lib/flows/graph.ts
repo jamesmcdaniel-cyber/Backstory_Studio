@@ -163,8 +163,30 @@ const switchNode = z.object({
   }),
 })
 
+/** Operations a variable step can perform on the flow's symbol table. */
+export const VARIABLE_OPS = ['initialize', 'set', 'increment', 'decrement', 'appendArray', 'appendString'] as const
+export type VariableOp = (typeof VARIABLE_OPS)[number]
+/** Types an Initialize variable step can declare (MS Copilot Studio parity). */
+export const VARIABLE_TYPES = ['boolean', 'integer', 'float', 'string', 'object', 'array'] as const
+export type VariableType = (typeof VARIABLE_TYPES)[number]
+// Typed symbol table step: initialize declares a variable (varType applies to
+// initialize only, default 'string'); the other ops mutate one initialized
+// earlier. `value` is templated; readable anywhere via {{var.<name>}}.
+const variableNode = z.object({
+  id: z.string(),
+  type: z.literal('variable'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    op: z.enum(VARIABLE_OPS),
+    name: z.string(),
+    varType: z.enum(VARIABLE_TYPES).optional(),
+    value: z.string().optional(),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

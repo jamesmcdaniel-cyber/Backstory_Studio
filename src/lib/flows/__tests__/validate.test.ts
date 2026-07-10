@@ -266,3 +266,89 @@ test('allows a non-approval (mcp) tool inside a loop body', () => {
   assert.equal(result.errors.some((entry) => entry.code === 'APPROVAL_IN_CONTAINER'), false)
   assert.equal(result.ok, true)
 })
+
+test('validateFlowGraph accepts a well-formed variable flow', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count', varType: 'integer', value: '0' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'count' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.deepEqual(result.errors, [])
+})
+
+test('validateFlowGraph requires a variable name and values for set/append', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: '' } },
+      { id: 'v2', type: 'variable', data: { op: 'initialize', name: 'log' } },
+      { id: 'v3', type: 'variable', data: { op: 'appendString', name: 'log', value: '' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'v3' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((issue) => issue.code === 'MISSING_VARIABLE_NAME' && issue.nodeId === 'v1'))
+  assert.ok(result.errors.some((issue) => issue.code === 'MISSING_VARIABLE_VALUE' && issue.nodeId === 'v3'))
+})
+
+test('validateFlowGraph rejects duplicate variable initializations', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'count' } },
+      { id: 'v2', type: 'variable', data: { op: 'initialize', name: 'count' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((issue) => issue.code === 'DUPLICATE_VARIABLE'))
+})
+
+test('validateFlowGraph rejects mutations of variables that are never or only later initialized', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'set', name: 'ghost', value: 'x' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'late' } },
+      { id: 'v3', type: 'variable', data: { op: 'initialize', name: 'late', varType: 'integer' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+      { id: 'e2', source: 'v2', target: 'v3' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((issue) => issue.code === 'UNINITIALIZED_VARIABLE' && issue.nodeId === 'v1'))
+  assert.ok(result.errors.some((issue) => issue.code === 'UNINITIALIZED_VARIABLE' && issue.nodeId === 'v2'))
+})
+
+test('validateFlowGraph rejects increment/decrement on non-numeric variables', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'v1', type: 'variable', data: { op: 'initialize', name: 'greeting', varType: 'string' } },
+      { id: 'v2', type: 'variable', data: { op: 'increment', name: 'greeting' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'v1' },
+      { id: 'e1', source: 'v1', target: 'v2' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((issue) => issue.code === 'VARIABLE_NOT_NUMERIC' && issue.nodeId === 'v2'))
+})
