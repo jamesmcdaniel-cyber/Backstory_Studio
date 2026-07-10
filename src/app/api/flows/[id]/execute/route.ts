@@ -21,6 +21,16 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
   const body = await request.json().catch(() => ({}))
   const parsed = z.object({ input: z.unknown().optional(), flowRunId: z.string().optional(), reply: z.string().optional() }).parse(body)
+  // Resume hardening: the run being resumed must belong to THIS flow and org —
+  // otherwise a crafted flowRunId could re-interpret another flow's run
+  // against this flow's graph.
+  if (parsed.flowRunId) {
+    const owned = await prisma.flowRun.findFirst({
+      where: { id: parsed.flowRunId, flowId: flow.id, organizationId: auth.organizationId },
+      select: { id: true },
+    })
+    if (!owned) throw new ApiError('Run not found', 404, 'NOT_FOUND')
+  }
   const run = await runFlowExecution({
     flowId: id,
     organizationId: auth.organizationId,

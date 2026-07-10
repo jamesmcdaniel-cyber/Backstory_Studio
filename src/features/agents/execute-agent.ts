@@ -693,6 +693,16 @@ export async function runAgentExecution(data: AgentExecutionJob) {
     if (!waiting || !pending || !Array.isArray(queuedExecution.transcript)) {
       throw new Error('Execution is not waiting for input or approval')
     }
+    // Atomic claim (same pattern as approval decide): two concurrent replies —
+    // e.g. builder and Activity page both open — must not both resume. Exactly
+    // one caller flips waiting_* -> running; the loser errors cleanly here.
+    const claimed = await prisma.agentExecution.updateMany({
+      where: { id: queuedExecution.id, status: { in: ['waiting_for_input', 'waiting_for_approval'] } },
+      data: { status: 'running' },
+    })
+    if (claimed.count === 0) {
+      throw new Error('Execution is not waiting for input or approval')
+    }
     // Normalize to the provider-neutral IR so a run persisted in a native shape
     // (pre-IR, or by the other provider) resumes on whatever provider routes now.
     transcript = coerceToIR(queuedExecution.transcript as unknown[])

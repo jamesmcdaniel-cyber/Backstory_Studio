@@ -86,10 +86,14 @@ function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; w
             <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Input</p>
             <pre className="max-h-40 overflow-auto rounded bg-muted px-2 py-1.5 text-xs">{preview((step.input as { prompt?: unknown })?.prompt ?? step.input)}</pre>
           </div>
-          <div>
-            <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Output</p>
-            <OutputView value={step.output} />
-          </div>
+          {/* A waiting step's stored output is the internal pause record — the
+              banner above already explains the pause in plain english. */}
+          {step.status !== 'waiting' && (
+            <div>
+              <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Output</p>
+              <OutputView value={step.output} />
+            </div>
+          )}
         </div>
       )}
     </div>
