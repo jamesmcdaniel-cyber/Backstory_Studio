@@ -65,11 +65,20 @@ if (TEST_DB) {
     // graph) since the run paused.
     await prisma.flow.update({ where: { id: ids.flow }, data: { graph: currentGraph, publishedGraph: currentGraph } })
 
+    // Capture the stale startedAt before resume so we can verify it was refreshed.
+    const before = await prisma.flowRun.findUnique({ where: { id: run.id } })
+    assert.ok(before?.startedAt)
+    const staleStartedAt = before.startedAt
+
     const result = await runFlowExecution({ flowId: ids.flow, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'go' })
     assert.equal(result.flowRunId, run.id)
 
     const claimed = await prisma.flowRun.findUnique({ where: { id: run.id } })
     assert.notEqual(claimed.status, 'waiting')
+    // Resume claim must refresh startedAt so reapStuckFlowRuns does not mark
+    // the run failed the instant it resumes after a long approval pause.
+    assert.ok(claimed?.startedAt)
+    assert.ok(claimed.startedAt > staleStartedAt, 'startedAt must be refreshed on resume')
 
     const steps: any[] = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id } })
     assert.ok(steps.some((step) => step.nodeId === 'legacy'), 'the snapshot\'s step node must have actually executed')
