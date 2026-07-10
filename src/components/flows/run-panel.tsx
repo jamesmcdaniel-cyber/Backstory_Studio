@@ -26,8 +26,19 @@ export type FlowRunDetail = {
   input?: unknown
   output?: unknown
   error?: string | null
+  trigger?: unknown
   waiting?: { nodeId: string; kind: 'input' | 'approval'; question?: string } | null
   steps: RunStep[]
+}
+
+/** Whether the run replayed the last successful run's input (execute-flow marks it). */
+function reusedInputOf(trigger: unknown): boolean {
+  return Boolean(
+    trigger &&
+    typeof trigger === 'object' &&
+    !Array.isArray(trigger) &&
+    (trigger as { reusedInput?: unknown }).reusedInput === true,
+  )
 }
 
 const STATUS_TEXT: Record<string, string> = {
@@ -201,6 +212,9 @@ export function RunPanel({
           <>
             <div className="border-b border-border px-3 py-2">
               <span className={cn('text-xs font-semibold capitalize', STATUS_TEXT[selected.status])}>{selected.status === 'running' ? <TypewriterStatus /> : selected.status}</span>
+              {reusedInputOf(selected.trigger) && (
+                <p className="mt-1 text-xs text-muted-foreground">Using the input from the last successful run.</p>
+              )}
               {selected.error && <p className="mt-1 text-xs text-red-600">{selected.error}</p>}
             </div>
             {selected.status === 'waiting' && selected.waiting && (

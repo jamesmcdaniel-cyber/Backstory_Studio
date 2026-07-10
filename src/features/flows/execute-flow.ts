@@ -13,6 +13,7 @@ import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
 import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
+import { shouldReuseInput, storedRunInput } from '@/lib/flows/reuse-input'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 import { flowActionRetries, flowActionTimeoutMs, runWithRetries } from './action-reliability'
 import { prepareHttpRequest, responseOutput, redactHttpStepInput, withBearerAuthorization } from './http'
@@ -59,7 +60,7 @@ export async function runFlowExecution(
   if (!flow) throw new Error('Flow not found')
   const source = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
   const graph = flowGraphSchema.parse(source)
-  const input = job.input ?? ''
+  let input: unknown = job.input ?? ''
   const resuming = Boolean(job.flowRunId && job.reply !== undefined)
   const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
     node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
@@ -84,9 +85,30 @@ export async function runFlowExecution(
 
   // Required trigger inputs (declared on the trigger node) must be present.
   // Skipped when resuming: the original input was validated on the first run.
+  // Input memory: before failing on missing fields, fall back to the last
+  // successful run's input — but only when the flow hasn't been edited since
+  // that run started (shouldReuseInput), so an edited flow always demands
+  // fresh input. A run that supplies every required field never falls back:
+  // deliberately different-but-complete input always wins.
+  let reusedInput = false
   if (!resuming) {
     const inputFields = triggerInputFieldsFromTrigger(triggerFromGraph(graph, flow.trigger))
-    const missing = missingRequiredInputFields(inputFields, input)
+    let missing = missingRequiredInputFields(inputFields, input)
+    if (missing.length) {
+      const lastSuccess = await prisma.flowRun.findFirst({
+        where: { flowId: flow.id, organizationId: job.organizationId, status: 'succeeded' },
+        orderBy: { startedAt: 'desc' },
+        select: { input: true, startedAt: true },
+      })
+      if (lastSuccess && shouldReuseInput({ flowUpdatedAt: flow.updatedAt, lastSuccessStartedAt: lastSuccess.startedAt })) {
+        const candidate = storedRunInput(lastSuccess.input)
+        if (!missingRequiredInputFields(inputFields, candidate).length) {
+          input = candidate
+          reusedInput = true
+          missing = []
+        }
+      }
+    }
     if (missing.length) {
       throw new ApiError(
         `Missing required input field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
@@ -101,13 +123,23 @@ export async function runFlowExecution(
         data: {
           flowId: flow.id,
           status: 'running',
-          input: { prompt: input },
-          trigger: jsonValue(job.trigger ?? { type: 'manual' }),
+          input: jsonValue({ prompt: input }),
+          // reusedInput marks the run as replaying the last successful input —
+          // the run panel surfaces it so replayed payloads are never silent.
+          trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}) }),
           graphSnapshot: jsonValue(graph),
           organizationId: job.organizationId,
           userId: job.userId,
         },
       })
+  // Resume integrity: a resume request carries the user's reply, not the run
+  // input, so `input` re-derives as '' here — downstream `Run input` tokens
+  // would resolve empty. Reload the original input persisted on the run row.
+  // Guard: an explicit non-empty input passed alongside a resume still wins
+  // (an unlikely caller override — the execute route never sends one).
+  if (resuming && (input == null || input === '')) {
+    input = storedRunInput(run.input) ?? ''
+  }
 
   // Resume state: nodes that already succeeded are skipped (reusing their
   // stored output); the paused step is re-run with the reply injected.

@@ -19,6 +19,7 @@ import { validateFlowGraph } from '@/lib/flows/validate'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { stepLabelsOf } from '@/lib/flows/token-text'
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
+import { storedRunInput, prefillTextFromRunInput } from '@/lib/flows/reuse-input'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
 import { CanvasRail } from '@/components/flows/canvas-rail'
 import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
@@ -82,13 +83,6 @@ function parseFlowValue(value: unknown) {
   } catch {
     return value
   }
-}
-
-function storedRunInput(input: unknown): unknown {
-  if (input && typeof input === 'object' && !Array.isArray(input) && Object.prototype.hasOwnProperty.call(input, 'prompt')) {
-    return (input as Record<string, unknown>).prompt
-  }
-  return input
 }
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
@@ -257,6 +251,26 @@ function FlowBuilder() {
   }, [id])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // Input memory: prefill the test input once from the last successful run so
+  // re-running never demands re-typing the same payload. Initialize-once: the
+  // fetch fires once per mount, and the functional setter only fills a still-
+  // empty box — anything the user already typed is never clobbered.
+  const prefilledInput = useRef(false)
+  useEffect(() => {
+    if (prefilledInput.current) return
+    prefilledInput.current = true
+    fetch(`/api/flows/${id}/runs?status=succeeded&take=1`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        const last = (data?.runs as { input?: unknown }[] | undefined)?.[0]
+        if (!last) return
+        const text = prefillTextFromRunInput(last.input)
+        if (!text) return
+        setTestInput((current) => (current.trim() ? current : text))
+      })
+      .catch(() => undefined)
+  }, [id])
 
   // ?run=<id> deep-link (waiting-run emails/toasts land here): open the runs
   // panel and select that run once — later param changes don't re-trigger.
