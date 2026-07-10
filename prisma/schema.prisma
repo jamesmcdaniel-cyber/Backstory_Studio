@@ -51,6 +51,11 @@ model Organization {
   approvalRequests    ApprovalRequest[]
   agentMemories       AgentMemory[]
   flowVersions        FlowVersion[]
+  flows               Flow[]
+  customSignals       CustomSignal[]
+  pushSubscriptions   PushSubscription[]
+  knowledgeDocuments  KnowledgeDocument[]
+  sharedSkills        SharedSkill[]
 
   @@map("organizations")
 }
@@ -286,6 +291,8 @@ model CustomSignal {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
   @@index([organizationId, userId, updatedAt])
   @@map("custom_signals")
 }
@@ -370,6 +377,8 @@ model PushSubscription {
   p256dh         String   @db.Text
   auth           String   @db.Text
   createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("push_subscriptions")
@@ -635,8 +644,9 @@ model Flow {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  runs     FlowRun[]
-  versions FlowVersion[]
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  runs         FlowRun[]
+  versions     FlowVersion[]
 
   @@index([organizationId, updatedAt])
   @@map("flows")
@@ -717,7 +727,8 @@ model KnowledgeDocument {
   error          String?
   createdAt      DateTime @default(now())
 
-  chunks KnowledgeChunk[]
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  chunks       KnowledgeChunk[]
 
   @@index([organizationId, agentId])
   @@map("knowledge_documents")
@@ -755,6 +766,9 @@ model SharedSkill {
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  // Org deletion cascades community skills — an orphaned skill has no owner able to edit or retire it.
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([isActive, updatedAt])
   @@map("shared_skills")
