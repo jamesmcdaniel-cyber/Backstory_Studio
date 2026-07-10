@@ -11,6 +11,14 @@
  * Legitimate org-less system paths (cron sweeps, reapers, tenant
  * resolution, worker-internal id-keyed writes) use `systemPrisma` from
  * src/lib/prisma.ts, with a one-line justification comment at each site.
+ *
+ * Known limitations (accepted for a guardrail): the check is satisfied by an
+ * organizationId key ANYWHERE in the where tree — a bare branch inside OR, or
+ * NOT: { organizationId }, still passes despite matching cross-tenant rows;
+ * nested writes issued through a parent operation (e.g. organization.update
+ * with nested child writes) are not seen by the extension; $queryRaw/$executeRaw
+ * are client-level and unguarded. These are deliberate-query shapes, not
+ * accidental omissions — RLS remains the structural fix.
  */
 
 // Org-carrying models with a REQUIRED organizationId (schema.prisma).
@@ -29,15 +37,15 @@ export const ORG_SCOPED_MODELS: ReadonlySet<string> = new Set([
 
 const GUARDED_OPERATIONS = new Set([
   'findFirst', 'findFirstOrThrow', 'findMany', 'findUnique', 'findUniqueOrThrow',
-  'update', 'updateMany', 'delete', 'deleteMany', 'count', 'aggregate', 'groupBy',
+  'update', 'updateMany', 'updateManyAndReturn', 'upsert', 'delete', 'deleteMany', 'count', 'aggregate', 'groupBy',
 ])
 
-/** True when an `organizationId` key appears anywhere in the where tree. */
+/** True when an `organizationId` key appears anywhere in the where tree with a defined value. */
 export function whereHasOrgScope(where: unknown): boolean {
   if (!where || typeof where !== 'object') return false
   if (Array.isArray(where)) return where.some(whereHasOrgScope)
   for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
-    if (key === 'organizationId') return true
+    if (key === 'organizationId' && value !== undefined) return true
     if (whereHasOrgScope(value)) return true
   }
   return false
