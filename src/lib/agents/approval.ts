@@ -86,7 +86,9 @@ export interface FlowResumeInfo {
 }
 
 export interface DecideResult {
-  status: 'approved' | 'rejected'
+  // 'superseded' = the paused run resumed without this approval being decided
+  // (its step re-queued a fresh one); deciding it is a no-op reported as-is.
+  status: 'approved' | 'rejected' | 'superseded'
   executed: boolean
   /** Set when a suspended run should be resumed with the decision result — the
    *  caller (approval route) triggers resumeAgentExecution to avoid a cycle. */
@@ -147,9 +149,10 @@ export async function decideApproval(input: {
   if (approval.status !== 'pending') {
     // Idempotent replay — but if the fire-and-forget flow resume crashed after
     // the decision was recorded, the run is stranded `waiting`. Hand the caller
-    // resume info again so re-POSTing the decision un-strands it.
+    // resume info again so re-POSTing the decision un-strands it. (Superseded
+    // approvals never resume anything — see flowResumeRetryInfo.)
     const resumeFlow = await flowResumeRetryInfo(approval, input.organizationId)
-    return { status: approval.status === 'rejected' ? 'rejected' : 'approved', executed: false, ...(resumeFlow ? { resumeFlow } : {}) }
+    return { status: decidedStatus(approval.status), executed: false, ...(resumeFlow ? { resumeFlow } : {}) }
   }
 
   if (!input.approve) {
@@ -243,7 +246,20 @@ async function currentDecision(approvalId: string, organizationId: string): Prom
   // 'approving' = another approver is mid-execution; surface it as approved
   // (not executed by us) rather than implying it's still actionable.
   const resumeFlow = current ? await flowResumeRetryInfo(current, organizationId) : undefined
-  return { status: current?.status === 'rejected' ? 'rejected' : 'approved', executed: false, ...(resumeFlow ? { resumeFlow } : {}) }
+  return { status: decidedStatus(current?.status ?? 'approved'), executed: false, ...(resumeFlow ? { resumeFlow } : {}) }
+}
+
+/**
+ * Map a stored approval status to the reported decision status. A superseded
+ * approval (its run resumed and re-queued a fresh one before this one was
+ * decided) must be reported faithfully — never as approved, which would imply
+ * the write ran. Everything else non-rejected reads as approved ('approving'
+ * = a concurrent approver is mid-execution).
+ */
+function decidedStatus(status: string): DecideResult['status'] {
+  if (status === 'rejected') return 'rejected'
+  if (status === 'superseded') return 'superseded'
+  return 'approved'
 }
 
 // Decision replies carry the approvalId so a resuming flow step only consumes
@@ -262,7 +278,8 @@ function rejectedDecisionReply(approvalId: string): string {
  * decision was recorded but the fire-and-forget resume may have crashed. When
  * the run is still `waiting`, rebuild the same reply the normal decision path
  * sent so the caller can trigger the resume again. Undecided states
- * ('approving', 'failed') never resume — the winner/failure path owns those.
+ * ('approving', 'failed', 'superseded') never resume — the winner/failure path
+ * owns the first two, and a superseded approval's run already moved on.
  */
 async function flowResumeRetryInfo(
   approval: { id: string; status: string; executionId: string; payload: unknown },

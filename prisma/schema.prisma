@@ -441,7 +441,7 @@ model ApprovalRequest {
   tool           String
   summary        String    @db.Text
   payload        Json
-  status         String    @default("pending") // 'pending' | 'approved' | 'rejected'
+  status         String    @default("pending") // 'pending' | 'approving' | 'approved' | 'rejected' | 'failed' | 'superseded'
   decidedById    String?
   decidedAt      DateTime?
   createdAt      DateTime  @default(now())

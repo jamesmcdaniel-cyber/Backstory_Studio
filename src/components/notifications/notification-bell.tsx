@@ -28,6 +28,13 @@ function levelIcon(level: string) {
   }
 }
 
+// Flow notifications carry the FLOW id in executionId and deep-link to that
+// flow's activity page — a flow run id is not resolvable by the dashboard.
+function notificationHref(n: NotificationItem): string {
+  if (n.type.startsWith('flow.') && n.executionId) return `/flows/${n.executionId}/activity`
+  return n.executionId ? `/dashboard?run=${n.executionId}` : '/dashboard'
+}
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
   const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
@@ -149,7 +156,7 @@ export function NotificationBell() {
               {items.map((n) => (
                 <a
                   key={n.id}
-                  href={n.executionId ? `/dashboard?run=${n.executionId}` : '/dashboard'}
+                  href={notificationHref(n)}
                   className={cn('flex gap-2 border-b px-3 py-2.5 hover:bg-gray-50', !n.readAt && 'bg-indigo-50/40')}
                 >
                   {levelIcon(n.level)}

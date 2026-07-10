@@ -12,6 +12,10 @@ type NotifyInput = {
   body?: string
   agentTaskId?: string
   executionId?: string
+  /** Push deep link. Defaults to the dashboard run view keyed off executionId —
+   *  flow notifications pass their flow's activity page instead (a flow run id
+   *  is not resolvable by the dashboard). */
+  link?: string
 }
 
 // Creates an in-app notification and fires a best-effort web push. Never throws
@@ -34,7 +38,7 @@ export async function notify(input: NotifyInput) {
       void sendPushToUser(input.userId, {
         title: input.title,
         body: input.body,
-        url: input.executionId ? `/dashboard?run=${input.executionId}` : '/dashboard',
+        url: input.link ?? (input.executionId ? `/dashboard?run=${input.executionId}` : '/dashboard'),
       }).catch(() => {})
     }
     return notification

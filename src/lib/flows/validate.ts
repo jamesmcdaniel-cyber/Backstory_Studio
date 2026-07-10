@@ -1,5 +1,6 @@
 import { FIELD_TYPES, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
 import { FLOW_TRIGGER_TYPES } from '@/lib/flows/trigger'
+import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 
 export type FlowValidationIssue = {
   level: 'error' | 'warning'
@@ -359,6 +360,29 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         }
       }
     }
+  }
+
+  // Approval-gated writes (the Nango delivery plane) pause the whole run on
+  // ONE approval at a time. Inside a loop/parallel every item needs its own
+  // decision, and the resume machinery can't yet keep N in-flight approvals
+  // straight (one item's decision could be misattributed to another), so a
+  // graph that nests one in a container is blocked outright.
+  const containerMemberIds = new Set(
+    graph.nodes.flatMap((node) =>
+      node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : [],
+    ),
+  )
+  for (const memberId of containerMemberIds) {
+    const member = byId.get(memberId)
+    if (member?.type !== 'tool' || !member.data.connectionId) continue
+    if (parseFlowToolConnectionId(member.data.connectionId).plane !== 'nango') continue
+    add(
+      issues,
+      'error',
+      'APPROVAL_IN_CONTAINER',
+      `${nodeLabel(member)} needs an approval to send — approvals aren't supported inside loops or parallel branches yet. Move it after the loop.`,
+      member.id,
+    )
   }
 
   const flaggedNodeIds = new Set<string>()

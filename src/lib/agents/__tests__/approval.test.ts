@@ -75,6 +75,20 @@ if (TEST_DB) {
     assert.equal(second.executed, false)
   })
 
+  test('deciding a superseded approval reports superseded, never executes, never resumes', async () => {
+    // A resumed flow run supersedes its still-pending approvals (the re-run
+    // re-queues fresh ones) — approving the stale one must be an inert no-op.
+    const { id } = await createApproval({
+      organizationId: ids.org, executionId: ids.execution, userId: ids.user,
+      provider: 'nango:slack', tool: 'slack_post_message', args: {},
+    })
+    await prisma.approvalRequest.update({ where: { id }, data: { status: 'superseded' } })
+    const result = await decideApproval({ approvalId: id, organizationId: ids.org, deciderUserId: ids.user, approve: true })
+    assert.deepEqual(result, { status: 'superseded', executed: false })
+    const current = await prisma.approvalRequest.findUnique({ where: { id } })
+    assert.equal(current.status, 'superseded')
+  })
+
   test('cross-org decision is refused', async () => {
     const { id } = await createApproval({
       organizationId: ids.org, executionId: ids.execution, userId: ids.user,

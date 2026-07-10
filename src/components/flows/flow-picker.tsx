@@ -367,7 +367,14 @@ export function FlowPicker({
       ? searching
         ? toolCatalog.flatMap((connection) =>
             connection.tools
-              .filter((tool) => includesQuery(`${tool.name} ${tool.description}`, normalizedQuery))
+              // Search what the user READS (the humanized label) as well as the
+              // raw tool name and description.
+              .filter((tool) =>
+                includesQuery(
+                  `${humanizeToolName(tool.name, connectionToolKey(connection))} ${tool.name} ${tool.description}`,
+                  normalizedQuery,
+                ),
+              )
               .map((tool) => connectionToolRow(connection, tool)),
           )
         : toolCatalog.map(connectionRow)

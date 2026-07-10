@@ -139,6 +139,15 @@ export async function runFlowExecution(
       where: { flowRunId: run.id, status: 'waiting' },
       data: { status: 'resumed', finishedAt: new Date() },
     })
+    // A resumed run's un-decided approvals are stale: any step that doesn't
+    // consume THIS decision falls through and re-queues a fresh approval, so
+    // an old pending one must never stay actionable (approving both would run
+    // the write twice). decideApproval refuses non-pending requests, so a
+    // superseded approval is inert — deciding it just reports its state.
+    await prisma.approvalRequest.updateMany({
+      where: { organizationId: job.organizationId, executionId: run.id, status: 'pending' },
+      data: { status: 'superseded' },
+    })
     if (priorSteps.length) order = Math.max(...priorSteps.map((step) => step.order)) + 1
   }
 
@@ -302,15 +311,19 @@ export async function runFlowExecution(
           const question = `Approve ${toolName}?`
           await finish({ status: 'waiting', output: { waiting: { kind: 'approval', approvalId: approval.id, question } } })
           // Mirror the agent path: surface the pending approval to the user
-          // (in-app + push). notify never throws into the run.
+          // (in-app + push). notify never throws into the run. Flow
+          // notifications carry the FLOW id (the bell and push deep-link to
+          // the flow's activity page — a flow RUN id is not resolvable by the
+          // dashboard); the run id still rides in the body for reference.
           await notify({
             organizationId: job.organizationId,
             userId: job.userId,
-            type: 'agent.needs_approval',
+            type: 'flow.needs_approval',
             level: 'action',
             title: `Flow "${flow.name}" needs approval`,
             body: `Approve or reject: ${toolName} (run ${run.id})`,
-            executionId: run.id,
+            executionId: flow.id,
+            link: `/flows/${flow.id}/activity`,
           })
           return { waiting: { status: 'waiting_for_approval', question } }
         }
