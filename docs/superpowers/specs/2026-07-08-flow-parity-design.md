@@ -271,6 +271,15 @@ User mandate: **no `{{...}}` bracket syntax anywhere in the UI**, and red valida
 - **Actionable validation:** clicking a step's red/amber count badge opens a popover listing that step's issue messages (errors first) with a "Fix" action that opens the step's settings. Opening a step with issues shows the same messages in a banner at the top of the drawer. Messages reuse `validateFlowGraph` copy (already plain English).
 - Copilot chat/generate surfaces must not show raw token syntax to users where feasible (needsAttention messages already come from the validator).
 
+## 8. Waiting-run visibility & response (added 2026-07-09, user live-testing feedback)
+
+User report: a manually-run flow paused `waiting`; the Activity page showed only a bare "Waiting" with no way to see what it was waiting on or respond, and no way back to the interactive run view.
+
+- **Persist the pause reason:** when an agent step pauses (`waiting_for_input` with a question, or `waiting_for_approval`), store `{ kind, question?, approvalId? }` on the waiting FlowRunStep's `output`. The runs API derives a run-level `waiting: { nodeId, kind, question? }` for waiting runs (in both full and summary modes).
+- **Reply from the builder:** the Runs panel shows a waiting run's question ("Waiting for your reply — <question>") with a reply box that resumes via the existing `POST /api/flows/[id]/execute { flowRunId, reply }`; approval-kind waits explain themselves ("Waiting for an approval decision"). The "flow paused" toast gains a View action that opens the Runs panel.
+- **Reply from Activity:** waiting run rows surface the question inline with the same reply box, and every run row links back to the builder (`/flows/[id]?run=<runId>` opens the Runs panel).
+- Copy stays plain-English (no token syntax, no internal status strings).
+
 ## Out of scope
 
 - React Flow / canvas replatform
