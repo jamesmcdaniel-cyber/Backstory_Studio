@@ -15,8 +15,17 @@ export const STUCK_FLOW_RUN_TIMEOUT_MS = 30 * 60 * 1000
 const STUCK_RUN_ERROR = 'The run was interrupted and timed out.'
 const REAP_BATCH_LIMIT = 500
 
-/** Fail runs stuck `running` past the cutoff (and their still-live steps). Returns the reaped count. */
-export async function reapStuckFlowRuns(now = new Date()): Promise<number> {
+/**
+ * Fail runs stuck `running` past the cutoff (and their still-live steps).
+ * Returns the reaped count.
+ *
+ * `onAfterRead` is a test-only seam: real callers never pass it. It runs
+ * after the initial read (so its effects land in the gap the transaction's
+ * re-checked `where` clauses are meant to protect against) and lets a test
+ * simulate a run legitimately leaving `running` between the read and the
+ * write — the exact race this function's re-query step exists to handle.
+ */
+export async function reapStuckFlowRuns(now = new Date(), onAfterRead?: () => Promise<void>): Promise<number> {
   const cutoff = new Date(now.getTime() - STUCK_FLOW_RUN_TIMEOUT_MS)
   const stuck = await prisma.flowRun.findMany({
     where: { status: 'running', startedAt: { lt: cutoff } },
@@ -25,6 +34,7 @@ export async function reapStuckFlowRuns(now = new Date()): Promise<number> {
   })
   if (stuck.length === 0) return 0
   const runIds = stuck.map((run) => run.id)
+  await onAfterRead?.()
   return prisma.$transaction(async (tx) => {
     // Status re-checked here so a run that legitimately left `running`
     // (e.g. paused for approval) between the read above and this write is

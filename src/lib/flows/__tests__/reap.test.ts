@@ -80,22 +80,29 @@ if (TEST_DB) {
     assert.equal(waitingRun.status, 'waiting')
   })
 
-  test('reapStuckFlowRuns never touches steps of a run it did not itself reap', async () => {
+  test('reapStuckFlowRuns never touches steps of a run that legitimately leaves running before the write', async () => {
     const stale = new Date(Date.now() - 31 * 60 * 1000)
-    const pausedRun = await prisma.flowRun.create({
-      data: { flowId: ids.flow, organizationId: ids.org, status: 'waiting', startedAt: stale },
+    const racingRun = await prisma.flowRun.create({
+      data: { flowId: ids.flow, organizationId: ids.org, status: 'running', startedAt: stale },
     })
-    const pausedStep = await prisma.flowRunStep.create({
-      data: { flowRunId: pausedRun.id, nodeId: 'n2', status: 'waiting', startedAt: stale },
+    const racingStep = await prisma.flowRunStep.create({
+      data: { flowRunId: racingRun.id, nodeId: 'n2', status: 'running', startedAt: stale },
     })
 
-    await reapStuckFlowRuns()
+    // racingRun IS a `running` candidate at read time — it enters runIds —
+    // but the onAfterRead hook flips it to `waiting` (simulating a legitimate
+    // approval pause) before the transaction's write executes. This is the
+    // exact race the re-query step in reapStuckFlowRuns exists to handle.
+    const reaped = await reapStuckFlowRuns(new Date(), async () => {
+      await prisma.flowRun.update({ where: { id: racingRun.id }, data: { status: 'waiting' } })
+    })
+    assert.equal(reaped, 0) // racingRun diverted away before the transaction write
 
-    const stepAfter = await prisma.flowRunStep.findUnique({ where: { id: pausedStep.id } })
-    assert.equal(stepAfter.status, 'waiting')
-
-    const runAfter = await prisma.flowRun.findUnique({ where: { id: pausedRun.id } })
+    const runAfter = await prisma.flowRun.findUnique({ where: { id: racingRun.id } })
     assert.equal(runAfter.status, 'waiting')
+
+    const stepAfter = await prisma.flowRunStep.findUnique({ where: { id: racingStep.id } })
+    assert.equal(stepAfter.status, 'running')
   })
 
   test('reapStuckFlowRuns is idempotent — second pass reaps nothing', async () => {
