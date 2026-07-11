@@ -12,6 +12,13 @@ test('condition gates on the incoming payload', () => {
   assert.equal(triggerConditionPasses(trigger, { status: 'low' }), false)
 })
 
+test('a malformed condition fails closed (skips the run), never throws', () => {
+  // non-array clauses and a non-string operand both make evalClause throw;
+  // the gate must swallow that and return false, not propagate.
+  assert.equal(triggerConditionPasses({ type: 'webhook', condition: { clauses: 'nope' } } as never, { status: 'x' }), false)
+  assert.equal(triggerConditionPasses({ type: 'webhook', condition: { clauses: [{ left: 5, op: 'eq', right: 'x' }] } } as never, { status: 'x' }), false)
+})
+
 test('match:any passes when one clause holds', () => {
   const trigger = { type: 'webhook', condition: { match: 'any', clauses: [
     { left: '{{trigger.input.a}}', op: 'eq', right: '1' },
