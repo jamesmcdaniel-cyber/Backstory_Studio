@@ -27,6 +27,7 @@ import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import { CheckerPanel } from '@/components/flows/checker-panel'
 import { ResizablePanel } from '@/components/flows/resizable-panel'
+import { useCanvasPan } from '@/components/flows/use-canvas-pan'
 import { TestPanel } from '@/components/flows/test-panel'
 import { VersionsPanel } from '@/components/flows/versions-panel'
 import type { StepStatus } from '@/components/flows/step-card'
@@ -200,6 +201,7 @@ function FlowBuilder() {
     if (typeof window !== 'undefined') window.localStorage.setItem('flows.canvasZoom', String(clamped))
   }, [])
   const canvasScrollRef = useRef<HTMLDivElement>(null)
+  const canvasPan = useCanvasPan(canvasScrollRef)
   const [testInput, setTestInput] = useState('')
   const [runs, setRuns] = useState<{ id: string; status: string; startedAt?: string }[]>([])
   const [selectedRun, setSelectedRun] = useState<FlowRunDetail | null>(null)
@@ -966,8 +968,9 @@ function FlowBuilder() {
       <div className="relative flex min-h-0 flex-1">
         <div
           ref={canvasScrollRef}
-          className="min-w-0 flex-1 overflow-y-auto bg-white p-8"
-          onClick={() => setSelectedId(null)}
+          className={`min-w-0 flex-1 overflow-auto bg-white p-8 ${canvasPan.panning ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
+          onClick={() => { if (!canvasPan.consumeMoved()) setSelectedId(null) }}
+          {...canvasPan.handlers}
           style={{
             backgroundImage: 'radial-gradient(circle, rgba(15, 23, 42, 0.22) 1px, transparent 1px)',
             backgroundSize: '28px 28px',
