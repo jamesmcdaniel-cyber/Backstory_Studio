@@ -82,7 +82,9 @@ export function sortStoredTemplates<T extends StoredTemplateRow>(rows: T[], view
  * cross-org read is the global slice.
  */
 export async function fetchCatalogueRows(organizationId: string): Promise<{ own: AgentTemplate[]; global: AgentTemplate[] }> {
-  const own = await prisma.agentTemplate.findMany({ where: { organizationId, isActive: true } })
+  // Cap the own slice like the global one below — a bound on the read, not a
+  // product limit (orderBy keeps the most recent if an org ever exceeds it).
+  const own = await prisma.agentTemplate.findMany({ where: { organizationId, isActive: true }, orderBy: { updatedAt: 'desc' }, take: 500 })
   // systemPrisma: cross-org read of the PUBLIC community slice only — global
   // templates from OTHER orgs. Own rows come from the tenant-guarded query above.
   const globalRows = await systemPrisma.agentTemplate.findMany({
