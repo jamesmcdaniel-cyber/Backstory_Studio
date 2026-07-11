@@ -22,7 +22,8 @@
     "db:studio": "prisma studio",
     "test": "TSX_TSCONFIG_PATH=tsconfig.test.json tsx --test $(find src -type f \\( -name '*.test.ts' -o -name '*.test.tsx' \\) -path '*__tests__*')",
     "eval": "tsx --test $(find src/lib/eval -type f -name '*.test.ts' -path '*__tests__*')",
-    "eval:rag": "tsx src/lib/eval/rag/run.ts"
+    "eval:rag": "tsx src/lib/eval/rag/run.ts",
+    "eval:rag:generate": "tsx src/lib/eval/rag/generate.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",

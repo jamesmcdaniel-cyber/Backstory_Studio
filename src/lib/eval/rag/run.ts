@@ -13,13 +13,23 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { prisma } from '@/lib/prisma'
 import { embeddingsConfigured } from '@/lib/rag/embeddings'
-import { retrieveKnowledge } from '@/lib/knowledge/retrieve'
+import { retrieveKnowledge, renderKnowledge } from '@/lib/knowledge/retrieve'
+import { KNOWLEDGE_RELEVANCE_FLOOR } from '@/lib/rag/relevance'
 import { seedCorpus } from './seed'
 import { loadGolden, corpusDocIds, filenameToDocId, CORPUS_DIR } from './index'
 import { retrievalMetrics, recallAtK, mean } from './metrics'
-import type { GoldenItem, RagScorecard, SweepRow } from './types'
+import { generateGroundedAnswer, isRefusal } from './answer'
+import { judgeGrounding } from './judge'
+import type { GoldenItem, RagScorecard, SweepRow, GroundingMetrics } from './types'
 
 export const SWEEP_FLOORS = [0.2, 0.25, 0.3, 0.35, 0.4, 0.45]
+
+/** Gates the grounding pass — mirrors the eval judge's own gating (skips
+ * without a model key). hasAnthropic/hasQwen in model-runner.ts are NOT
+ * exported, so this checks the env vars directly rather than importing them. */
+function modelKeyConfigured(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.QWEN_API_KEY)
+}
 
 /** One query's retrieval result: the ranked corpus doc ids + their scores. */
 interface Retrieved {
@@ -54,6 +64,35 @@ function sweep(retrieved: Retrieved[]): SweepRow[] {
   })
 }
 
+/** Grade grounding on the golden set: faithfulness + answer-relevance on answerable
+ *  items, refusal-rate on unanswerable ones. Uses the real floored retrieval. */
+async function grade(organizationId: string, agentId: string, golden: GoldenItem[]): Promise<GroundingMetrics> {
+  const faithfulness: number[] = []
+  const relevance: number[] = []
+  let refusals = 0
+  let judged = 0
+  for (const item of golden) {
+    const hits = await retrieveKnowledge({ organizationId, agentId, query: item.query, k: 5, minScore: KNOWLEDGE_RELEVANCE_FLOOR })
+    const context = renderKnowledge(hits)
+    const answer = await generateGroundedAnswer(item.query, context)
+    if (item.unanswerable) {
+      if (isRefusal(answer)) refusals += 1
+    } else {
+      const scores = await judgeGrounding(item.query, answer, context)
+      faithfulness.push(scores.faithfulness)
+      relevance.push(scores.answerRelevance)
+    }
+    judged += 1
+  }
+  const unanswerable = golden.filter((g) => g.unanswerable).length
+  return {
+    meanFaithfulness: mean(faithfulness),
+    meanAnswerRelevance: mean(relevance),
+    refusalRate: unanswerable > 0 ? refusals / unanswerable : 0,
+    judged,
+  }
+}
+
 export async function runRagEval(): Promise<RagScorecard> {
   if (!embeddingsConfigured()) {
     throw new Error('eval:rag needs VOYAGE_API_KEY (real embeddings). Set it and point DATABASE_URL at a throwaway pgvector DB.')
@@ -70,6 +109,7 @@ export async function runRagEval(): Promise<RagScorecard> {
 
     const retrieval = retrievalMetrics(retrieved.map((r) => ({ retrieved: r.docIds, gold: r.item.sourceDocIds })))
     const sweepRows = sweep(retrieved)
+    const grounding = modelKeyConfigured() ? await grade(org.id, agent.id, golden) : null
 
     const scorecard: RagScorecard = {
       corpusDocs,
@@ -77,7 +117,7 @@ export async function runRagEval(): Promise<RagScorecard> {
       answerable: golden.filter((g) => !g.unanswerable).length,
       unanswerable: golden.filter((g) => g.unanswerable).length,
       retrieval,
-      grounding: null,
+      grounding,
       sweep: sweepRows,
       generatedAtIso: new Date().toISOString(),
     }
