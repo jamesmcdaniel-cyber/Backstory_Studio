@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { prisma, systemPrisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
+import { serializeTemplate } from '@/lib/templates/catalogue'
+import { createTemplate } from '@/lib/templates/create-template'
 
 const templateSchema = z.object({
   name: z.string().min(1),
@@ -14,29 +16,8 @@ const templateSchema = z.object({
   exampleOutput: z.string().optional(),
   icon: z.string().trim().max(8).optional(),
   allowSubagents: z.boolean().optional(),
+  visibility: z.enum(['org', 'global']).optional(),
 })
-
-function serializeTemplate(template: any, viewerOrgId?: string) {
-  const config = template.configuration && typeof template.configuration === 'object' ? template.configuration as any : {}
-  return {
-    id: template.id,
-    name: template.name,
-    description: template.description || '',
-    category: template.type,
-    instructions: config.instructions || template.description || '',
-    integrations: config.integrations || [],
-    skills: config.skills || [],
-    tags: config.tags || [],
-    model: config.model || 'gpt-4o',
-    exampleOutput: config.exampleOutput || '',
-    icon: config.icon || '',
-    allowSubagents: config.allowSubagents === true,
-    custom: true,
-    authorName: config.authorName || '',
-    // Only the creating org may edit/delete a community template.
-    mine: Boolean(viewerOrgId) && template.organizationId === viewerOrgId,
-  }
-}
 
 const builtInTemplates = [
   {
@@ -752,24 +733,25 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const data = templateSchema.parse(await request.json())
-  const template = await prisma.agentTemplate.create({
-    data: {
-      name: data.name,
-      description: data.description,
-      type: data.category,
-      configuration: {
-        instructions: data.instructions,
-        integrations: data.integrations,
-        skills: data.skills,
-        tags: data.tags,
-        model: data.model,
-        ...(data.exampleOutput ? { exampleOutput: data.exampleOutput } : {}),
-        ...(data.icon ? { icon: data.icon } : {}),
-        ...(data.allowSubagents ? { allowSubagents: true } : {}),
-        authorName: auth.dbUser.name || auth.dbUser.email || '',
-      },
-      userId: auth.dbUser.id,
-      organizationId: auth.organizationId,
+  const template = await createTemplate({
+    organizationId: auth.organizationId,
+    userId: auth.dbUser.id,
+    name: data.name,
+    category: data.category,
+    description: data.description,
+    // New templates default to org-private; the community "Publish" dialog
+    // passes visibility: 'global' explicitly.
+    visibility: data.visibility ?? 'org',
+    configuration: {
+      instructions: data.instructions,
+      integrations: data.integrations,
+      skills: data.skills,
+      tags: data.tags,
+      model: data.model,
+      ...(data.exampleOutput ? { exampleOutput: data.exampleOutput } : {}),
+      ...(data.icon ? { icon: data.icon } : {}),
+      ...(data.allowSubagents ? { allowSubagents: true } : {}),
+      authorName: auth.dbUser.name || auth.dbUser.email || '',
     },
   })
   return { success: true, template: serializeTemplate(template, auth.organizationId) }
@@ -799,6 +781,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ...(body.icon !== undefined && { icon: body.icon }),
         ...(body.allowSubagents !== undefined && { allowSubagents: body.allowSubagents }),
       },
+      ...(body.visibility !== undefined && { visibility: body.visibility }),
     },
   })
   return { success: true, template: serializeTemplate(template, auth.organizationId) }

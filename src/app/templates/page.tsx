@@ -165,7 +165,7 @@ function ExplorePage() {
     const url = dialog.kind === 'template' ? '/api/agent-templates' : '/api/skills'
     const payload =
       dialog.kind === 'template'
-        ? { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations), exampleOutput: dialog.exampleOutput || undefined }
+        ? { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations), exampleOutput: dialog.exampleOutput || undefined, visibility: 'global' }
         : { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations) }
     try {
       const res = await fetch(url, {
