@@ -23,7 +23,7 @@ Pipedream owns embedded account connections; Klavis owns agent-facing MCP tool s
 
 ## Flow Execution
 
-Flows execute inline in the calling process today (`runFlowExecution` in `src/features/flows/execute-flow.ts`) via the same routes agents use for triggering (manual execute, webhook trigger, cron dispatch, reply, approval decision). A resume (a reply or approval decision reaching a paused run) atomically claims the run — only a `waiting` run may be resumed — and pins execution to the exact graph the run started with (`FlowRun.graphSnapshot`), never the flow's current definition. A `flow-execution` BullMQ queue and worker exist (`dispatchFlowExecution`/`executeFlowJob`) but are not yet wired into any caller — flows still run inline everywhere in practice.
+Flows execute inline in the calling process today (`runFlowExecution` in `src/features/flows/execute-flow.ts`) via the same routes agents use for triggering (manual execute, webhook trigger, cron dispatch, reply, approval decision). A resume (a reply or approval decision reaching a paused run) atomically claims the run — only a `waiting` run may be resumed — and pins execution to the exact graph the run started with (`FlowRun.graphSnapshot`), never the flow's current definition. Loop/parallel bodies persist each iteration's step outputs under per-iteration keys (`nodeId#index`), so a pause mid-loop resumes from its cursor instead of re-running prior iterations' side effects; the main-chain path keeps bare `nodeId` keys. A `flow-execution` BullMQ queue and worker exist (`dispatchFlowExecution`/`executeFlowJob`) but are not yet wired into any caller — flows still run inline everywhere in practice.
 
 ## Shared Server Utilities
 
