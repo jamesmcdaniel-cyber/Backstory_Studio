@@ -285,7 +285,9 @@ export function FlowPicker({
     label: connection.name,
     description: connection.tools.length
       ? `${connection.tools.length} available action${connection.tools.length === 1 ? '' : 's'}`
-      : 'Choose an action from this connection.',
+      : connection.toolsError
+        ? connection.toolsError
+        : 'No actions available yet.',
     logo: { slug: connectionLogoSlug(connection), name: connection.name },
     chevron: true,
     onSelect: () => setDrill({ kind: 'connector', connection }),
@@ -329,7 +331,9 @@ export function FlowPicker({
     drill?.kind === 'group'
       ? drill.group.description
       : drill?.kind === 'connector'
-        ? `Choose an action from ${drill.connection.name}.`
+        ? drill.connection.tools.length === 0 && drill.connection.toolsError
+          ? drill.connection.toolsError
+          : `Choose an action from ${drill.connection.name}.`
         : undefined
 
   let body: React.ReactNode

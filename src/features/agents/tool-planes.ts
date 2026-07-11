@@ -71,6 +71,13 @@ export type ToolPlaneGroup = {
   isWrite: boolean
   client?: McpToolClient
   tools: PlaneToolDescriptor[]
+  /**
+   * Set when tool discovery FAILED for this connection (token expired, server
+   * unreachable, not yet authorized). Distinguishes a real "no actions" from a
+   * connection that couldn't be reached, so the builder shows "reconnect"
+   * instead of a silent empty list.
+   */
+  toolsError?: string
 }
 
 export function toolName(provider: string, name: string) {
@@ -332,6 +339,7 @@ export async function loadMcpConnectionPlaneGroups(
         connectionId: conn.id, connectionName: conn.name, serverUrl: conn.serverUrl,
         organizationId, error: error instanceof Error ? error.message : String(error),
       })
+      group.toolsError = "Couldn't load this connection's actions — reconnect it and try again."
     }
     return group
   }))

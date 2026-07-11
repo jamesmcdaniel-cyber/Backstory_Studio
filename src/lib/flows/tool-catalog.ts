@@ -33,7 +33,7 @@ import { planesForConnectionIds } from '@/lib/flows/tool-connection-id'
 export { mcpConnectionScope } from '@/features/agents/tool-planes'
 
 export type FlowToolSummary = { name: string; description: string; inputSchema?: unknown; outputSchema?: unknown }
-export type FlowToolCatalogConnection = { id: string; name: string; tools: FlowToolSummary[] }
+export type FlowToolCatalogConnection = { id: string; name: string; tools: FlowToolSummary[]; toolsError?: string }
 
 export async function loadFlowToolCatalog(
   organizationId: string,
@@ -67,6 +67,7 @@ export async function loadFlowToolCatalog(
     .map((group) => ({
       id: group.id,
       name: group.name,
+      ...(group.toolsError ? { toolsError: group.toolsError } : {}),
       tools: group.tools.slice(0, options.takeTools ?? 100).map((tool) => ({
         name: tool.name,
         description: tool.description ?? '',
