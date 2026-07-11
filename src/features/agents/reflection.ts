@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { generateStructured, DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
 import { saveAgentMemory } from '@/lib/memory/agent-memory'
+import type { NodeVisibility } from '@/lib/rag/store'
 
 const ACTION_TYPES = ['connect', 'config', 'data', 'other'] as const
 
@@ -100,6 +101,8 @@ export async function reflectAndRemember(
     objective: string
     summary: string
     processLog: string
+    ownerUserId?: string | null
+    visibility?: NodeVisibility
     recordSuggestionEvent: (payload: Record<string, unknown>) => Promise<void>
   },
   deps: { generate?: typeof generateStructured } = {},
@@ -122,6 +125,8 @@ export async function reflectAndRemember(
         title: learning.title,
         content: learning.content,
         sourceExecutionId: params.executionId,
+        ownerUserId: params.ownerUserId ?? null,
+        visibility: params.visibility,
       })
     }
 
@@ -152,6 +157,8 @@ export async function reflectAndRemember(
         title: suggestion.title,
         content: suggestion.rationale,
         sourceExecutionId: params.executionId,
+        ownerUserId: params.ownerUserId ?? null,
+        visibility: params.visibility,
       })
       if (saved) {
         await params

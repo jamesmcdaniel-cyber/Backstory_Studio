@@ -305,6 +305,7 @@ export async function indexAgentMemory(params: {
   title: string
   content: string
   ownerUserId?: string | null
+  visibility?: NodeVisibility
 }): Promise<void> {
   if (!ragEnabled()) return
   try {
@@ -313,7 +314,9 @@ export async function indexAgentMemory(params: {
     const nodes: PendingNode[] = [{
       id: nodeId, type: 'insight', text,
       props: { kind: params.kind, agentId: params.agentId },
-      ownerUserId: params.ownerUserId ?? null, visibility: 'shared',
+      // Inherit the owning agent's scope, mirroring the run node — a private
+      // agent's learned facts must not surface to other reps via org search.
+      ownerUserId: params.ownerUserId ?? null, visibility: params.visibility ?? 'shared',
     }]
     const edges: GraphEdge[] = [
       { organizationId: params.organizationId, from: nodeId, to: nid.agent(params.agentId), rel: 'belongs_to' },

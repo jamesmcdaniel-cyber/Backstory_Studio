@@ -128,3 +128,17 @@ test('expand never surfaces another rep\'s private neighbor', async () => {
   const asNull = await store.expand('org1', null, ['seed'], 1)
   assert.deepEqual(asNull.map((n) => n.id), [])
 })
+
+// ── Agent-memory insight nodes inherit their agent's visibility ──────────────
+test('a private agent\'s memory insight node is hidden from other reps, visible to its owner', async () => {
+  const store = new MemoryGraphStore()
+  await store.upsertNodes([
+    // Mirrors indexAgentMemory's node shape: id `insight:mem:*`, type 'insight'.
+    { id: 'insight:mem:m1', organizationId: 'org1', type: 'insight', text: 'private learning', props: { kind: 'learning' }, embedding: [1, 0], ownerUserId: 'repA', visibility: 'private' },
+    { id: 'insight:mem:m2', organizationId: 'org1', type: 'insight', text: 'shared learning', props: { kind: 'learning' }, embedding: [1, 0], ownerUserId: null, visibility: 'shared' },
+  ])
+  const asOwner = await store.search('org1', 'repA', [1, 0], 10)
+  assert.deepEqual(asOwner.map((h) => h.node.id).sort(), ['insight:mem:m1', 'insight:mem:m2'])
+  const asOther = await store.search('org1', 'repB', [1, 0], 10)
+  assert.deepEqual(asOther.map((h) => h.node.id), ['insight:mem:m2'])
+})

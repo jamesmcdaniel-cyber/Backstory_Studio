@@ -3,6 +3,8 @@ import { apiLogger } from '@/lib/logger'
 import { embedQuery, embeddingsConfigured, cosineSimilarity, toSqlVector } from '@/lib/rag/embeddings'
 import { keywordScore } from '@/lib/knowledge/retrieve'
 import { applyRelevanceFloor } from '@/lib/rag/relevance'
+import type { NodeVisibility } from '@/lib/rag/store'
+import type { indexAgentMemory } from '@/lib/rag/indexer'
 
 export const MEMORY_SIMILARITY_THRESHOLD = 0.86
 export const KEYWORD_MATCH_THRESHOLD = 0.6
@@ -41,7 +43,9 @@ export async function saveAgentMemory(params: {
   content: string
   question?: string
   sourceExecutionId?: string
-}): Promise<{ id: string; deduped: boolean } | null> {
+  ownerUserId?: string | null
+  visibility?: NodeVisibility
+}, deps: { index?: typeof indexAgentMemory } = {}): Promise<{ id: string; deduped: boolean } | null> {
   try {
     const embedText = params.kind === 'user_answer' ? params.question ?? params.content : `${params.title}\n${params.content}`
     const embedding = await tryEmbed(embedText)
@@ -123,16 +127,24 @@ export async function saveAgentMemory(params: {
       }
     }
 
-    void import('@/lib/rag/indexer')
-      .then((indexer) => indexer.indexAgentMemory({
-        memoryId: created.id,
-        organizationId: params.organizationId,
-        agentId: params.agentId,
-        kind: params.kind,
-        title: params.title,
-        content: params.content,
-      }))
-      .catch(() => undefined)
+    const indexArgs = {
+      memoryId: created.id,
+      organizationId: params.organizationId,
+      agentId: params.agentId,
+      kind: params.kind,
+      title: params.title,
+      content: params.content,
+      ownerUserId: params.ownerUserId ?? null,
+      visibility: params.visibility ?? 'shared',
+    }
+    if (deps.index) {
+      // Injected in tests — awaited so the assertion is deterministic.
+      await deps.index(indexArgs).catch(() => undefined)
+    } else {
+      void import('@/lib/rag/indexer')
+        .then((indexer) => indexer.indexAgentMemory(indexArgs))
+        .catch(() => undefined)
+    }
 
     return { id: created.id, deduped: false }
   } catch (error) {

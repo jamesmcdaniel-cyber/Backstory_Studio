@@ -165,4 +165,25 @@ if (TEST_DB) {
       if (id) await prisma.agentMemory.delete({ where: { id } }).catch(() => {})
     }
   })
+
+  test('saveAgentMemory threads a private agent\'s owner/visibility into the indexer', async () => {
+    if (!vectorReady) return
+    delete process.env.VOYAGE_API_KEY // no embedding path; exercise the indexer thread only
+    const calls: any[] = []
+    let id: string | undefined
+    try {
+      const saved = await saveAgentMemory(
+        { organizationId: ids.org, agentId: ids.agent, kind: 'learning', title: 'Private fact', content: 'owned by repA', ownerUserId: 'repA', visibility: 'private' },
+        { index: async (args: any) => { calls.push(args) } },
+      )
+      assert.ok(saved)
+      id = saved!.id
+      assert.equal(calls.length, 1, 'indexer should be called exactly once')
+      assert.equal(calls[0].ownerUserId, 'repA')
+      assert.equal(calls[0].visibility, 'private')
+      assert.equal(calls[0].memoryId, id)
+    } finally {
+      if (id) await prisma.agentMemory.delete({ where: { id } }).catch(() => {})
+    }
+  })
 }

@@ -445,6 +445,8 @@ export async function runAgentExecution(
       content: reply,
       question: pending.question,
       sourceExecutionId: queuedExecution.id,
+      ownerUserId: agent.userId ?? null,
+      visibility: agent.visibility === 'private' ? 'private' : 'shared',
     })
   } else if (resumeFromCrash && queuedExecution) {
     transcript = coerceToIR(queuedExecution.transcript as unknown[])
@@ -1180,6 +1182,8 @@ export async function runAgentExecution(
       objective: agent.objective,
       summary,
       processLog: transcriptSummaryForReflection(transcript),
+      ownerUserId: agent.userId ?? null,
+      visibility: agent.visibility === 'private' ? 'private' : 'shared',
       recordSuggestionEvent: (payload) => recordEvent(execution.id, null, 'agent.suggestion', payload),
     }).catch(() => undefined)
     // Fire the agent.completed signal for flows listening in this org. Dynamic
