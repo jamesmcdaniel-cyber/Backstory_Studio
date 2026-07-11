@@ -43,6 +43,11 @@ export async function saveAgentMemory(params: {
   content: string
   question?: string
   sourceExecutionId?: string
+  // Owner + visibility of the graph insight node this memory produces. Callers
+  // saving for a PRIVATE agent MUST pass both (owner = agent.userId, visibility
+  // = agent.visibility) — the default below is fail-open ('shared') to match the
+  // store-wide `visibility ?? 'shared'` convention, so an omission on a private
+  // agent silently re-opens the leak this field was added to close.
   ownerUserId?: string | null
   visibility?: NodeVisibility
 }, deps: { index?: typeof indexAgentMemory } = {}): Promise<{ id: string; deduped: boolean } | null> {
