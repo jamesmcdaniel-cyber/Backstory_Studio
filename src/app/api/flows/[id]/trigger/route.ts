@@ -6,6 +6,7 @@ import { hashToken, timingSafeEqualHex } from '@/lib/crypto/secrets'
 import { rateLimit } from '@/lib/ratelimit'
 import { flowInputFromWebhookBody } from '@/lib/flows/input'
 import { ApiError } from '@/lib/server/api-handler'
+import { triggerConditionPasses } from '@/lib/flows/trigger-condition'
 
 export const runtime = 'nodejs'
 export const maxDuration = 1200
@@ -50,6 +51,9 @@ export async function POST(request: NextRequest) {
       ? await request.json().catch(() => ({}))
       : await request.text().catch(() => '')
     const input = flowInputFromWebhookBody(body)
+    if (!triggerConditionPasses(trigger, input)) {
+      return NextResponse.json({ success: true, filtered: true, message: 'Trigger condition not met — run skipped.' })
+    }
     const run = await runFlowExecution({
       flowId: flow.id,
       organizationId: flow.organizationId,

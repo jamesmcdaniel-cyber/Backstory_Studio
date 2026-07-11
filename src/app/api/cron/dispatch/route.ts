@@ -19,6 +19,7 @@ import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
 import { runFlowExecution } from '@/features/flows/execute-flow'
 import { parseFlowInput } from '@/lib/flows/input'
+import { triggerConditionPasses } from '@/lib/flows/trigger-condition'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
 import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
@@ -257,6 +258,9 @@ export async function GET(request: Request) {
           continue
         }
         if (ranFlowIds.length >= MAX_FLOWS_PER_TICK) break
+        // Trigger-level filter: a scheduled trigger's "input" is its stored
+        // default — gate on that same value before creating a run.
+        if (!triggerConditionPasses(trigger, parseFlowInput(trigger.input ?? ''))) continue
         const owner = flow.userId
           ? await prisma.user.findFirst({ where: { id: flow.userId, organizationId: flow.organizationId, isActive: true } })
           : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })

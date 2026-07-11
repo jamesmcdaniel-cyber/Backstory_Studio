@@ -12,7 +12,7 @@ import { KNOWN_SIGNALS } from '@/lib/flows/trigger'
 import { nextOccurrence, type AgentSchedule } from '@/lib/scheduling/due'
 import { DataTree } from '@/components/flows/data-tree'
 import { ToolArgsEditor } from '@/components/flows/tool-args-editor'
-import type { DataField } from '@/lib/flows/datatree'
+import { buildDataTree, type DataField } from '@/lib/flows/datatree'
 import { AdvancedParamsSection } from '@/components/flows/advanced-params'
 import { TokenTextEditor, type TokenTextEditorHandle } from '@/components/flows/token-text-editor'
 import type { TokenLabelContext } from '@/lib/flows/token-text'
@@ -52,7 +52,12 @@ type TriggerData = {
   input?: string
   inputFields?: TriggerInputField[]
   signal?: string
+  condition?: { match?: 'all' | 'any'; clauses?: ConditionClause[] }
 }
+
+// No step precedes the trigger, so its condition can only reference the run's
+// own input — not other steps' output — hence an empty step-label map.
+const TRIGGER_LABEL_CTX: TokenLabelContext = { stepLabels: {} }
 
 const fieldClass =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
@@ -1356,6 +1361,32 @@ function TriggerEditor({
     ? `curl -X POST '${webhook.url}' \\\n  -H 'content-type: application/json' \\\n  -H '${webhookHeader}' \\\n  --data '${JSON.stringify({ input: { account: 'Acme', priority: 'high' } })}'`
     : ''
 
+  // Chip-editor handles for the "only run when…" condition rows — the same
+  // register/focus/insert pattern StepDrawer uses for step fields, scoped
+  // locally since the trigger editor lives outside that component.
+  const conditionEditorHandles = useRef<Map<string, TokenTextEditorHandle | null>>(new Map())
+  const activeConditionField = useRef<string | null>(null)
+  const registerConditionEditor = (key: string) => (handle: TokenTextEditorHandle | null) => {
+    conditionEditorHandles.current.set(key, handle)
+  }
+  const focusConditionEditor = (key: string) => () => {
+    activeConditionField.current = key
+  }
+  const insertConditionToken = (token: string) => {
+    const path = token.startsWith('{{') && token.endsWith('}}') ? token.slice(2, -2).trim() : token
+    const key = activeConditionField.current ?? 'trig.0.left'
+    conditionEditorHandles.current.get(key)?.insertToken(path)
+  }
+  // Only the trigger's own declared input fields are pickable here — nothing
+  // precedes the trigger, so there is no upstream step data to offer.
+  const conditionDataFields = useMemo(
+    () => buildDataTree({ upstream: [], inputFields: trigger.inputFields ?? [] }),
+    [trigger.inputFields],
+  )
+  const conditionClauses = clausesOf(trigger.condition ?? {})
+  const updateConditionClauses = (next: ConditionClause[]) =>
+    onChange({ ...trigger, condition: { ...trigger.condition, clauses: next } })
+
   const setSchedule = (patch: Partial<NonNullable<TriggerData['schedule']>>) =>
     onChange({ ...trigger, type: 'schedule', schedule: { ...schedule, ...patch, isActive: true } })
 
@@ -1553,6 +1584,95 @@ function TriggerEditor({
           <p className="text-xs text-muted-foreground">
             POST to the URL with the <code className="font-mono">x-trigger-secret</code> header; the JSON body, or its <code className="font-mono">input</code> field, becomes the flow input. Runs the <strong>published</strong> version.
           </p>
+        </div>
+      )}
+
+      {type !== 'manual' && (
+        <div className="space-y-3 border-t border-border pt-4">
+          <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={Boolean(trigger.condition)}
+              onChange={(e) =>
+                onChange({
+                  ...trigger,
+                  condition: e.target.checked ? { match: 'all', clauses: [{ left: '', op: 'contains', right: '' }] } : undefined,
+                })
+              }
+            />
+            Only run when…
+          </label>
+          {trigger.condition && (
+            <div className="space-y-3">
+              <div>
+                <label className={labelClass}>Match</label>
+                <select
+                  className={fieldClass}
+                  value={trigger.condition.match ?? 'all'}
+                  onChange={(e) => onChange({ ...trigger, condition: { ...trigger.condition, match: e.target.value as 'all' | 'any' } })}
+                >
+                  <option value="all">All conditions (AND)</option>
+                  <option value="any">Any condition (OR)</option>
+                </select>
+              </div>
+              {conditionClauses.map((clause, i) => (
+                <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
+                  <TokenTextEditor
+                    ref={registerConditionEditor(`trig.${i}.left`)}
+                    className="px-2 py-1.5"
+                    value={clause.left}
+                    labelCtx={TRIGGER_LABEL_CTX}
+                    placeholder="Choose data from below"
+                    onFocus={focusConditionEditor(`trig.${i}.left`)}
+                    onChange={(left) => updateConditionClauses(conditionClauses.map((c, j) => (j === i ? { ...c, left } : c)))}
+                    ariaLabel={`Condition ${i + 1} value`}
+                  />
+                  <div className="flex gap-1.5">
+                    <select
+                      className={smallField}
+                      value={clause.op}
+                      onChange={(e) => updateConditionClauses(conditionClauses.map((c, j) => (j === i ? { ...c, op: e.target.value as ConditionOp } : c)))}
+                    >
+                      {CONDITION_OPS.map((op) => (
+                        <option key={op} value={op}>
+                          {CONDITION_OP_LABELS[op]}
+                        </option>
+                      ))}
+                    </select>
+                    <TokenTextEditor
+                      ref={registerConditionEditor(`trig.${i}.right`)}
+                      className="min-w-0 flex-1 px-2 py-1.5"
+                      value={clause.right}
+                      labelCtx={TRIGGER_LABEL_CTX}
+                      placeholder="urgent"
+                      onFocus={focusConditionEditor(`trig.${i}.right`)}
+                      onChange={(right) => updateConditionClauses(conditionClauses.map((c, j) => (j === i ? { ...c, right } : c)))}
+                      ariaLabel={`Condition ${i + 1} comparison value`}
+                    />
+                    {conditionClauses.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => updateConditionClauses(conditionClauses.filter((_, j) => j !== i))}
+                        className="px-1 text-red-500 hover:text-red-700"
+                        aria-label="Remove condition"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => updateConditionClauses([...conditionClauses, { left: '', op: 'contains', right: '' }])}
+                className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+              >
+                <Plus className="h-3.5 w-3.5" /> Add condition
+              </button>
+              <DataTree fields={conditionDataFields} onInsert={insertConditionToken} />
+              <p className="text-xs text-muted-foreground">When this doesn&apos;t match, the run is skipped entirely — no history is recorded.</p>
+            </div>
+          )}
         </div>
       )}
     </div>

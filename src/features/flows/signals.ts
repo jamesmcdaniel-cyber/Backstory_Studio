@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { KNOWN_SIGNALS } from '@/lib/flows/trigger'
+import { triggerConditionPasses } from '@/lib/flows/trigger-condition'
 import { runFlowExecution } from './execute-flow'
 
 // Re-exported so callers (including the client-safe builder UI) can import the
@@ -78,6 +79,9 @@ export async function emitFlowSignal(params: {
 
   for (const flow of matches) {
     try {
+      // Trigger-level filter: skip flows whose condition doesn't match this
+      // payload before doing any further work (no owner lookup, no run row).
+      if (!triggerConditionPasses(flow.trigger, params.payload)) continue
       // Attribute the run to the flow owner when set; otherwise the org's
       // oldest active member (shared/ownerless flows have no single owner) —
       // mirrors the cron dispatcher's owner-attribution lookup.
