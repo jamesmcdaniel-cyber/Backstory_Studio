@@ -27,4 +27,18 @@ describe('buildAgentSystemPrompt', () => {
     assert.ok(prompt.includes('Objective.'))
     assert.ok(!prompt.includes('## Attached skill:'))
   })
+
+  it('includes a grounding/refusal instruction so the agent declines instead of fabricating', () => {
+    const prompt = buildAgentSystemPrompt('Do the work.', [])
+    assert.ok(/ground/i.test(prompt), 'expected a grounding instruction')
+    assert.ok(/say so|don.t (?:guess|fabricate)|rather than inventing/i.test(prompt), 'expected an explicit refusal-over-fabrication instruction')
+  })
+
+  it('softens the anti-hedging line to distinguish present from absent information', () => {
+    const prompt = buildAgentSystemPrompt('Do the work.', [])
+    // The old absolute "Never claim you lack access ..." must be gone.
+    assert.ok(!prompt.includes('Never claim you lack access to information that is present in your context'), 'the absolute anti-hedging line should be reworded')
+    // The reworded line acknowledges genuinely-absent information.
+    assert.ok(/genuinely absent|is genuinely absent|when it is genuinely absent/i.test(prompt), 'expected the softened present-vs-absent wording')
+  })
 })

@@ -10,6 +10,7 @@ import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
 import { retrieveKnowledge, renderKnowledge } from '@/lib/knowledge/retrieve'
 import { embeddingsConfigured, embedQuery, embedTexts, cosineSimilarity } from '@/lib/rag/embeddings'
 import { getGraphRagStore } from '@/lib/rag/get-store'
+import { KNOWLEDGE_RELEVANCE_FLOOR, MEMORY_RELEVANCE_FLOOR, CONTEXT_RELEVANCE_FLOOR } from '@/lib/rag/relevance'
 import { indexExecution } from '@/lib/rag/indexer'
 import { selectedStrataServers } from '@/lib/mcp/strata'
 import {
@@ -690,6 +691,7 @@ export async function runAgentExecution(
         viewerUserId: userId,
         query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
         seedNodeIds,
+        minScore: CONTEXT_RELEVANCE_FLOOR,
         ...(strategize ? { topK: STRATEGIZE_RETRIEVAL.topK, hops: STRATEGIZE_RETRIEVAL.hops } : {}),
       })
       const rendered = renderContext(ragContext)
@@ -719,6 +721,7 @@ export async function runAgentExecution(
         organizationId,
         agentId: agent.id,
         query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
+        minScore: KNOWLEDGE_RELEVANCE_FLOOR,
       })
       const knowledgeBlock = renderKnowledge(knowledgeHits)
       if (knowledgeBlock) {
@@ -743,6 +746,7 @@ export async function runAgentExecution(
         organizationId,
         agentId: agent.id,
         query: `${agent.objective}\n${data.input ?? ''}`.slice(0, 2000),
+        minScore: MEMORY_RELEVANCE_FLOOR,
       })
       const critique = typeof agentMetadata.lastCritique === 'string' ? agentMetadata.lastCritique : null
       const memoryBlock = renderAgentMemories(memoryHits, critique)
