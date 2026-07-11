@@ -8,7 +8,7 @@
  */
 import { writeFileSync } from 'node:fs'
 import { generateStructured } from '@/lib/llm/model-runner'
-import { corpusDocIds, corpusDocText, GOLDEN_PATH } from './index'
+import { corpusDocIds, corpusDocText, GOLDEN_PATH, loadGolden } from './index'
 import type { GoldenItem } from './types'
 
 const QA_SCHEMA = {
@@ -50,9 +50,13 @@ async function generate(): Promise<void> {
     }
   }
   // Preserve the hand-authored adversarial unanswerable queries — regeneration
-  // only refreshes the answerable pairs; unanswerable queries are curated.
-  console.log(`Generated ${items.length} answerable pairs. Review, add unanswerable queries, then commit golden.json.`)
-  writeFileSync(GOLDEN_PATH, JSON.stringify(items, null, 2))
+  // only refreshes the answerable pairs; the curated unanswerable queries are
+  // carried over from the existing golden.json so the refusal metric survives a
+  // regeneration instead of silently vanishing.
+  const unanswerable = loadGolden().filter((item) => item.unanswerable)
+  const merged = [...items, ...unanswerable]
+  console.log(`Generated ${items.length} answerable pairs; carried over ${unanswerable.length} curated unanswerable queries. Review, then commit golden.json.`)
+  writeFileSync(GOLDEN_PATH, JSON.stringify(merged, null, 2))
 }
 
 generate().catch((error) => {
