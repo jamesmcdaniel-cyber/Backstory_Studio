@@ -468,29 +468,44 @@ test('validateFlowGraph does not warn on a humanReview step in the main flow', (
 })
 
 test('condition inside a loop body is flagged, not silently skipped', () => {
-  const graph = {
+  const graph: FlowGraph = {
     nodes: [
       { id: 'trigger', type: 'trigger', data: {} },
       { id: 'c1', type: 'condition', data: { left: '{{item}}', op: 'eq', right: 'x' } },
       { id: 'lp', type: 'loop', data: { over: '{{trigger.input}}', body: ['c1'] } },
     ],
-    edges: [{ source: 'trigger', target: 'lp' }],
+    edges: [{ id: 'e1', source: 'trigger', target: 'lp' }],
   }
-  const { issues } = validateFlowGraph(graph as never, { agents: [], toolCatalog: [] })
+  const { issues } = validateFlowGraph(graph)
   const hit = issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED')
   assert.ok(hit, 'expected CONTAINER_BRANCHING_UNSUPPORTED')
   assert.equal(hit?.level, 'error')
   assert.equal(hit?.nodeId, 'c1')
 })
 
+test('switch inside a parallel branch is flagged too', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 's1', type: 'switch', data: { cases: [] } },
+      { id: 'par', type: 'parallel', data: { branches: [['s1']] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'par' }],
+  }
+  const { issues } = validateFlowGraph(graph)
+  const hit = issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED')
+  assert.ok(hit, 'expected CONTAINER_BRANCHING_UNSUPPORTED for switch-in-parallel')
+  assert.equal(hit?.nodeId, 's1')
+})
+
 test('a switch on the main chain is NOT flagged', () => {
-  const graph = {
+  const graph: FlowGraph = {
     nodes: [
       { id: 'trigger', type: 'trigger', data: {} },
       { id: 's1', type: 'switch', data: { cases: [] } },
     ],
-    edges: [{ source: 'trigger', target: 's1' }],
+    edges: [{ id: 'e1', source: 'trigger', target: 's1' }],
   }
-  const { issues } = validateFlowGraph(graph as never, { agents: [], toolCatalog: [] })
+  const { issues } = validateFlowGraph(graph)
   assert.equal(issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED'), undefined)
 })

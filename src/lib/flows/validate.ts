@@ -482,13 +482,13 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
   // Container bodies are flat ordered lists — they can't host branch edges, so
   // a condition/switch inside a loop/parallel body would silently never branch.
   // Flag it loudly and steer to the `filter` node for per-item gating.
-  const containedIds = new Set(
+  const containerMemberIds = new Set(
     graph.nodes.flatMap((node) =>
       node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : [],
     ),
   )
   for (const node of graph.nodes) {
-    if ((node.type === 'condition' || node.type === 'switch') && containedIds.has(node.id)) {
+    if ((node.type === 'condition' || node.type === 'switch') && containerMemberIds.has(node.id)) {
       add(
         issues,
         'error',
@@ -504,11 +504,6 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
   // decision, and the resume machinery can't yet keep N in-flight approvals
   // straight (one item's decision could be misattributed to another), so a
   // graph that nests one in a container is blocked outright.
-  const containerMemberIds = new Set(
-    graph.nodes.flatMap((node) =>
-      node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : [],
-    ),
-  )
   for (const memberId of containerMemberIds) {
     const member = byId.get(memberId)
     if (!member) continue
