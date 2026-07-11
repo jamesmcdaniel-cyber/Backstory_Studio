@@ -1,0 +1,163 @@
+[
+  {
+    "id": "q-pricing-growth",
+    "query": "How much does the Growth tier cost per seat and how many seats does it allow?",
+    "sourceDocIds": ["pricing-tiers"],
+    "referenceAnswer": "Growth is $75 per seat per month and allows up to 100 seats.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-pricing-nonprofit",
+    "query": "Is there a discount for non-profits?",
+    "sourceDocIds": ["pricing-tiers"],
+    "referenceAnswer": "Yes, non-profits get 20% off any tier.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-pricing-starter",
+    "query": "What does the Starter tier include, and does it include API access?",
+    "sourceDocIds": ["pricing-tiers"],
+    "referenceAnswer": "Starter is $40/seat/month for up to 10 seats and includes account scoring, the signal inbox, and email delivery, but no API access.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-discovery-qualified",
+    "query": "What makes a deal count as qualified?",
+    "sourceDocIds": ["discovery-playbook"],
+    "referenceAnswer": "A qualified deal has budget, a timeline, and a named champion; without a named champion it stays in the qualify stage.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-discovery-stages",
+    "query": "What are the four stages of the discovery motion, in order?",
+    "sourceDocIds": ["discovery-playbook"],
+    "referenceAnswer": "Identify, qualify, map stakeholders, propose.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-renewal-window",
+    "query": "How many days before term end does a renewal open, and who owns it?",
+    "sourceDocIds": ["renewal-process"],
+    "referenceAnswer": "Renewals open 90 days before term end and are owned by the account's success manager.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-renewal-downsell",
+    "query": "What triggers a downsell-risk flag on an account?",
+    "sourceDocIds": ["renewal-process"],
+    "referenceAnswer": "Usage below 40% of purchased seats triggers a downsell-risk flag.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-renewal-autorenew",
+    "query": "Do contracts auto-renew, and how much cancellation notice does a customer need to give to stop that?",
+    "sourceDocIds": ["renewal-process"],
+    "referenceAnswer": "Contracts auto-renew unless the customer cancels at least 30 days before term end.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-security-soc2",
+    "query": "Is Backstory Sales AI SOC 2 compliant, and is customer data used for training?",
+    "sourceDocIds": ["security-faq"],
+    "referenceAnswer": "It is SOC 2 Type II compliant and customer data is never used to train models.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-security-webhook",
+    "query": "Which tier gets per-org webhook signing secrets?",
+    "sourceDocIds": ["security-faq", "pricing-tiers"],
+    "referenceAnswer": "Per-org webhook signing secrets are an Enterprise-tier feature.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-security-residency",
+    "query": "Where is Backstory's data residency today, and what's planned next?",
+    "sourceDocIds": ["security-faq"],
+    "referenceAnswer": "Data residency is US-only today, with an EU option planned for the second half of the year.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-integrations-list",
+    "query": "Which data warehouse and CRM does Backstory integrate with?",
+    "sourceDocIds": ["integrations-catalog"],
+    "referenceAnswer": "Salesforce CRM and Snowflake usage data.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-integrations-ownership",
+    "query": "Who owns embedded end-user account connections versus agent-facing MCP tool servers?",
+    "sourceDocIds": ["integrations-catalog"],
+    "referenceAnswer": "Pipedream owns embedded account connections; Klavis owns agent-facing MCP tool servers.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-onboarding-enterprise",
+    "query": "How quickly does Enterprise onboarding complete and does it include an engineer?",
+    "sourceDocIds": ["onboarding-sla"],
+    "referenceAnswer": "Enterprise onboarding completes within 30 days with a named implementation engineer.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-onboarding-selfserve",
+    "query": "How do Growth and Starter customers get onboarded?",
+    "sourceDocIds": ["onboarding-sla"],
+    "referenceAnswer": "Growth and Starter are self-serve, onboarding in-app via guided setup with no assigned implementation engineer.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-competitive-gong",
+    "query": "How does Backstory differ from Gong?",
+    "sourceDocIds": ["competitive-notes"],
+    "referenceAnswer": "Backstory focuses on forward-looking account scoring and autonomous agents rather than call recording.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-competitive-clari",
+    "query": "How does Backstory differ from Clari, and what's the primary displacement risk in competitive deals?",
+    "sourceDocIds": ["competitive-notes"],
+    "referenceAnswer": "Backstory adds a graph-RAG correlation layer across signals, runs, and account facts; the primary displacement risk is the prospect's homegrown spreadsheets, not another vendor.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-support-enterprise-p1",
+    "query": "What is the P1 response time on the Enterprise support tier?",
+    "sourceDocIds": ["support-tiers"],
+    "referenceAnswer": "Enterprise gets a 1-hour P1 response with a dedicated success manager and a shared Slack channel.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-support-starter",
+    "query": "What kind of support does the Starter tier get, and what's the response time?",
+    "sourceDocIds": ["support-tiers"],
+    "referenceAnswer": "Starter gets community forum plus email support, with next-business-day response.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-trial",
+    "query": "Is there a free trial, and of which tier?",
+    "sourceDocIds": ["pricing-tiers"],
+    "referenceAnswer": "There is no free tier, but a 14-day trial of Growth is available.",
+    "unanswerable": false
+  },
+  {
+    "id": "q-unanswerable-mobile",
+    "query": "Does Backstory Sales AI have a native iPhone app, and what is its App Store rating?",
+    "sourceDocIds": [],
+    "referenceAnswer": "The corpus does not say.",
+    "unanswerable": true
+  },
+  {
+    "id": "q-unanswerable-ceo",
+    "query": "Who is the CEO of Backstory and when was the company founded?",
+    "sourceDocIds": [],
+    "referenceAnswer": "The corpus does not say.",
+    "unanswerable": true
+  },
+  {
+    "id": "q-unanswerable-hipaa",
+    "query": "Is Backstory HIPAA certified for storing patient health records?",
+    "sourceDocIds": [],
+    "referenceAnswer": "The corpus does not say.",
+    "unanswerable": true
+  }
+]
