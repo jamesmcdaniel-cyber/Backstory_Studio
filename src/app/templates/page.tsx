@@ -165,13 +165,18 @@ function ExplorePage() {
     const url = dialog.kind === 'template' ? '/api/agent-templates' : '/api/skills'
     const payload =
       dialog.kind === 'template'
-        ? { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations), exampleOutput: dialog.exampleOutput || undefined, visibility: 'global' }
+        ? { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations), exampleOutput: dialog.exampleOutput || undefined }
         : { name: dialog.name, category: dialog.category, description: dialog.description, instructions: dialog.instructions, tags: csv(dialog.tags), integrations: csv(dialog.integrations) }
     try {
       const res = await fetch(url, {
         method: dialog.id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dialog.id ? { id: dialog.id, ...payload } : payload),
+        // Creating a community template publishes it to the shared global library;
+        // editing an existing one omits visibility so PUT preserves its current
+        // scope — an org-private template can't be force-published by a re-save.
+        body: JSON.stringify(
+          dialog.id ? { id: dialog.id, ...payload } : { ...payload, ...(dialog.kind === 'template' ? { visibility: 'global' } : {}) },
+        ),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Save failed')
