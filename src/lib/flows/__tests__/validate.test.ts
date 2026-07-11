@@ -466,3 +466,31 @@ test('validateFlowGraph does not warn on a humanReview step in the main flow', (
   const result = validateFlowGraph(graph)
   assert.ok(!result.warnings.some((entry) => entry.code === 'HUMAN_REVIEW_IN_CONTAINER'))
 })
+
+test('condition inside a loop body is flagged, not silently skipped', () => {
+  const graph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'c1', type: 'condition', data: { left: '{{item}}', op: 'eq', right: 'x' } },
+      { id: 'lp', type: 'loop', data: { over: '{{trigger.input}}', body: ['c1'] } },
+    ],
+    edges: [{ source: 'trigger', target: 'lp' }],
+  }
+  const { issues } = validateFlowGraph(graph as never, { agents: [], toolCatalog: [] })
+  const hit = issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED')
+  assert.ok(hit, 'expected CONTAINER_BRANCHING_UNSUPPORTED')
+  assert.equal(hit?.level, 'error')
+  assert.equal(hit?.nodeId, 'c1')
+})
+
+test('a switch on the main chain is NOT flagged', () => {
+  const graph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 's1', type: 'switch', data: { cases: [] } },
+    ],
+    edges: [{ source: 'trigger', target: 's1' }],
+  }
+  const { issues } = validateFlowGraph(graph as never, { agents: [], toolCatalog: [] })
+  assert.equal(issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED'), undefined)
+})
