@@ -18,6 +18,7 @@
 import { embedQuery, type EmbedOptions } from './embeddings'
 import { ragEnabled } from './get-store'
 import type { GraphNode, GraphRagStore, SearchHit } from './store'
+import { applyRelevanceFloor } from './relevance'
 
 export interface RetrieveOptions {
   organizationId: string
@@ -35,6 +36,8 @@ export interface RetrieveOptions {
   hops?: number
   maxNodes?: number
   embed?: (text: string, options?: EmbedOptions) => Promise<number[]>
+  /** Drop search hits scoring below this cosine-similarity floor before expansion. */
+  minScore?: number
 }
 
 export interface RetrievedContext {
@@ -75,6 +78,9 @@ export async function retrieveContext(
     // Retrieval is best-effort — a failed embed/search must not break the caller.
     searchHits = []
   }
+
+  // Floor before expansion so weak hits don't seed the neighborhood walk.
+  searchHits = applyRelevanceFloor(searchHits, options.minScore)
 
   const seedIds = [...new Set([...(options.seedNodeIds ?? []), ...searchHits.map((h) => h.node.id)])]
   let related: GraphNode[] = []

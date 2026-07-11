@@ -2,6 +2,7 @@ import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { embedQuery, embeddingsConfigured, cosineSimilarity, toSqlVector } from '@/lib/rag/embeddings'
 import { keywordScore } from '@/lib/knowledge/retrieve'
+import { applyRelevanceFloor } from '@/lib/rag/relevance'
 
 export const MEMORY_SIMILARITY_THRESHOLD = 0.86
 export const KEYWORD_MATCH_THRESHOLD = 0.6
@@ -151,6 +152,7 @@ export async function retrieveAgentMemory(params: {
   agentId: string
   query: string
   k?: number
+  minScore?: number
 }): Promise<MemoryHit[]> {
   const k = params.k ?? MEMORY_INJECTION_LIMIT
   try {
@@ -182,7 +184,8 @@ export async function retrieveAgentMemory(params: {
           LIMIT ${k}
         `
       })
-      return rows.map((row) => ({ id: row.id, kind: row.kind, title: row.title, content: row.content, question: row.question, score: 1 - row.distance }))
+      const hits = rows.map((row) => ({ id: row.id, kind: row.kind, title: row.title, content: row.content, question: row.question, score: 1 - row.distance }))
+      return applyRelevanceFloor(hits, params.minScore)
     }
 
     // Keyword fallback: no embeddings configured (or the query embed call
@@ -199,7 +202,7 @@ export async function retrieveAgentMemory(params: {
       return { id: row.id, kind: row.kind, title: row.title, content: row.content, question: row.question, score: keywordScore(params.query, text) }
     })
     scored.sort((a, b) => b.score - a.score)
-    return scored.filter((s) => s.score > 0).slice(0, k)
+    return applyRelevanceFloor(scored.filter((s) => s.score > 0).slice(0, k), params.minScore)
   } catch {
     return []
   }

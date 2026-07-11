@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { embedQuery, embeddingsConfigured, toSqlVector } from '@/lib/rag/embeddings'
+import { applyRelevanceFloor } from '@/lib/rag/relevance'
 
 export type KnowledgeHit = { content: string; filename: string; score: number }
 
@@ -32,6 +33,7 @@ export async function retrieveKnowledge(params: {
   agentId: string
   query: string
   k?: number
+  minScore?: number
 }): Promise<KnowledgeHit[]> {
   const k = params.k ?? 5
   try {
@@ -69,7 +71,8 @@ export async function retrieveKnowledge(params: {
           LIMIT ${k}
         `
       })
-      return rows.map((row) => ({ content: row.content, filename: row.filename, score: 1 - row.distance }))
+      const hits = rows.map((row) => ({ content: row.content, filename: row.filename, score: 1 - row.distance }))
+      return applyRelevanceFloor(hits, params.minScore)
     }
 
     // Keyword fallback: no embeddings configured (or the query embed call
@@ -86,7 +89,7 @@ export async function retrieveKnowledge(params: {
       score: keywordScore(params.query, chunk.content),
     }))
     scored.sort((a, b) => b.score - a.score)
-    return scored.filter((s) => s.score > 0).slice(0, k)
+    return applyRelevanceFloor(scored.filter((s) => s.score > 0).slice(0, k), params.minScore)
   } catch {
     return []
   }
