@@ -20,8 +20,8 @@ if (TEST_DB) {
     const orgB = await prisma.organization.create({ data: { name: 'scope B', slug: `scope-b-${Date.now()}` } })
     ids.orgA = orgA.id
     ids.orgB = orgB.id
-    const userA = await prisma.user.create({ data: { email: `scopeA-${Date.now()}@example.com`, name: 'A', organizationId: orgA.id } })
-    const userB = await prisma.user.create({ data: { email: `scopeB-${Date.now()}@example.com`, name: 'B', organizationId: orgB.id } })
+    const userA = await prisma.user.create({ data: { supabaseId: crypto.randomUUID(), email: `scopeA-${Date.now()}@example.com`, name: 'A', organizationId: orgA.id } })
+    const userB = await prisma.user.create({ data: { supabaseId: crypto.randomUUID(), email: `scopeB-${Date.now()}@example.com`, name: 'B', organizationId: orgB.id } })
     ids.aOrg = (await mkTemplate(orgA.id, userA.id, 'A-org', 'org')).id
     ids.aGlobal = (await mkTemplate(orgA.id, userA.id, 'A-global', 'global')).id
     ids.bOrg = (await mkTemplate(orgB.id, userB.id, 'B-org', 'org')).id

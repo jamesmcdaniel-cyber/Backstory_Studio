@@ -17,7 +17,7 @@ if (TEST_DB) {
     ids.org = org.id
     // A User is required by the AgentTemplate.userId FK. Mirror the org+user
     // seeding used by src/app/api/__tests__/route-smoke.test.ts for the auth seam.
-    const user = await prisma.user.create({ data: { email: `tmpl-create-${Date.now()}@example.com`, name: 'Tmpl Creator', organizationId: org.id } })
+    const user = await prisma.user.create({ data: { supabaseId: crypto.randomUUID(), email: `tmpl-create-${Date.now()}@example.com`, name: 'Tmpl Creator', organizationId: org.id } })
     ids.user = user.id
   })
 
