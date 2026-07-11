@@ -1,4 +1,5 @@
 import type { AgentTemplate } from '@prisma/client'
+import { prisma, systemPrisma } from '@/lib/prisma'
 
 /** The subset of an AgentTemplate row the serializer reads (row from DB or a test fixture). */
 export type AgentTemplateRow = Pick<AgentTemplate, 'id' | 'name' | 'type' | 'organizationId'> & {
@@ -51,4 +52,49 @@ export function serializeTemplate(template: AgentTemplateRow, viewerOrgId?: stri
     // Only the creating org may edit/delete a template.
     mine: Boolean(viewerOrgId) && template.organizationId === viewerOrgId,
   }
+}
+
+export type StoredTemplateRow = { organizationId: string; source?: string | null; visibility?: string | null; updatedAt: Date }
+
+/**
+ * Rank stored templates for a viewer: the org's own templates first
+ * (ai_generated above user-authored), then other orgs' global community
+ * templates. Newest-first within each group. Pure — no DB.
+ */
+export function sortStoredTemplates<T extends StoredTemplateRow>(rows: T[], viewerOrgId: string): T[] {
+  const groupOf = (row: T): number => {
+    const own = row.organizationId === viewerOrgId
+    if (own && (row.source ?? 'user') === 'ai_generated') return 0
+    if (own) return 1
+    return 2 // other orgs' global community templates
+  }
+  return [...rows].sort((a, b) => {
+    const ga = groupOf(a)
+    const gb = groupOf(b)
+    if (ga !== gb) return ga - gb
+    return b.updatedAt.getTime() - a.updatedAt.getTime()
+  })
+}
+
+/**
+ * The catalogue rows for a viewer: their own templates (any visibility) via the
+ * tenant-guarded client, plus OTHER orgs' global community templates. The only
+ * cross-org read is the global slice.
+ */
+export async function fetchCatalogueRows(organizationId: string): Promise<{ own: AgentTemplate[]; global: AgentTemplate[] }> {
+  const own = await prisma.agentTemplate.findMany({ where: { organizationId, isActive: true } })
+  // systemPrisma: cross-org read of the PUBLIC community slice only — global
+  // templates from OTHER orgs. Own rows come from the tenant-guarded query above.
+  const globalRows = await systemPrisma.agentTemplate.findMany({
+    where: { isActive: true, visibility: 'global', NOT: { organizationId } },
+    orderBy: { updatedAt: 'desc' },
+    take: 500,
+  })
+  return { own, global: globalRows }
+}
+
+/** Own + global community templates, ranked own-first, serialized. */
+export async function listStoredCatalogue(organizationId: string): Promise<SerializedTemplate[]> {
+  const { own, global } = await fetchCatalogueRows(organizationId)
+  return sortStoredTemplates([...own, ...global], organizationId).map((row) => serializeTemplate(row, organizationId))
 }

@@ -1,7 +1,7 @@
 import { z } from 'zod'
-import { prisma, systemPrisma } from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
-import { serializeTemplate } from '@/lib/templates/catalogue'
+import { serializeTemplate, listStoredCatalogue } from '@/lib/templates/catalogue'
 import { createTemplate } from '@/lib/templates/create-template'
 
 const templateSchema = z.object({
@@ -715,17 +715,13 @@ const builtInTemplates = [
 ]
 
 export const GET = withAuthenticatedApi(async (request, auth) => {
-  // Community templates are a PUBLIC library: readable by every workspace,
-  // writable only by the creator's org (PUT/DELETE below stay org-scoped).
-  // systemPrisma: cross-org read by design — same exemption as /api/skills GET.
-  const stored = await systemPrisma.agentTemplate.findMany({
-    where: { isActive: true },
-    orderBy: { updatedAt: 'desc' },
-    take: 500,
-  })
+  // Org's own templates (any visibility) + other orgs' global community
+  // templates, ranked own-first; built-ins last. Scoping/prioritization lives
+  // in listStoredCatalogue (src/lib/templates/catalogue.ts).
+  const stored = await listStoredCatalogue(auth.organizationId)
   const templates = [
+    ...stored,
     ...builtInTemplates.map((t) => ({ ...t, custom: false, mine: false })),
-    ...stored.map((t) => serializeTemplate(t, auth.organizationId)),
   ]
   const limit = Number(request.nextUrl.searchParams.get('limit'))
   return { success: true, templates: limit > 0 ? templates.slice(0, limit) : templates }
