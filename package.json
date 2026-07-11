@@ -20,7 +20,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "test": "tsx --test $(find src -type f -name '*.test.ts' -path '*__tests__*')",
+    "test": "TSX_TSCONFIG_PATH=tsconfig.test.json tsx --test $(find src -type f \\( -name '*.test.ts' -o -name '*.test.tsx' \\) -path '*__tests__*')",
     "eval": "tsx --test $(find src/lib/eval -type f -name '*.test.ts' -path '*__tests__*')"
   },
   "dependencies": {
@@ -62,6 +62,9 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^20",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
@@ -69,6 +72,7 @@
     "concurrently": "^9.1.0",
     "eslint": "^9",
     "eslint-config-next": "^15.5.19",
+    "jsdom": "^25.0.1",
     "postcss": "^8.5.6",
     "prisma": "^6.14.0",
     "tailwindcss": "^3.4.17",
