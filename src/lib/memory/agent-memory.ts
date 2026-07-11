@@ -53,6 +53,9 @@ export async function saveAgentMemory(params: {
       const vectorLiteral = toSqlVector(embedding)
       const nearest = await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        // HNSW iterative scan keeps recall once the org filter narrows the
+        // index's global-nearest candidates (see knowledge/retrieve.ts).
+        await tx.$executeRawUnsafe("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
         return tx.$queryRaw<Array<{ id: string; distance: number }>>`
           SELECT "id", ("embeddingVec" <=> ${vectorLiteral}::vector(1024)) AS distance
           FROM "agent_memories"
@@ -164,6 +167,9 @@ export async function retrieveAgentMemory(params: {
       const vectorLiteral = toSqlVector(queryVec)
       const rows = await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        // HNSW iterative scan keeps recall once the org filter narrows the
+        // index's global-nearest candidates (see knowledge/retrieve.ts).
+        await tx.$executeRawUnsafe("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
         return tx.$queryRaw<Array<{ id: string; kind: string; title: string; content: string; question: string | null; distance: number }>>`
           SELECT "id", "kind", "title", "content", "question",
                  ("embeddingVec" <=> ${vectorLiteral}::vector(1024)) AS distance

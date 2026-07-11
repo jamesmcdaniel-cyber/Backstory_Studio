@@ -52,6 +52,11 @@ export async function retrieveKnowledge(params: {
       // `::vector(1024)` cast resolves regardless of the session default.
       const rows = await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET LOCAL search_path = public, extensions')
+        // HNSW iterative scan: the index returns global-nearest candidates
+        // BEFORE our organizationId filter, so without this a small org can
+        // under-return (or get zero) once the table is large enough for the
+        // planner to pick the index. Relaxed order keeps recall with the filter.
+        await tx.$executeRawUnsafe("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
         return tx.$queryRaw<Array<{ content: string; filename: string; distance: number }>>`
           SELECT c."content" AS content, d."filename" AS filename,
                  (c."embeddingVec" <=> ${vectorLiteral}::vector(1024)) AS distance
