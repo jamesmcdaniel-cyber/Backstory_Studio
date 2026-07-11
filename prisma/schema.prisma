@@ -486,6 +486,13 @@ model AgentTemplate {
   schedule       String?
   priority       String   @default("MEDIUM")
   metadata       Json?
+  // Where the template came from: 'user' (hand-authored) or 'ai_generated'
+  // (proposed by the auto-generation engine, sub-project C).
+  source         String   @default("user")
+  // 'org' = visible only to the owning org (default); 'global' = published to
+  // the shared community library, readable cross-org. Existing rows are
+  // backfilled to 'global' by the migration to preserve prior behavior.
+  visibility     String   @default("org")
   userId         String
   organizationId String   @db.Uuid
   createdAt      DateTime @default(now())
@@ -496,6 +503,7 @@ model AgentTemplate {
   executions   AgentExecution[]
 
   @@index([organizationId, isActive])
+  @@index([organizationId, visibility])
   @@map("agent_templates")
 }
 
