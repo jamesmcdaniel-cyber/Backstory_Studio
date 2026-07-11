@@ -451,7 +451,7 @@ test('validateFlowGraph warns (not errors) on a humanReview step inside a loop o
   for (const nodeId of ['hr1', 'hr2']) {
     const issue = result.warnings.find((entry) => entry.code === 'HUMAN_REVIEW_IN_CONTAINER' && entry.nodeId === nodeId)
     assert.ok(issue, `expected a container warning for ${nodeId}`)
-    assert.match(issue!.message, /re-ask on resume/)
+    assert.match(issue!.message, /one at a time/)
   }
 })
 
@@ -496,6 +496,18 @@ test('switch inside a parallel branch is flagged too', () => {
   const hit = issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED')
   assert.ok(hit, 'expected CONTAINER_BRANCHING_UNSUPPORTED for switch-in-parallel')
   assert.equal(hit?.nodeId, 's1')
+})
+
+test('a node id containing # is rejected (reserved for per-iteration keys)', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'bad#id', type: 'stop', data: {} },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'bad#id' }],
+  }
+  const { issues } = validateFlowGraph(graph)
+  assert.ok(issues.find((i) => i.code === 'INVALID_NODE_ID'), 'expected INVALID_NODE_ID')
 })
 
 test('a switch on the main chain is NOT flagged', () => {

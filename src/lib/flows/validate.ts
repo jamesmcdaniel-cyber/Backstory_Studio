@@ -516,16 +516,27 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         member.id,
       )
     }
-    // Warning (not an error): the run still works, but resuming a paused
-    // container replays its body, so the same question is asked again.
+    // Warning (not an error): a review inside a loop now resumes per-iteration
+    // (no longer re-asks already-answered items), but every iteration pauses at
+    // once and each reply resolves one iteration at a time.
     if (member.type === 'humanReview') {
       add(
         issues,
         'warning',
         'HUMAN_REVIEW_IN_CONTAINER',
-        `${nodeLabel(member)} inside a loop or parallel branches will re-ask on resume — move it to the main flow for now.`,
+        `${nodeLabel(member)} inside a loop pauses on every item at once — you'll answer them one at a time. Move it after the loop if you want a single prompt.`,
         member.id,
       )
+    }
+  }
+
+  // '#' is reserved: loop/parallel bodies persist per-iteration step rows keyed
+  // `${nodeId}#${index}`, so a '#' in a node id would collide with that scheme.
+  // The builder's id generator never emits one, but an imported/hand-authored
+  // graph could — reject it up front.
+  for (const node of graph.nodes) {
+    if (node.id.includes('#')) {
+      add(issues, 'error', 'INVALID_NODE_ID', `Step id "${node.id}" can't contain "#".`, node.id)
     }
   }
 

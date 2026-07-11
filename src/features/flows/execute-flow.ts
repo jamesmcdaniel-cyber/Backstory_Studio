@@ -519,6 +519,26 @@ export async function runFlowExecution(
     }
   }
 
+  // Deploy-boundary safety: a run left `waiting` INSIDE a loop/parallel BEFORE
+  // per-iteration keying shipped persisted its paused leaf under a BARE nodeId.
+  // Resuming it now would neither match the reply (keyed `${id}#${index}`) nor
+  // skip the already-run iterations — re-firing their side effects. A post-fix
+  // pause carries a `#` suffix, so this only catches the pre-fix format. Fail
+  // it closed with a clear message instead of re-running.
+  if (resuming && resumeNodeId && !resumeNodeId.includes('#')) {
+    const containerMembers = new Set(
+      graph.nodes.flatMap((node) => (node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : [])),
+    )
+    if (containerMembers.has(resumeNodeId)) {
+      const error = 'This run was interrupted by an upgrade to loop handling and can’t be resumed safely — please re-run the flow.'
+      await prisma.flowRun.update({
+        where: { id: run.id, organizationId: job.organizationId },
+        data: { status: 'failed', error, finishedAt: new Date() },
+      })
+      return { flowRunId: run.id, status: 'failed', output: null }
+    }
+  }
+
   const result = await interpretFlow(graph, input, {
     runAgent,
     runAction,
