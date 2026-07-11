@@ -164,4 +164,106 @@ if (TEST_DB) {
     // The original waiting row was resolved by the resume, never left dangling.
     assert.ok(!after3.some((step) => step.status === 'waiting'))
   })
+
+  test('a loop persists a distinct per-iteration step row for every item (real run)', async () => {
+    // A loop whose body is a humanReview pauses each item on its own row. The
+    // rows are keyed per iteration (`hr#0`, `hr#1`, `hr#2`) — NOT one shared
+    // `hr` row that would collide across iterations. This is what lets resume
+    // reuse a completed iteration without re-running it.
+    const graph = {
+      nodes: [
+        ...emptyGraph.nodes,
+        { id: 'loop', type: 'loop', position: { x: 0, y: 0 }, data: { over: '{{trigger.input}}', body: ['hr'] } },
+        { id: 'hr', type: 'humanReview', position: { x: 0, y: 0 }, data: { message: 'Confirm {{item}}' } },
+      ],
+      edges: [{ id: 'e-loop', source: 'trigger', target: 'loop' }],
+    }
+    const flow = await prisma.flow.create({
+      data: { name: 'loop-persist', organizationId: ids.org, status: 'ACTIVE', graph, publishedGraph: graph },
+    })
+    const paused = await runFlowExecution({ flowId: flow.id, organizationId: ids.org, userId: ids.user, input: ['A', 'B', 'C'] })
+    assert.equal(paused.status, 'waiting')
+
+    const steps: any[] = await prisma.flowRunStep.findMany({ where: { flowRunId: paused.flowRunId }, orderBy: { order: 'asc' } })
+    const byNode = (id: string) => steps.find((step) => step.nodeId === id)
+    // Every iteration gets its own waiting row under a distinct per-iteration id.
+    for (const key of ['hr#0', 'hr#1', 'hr#2']) {
+      const row = byNode(key)
+      assert.ok(row, `expected a persisted step row for ${key}`)
+      assert.equal(row.status, 'waiting')
+      assert.deepEqual(row.output.waiting.kind, 'input')
+    }
+    // No collapsed, shared bare `hr` row (the old collision that lost iterations).
+    assert.ok(!byNode('hr'), 'must NOT persist a shared bare `hr` row')
+    // The container itself is still reported.
+    assert.ok(byNode('loop'), 'the loop container row must be persisted')
+  })
+
+  test('resuming a mid-loop pause reuses completed iterations — no prior side effect re-runs', async () => {
+    // A real first run that pauses on iteration 1 would need the live agent
+    // runtime, so we SEED the exact post-first-run state (the sibling resume
+    // tests seed waiting runs the same way) and drive the RESUME end-to-end
+    // through runFlowExecution against the real DB.
+    //
+    // Body = [work(agent), hr(humanReview)] over 3 items. Prior run: items 0
+    // and 2 fully completed (agent + review), item 1's agent completed but its
+    // review paused. On resume, EVERY `work#i` (adapter step) and the two
+    // finished reviews must be reused — not re-executed — and only `hr#1`
+    // resumes with the reply.
+    const agent = await prisma.agentTask.create({
+      data: { organizationId: ids.org, userId: ids.user, description: 'loop worker', objective: 'work an item', status: 'ACTIVE' },
+    })
+    const snapshot = {
+      nodes: [
+        ...emptyGraph.nodes,
+        { id: 'loop', type: 'loop', position: { x: 0, y: 0 }, data: { over: '{{trigger.input}}', body: ['work', 'hr'] } },
+        { id: 'work', type: 'agent', position: { x: 0, y: 0 }, data: { agentId: agent.id, input: 'work {{item}}' } },
+        { id: 'hr', type: 'humanReview', position: { x: 0, y: 0 }, data: { message: 'Confirm {{item}}' } },
+      ],
+      edges: [{ id: 'e-loop', source: 'trigger', target: 'loop' }],
+    }
+    const flow = await prisma.flow.create({
+      data: { name: 'loop-resume', organizationId: ids.org, status: 'ACTIVE', graph: snapshot, publishedGraph: snapshot },
+    })
+    const run = await prisma.flowRun.create({
+      data: { flowId: flow.id, organizationId: ids.org, userId: ids.user, status: 'waiting', graphSnapshot: snapshot, input: { prompt: ['A', 'B', 'C'] } },
+    })
+    // Seed the paused state, per iteration.
+    const seed = [
+      { nodeId: 'work#0', status: 'succeeded', output: 'w0', order: 0 },
+      { nodeId: 'hr#0', status: 'succeeded', output: 'ans-A', order: 1 },
+      { nodeId: 'work#1', status: 'succeeded', output: 'w1', order: 2 },
+      { nodeId: 'hr#1', status: 'waiting', output: { waiting: { kind: 'input', question: 'Confirm B' } }, order: 3 },
+      { nodeId: 'work#2', status: 'succeeded', output: 'w2', order: 4 },
+      { nodeId: 'hr#2', status: 'succeeded', output: 'ans-C', order: 5 },
+      { nodeId: 'loop', status: 'waiting', output: null, order: 6 },
+    ]
+    for (const row of seed) {
+      await prisma.flowRunStep.create({ data: { flowRunId: run.id, startedAt: new Date(), ...row } })
+    }
+
+    const countRows = async (nodeId: string) => prisma.flowRunStep.count({ where: { flowRunId: run.id, nodeId } })
+    assert.equal(await countRows('work#0'), 1)
+    assert.equal(await countRows('work#1'), 1)
+
+    const resumed = await runFlowExecution({ flowId: flow.id, organizationId: ids.org, userId: ids.user, flowRunId: run.id, reply: 'ans-B' })
+
+    // The run completes with all three items, in order — item 1 took the reply.
+    assert.equal(resumed.status, 'succeeded')
+    assert.deepEqual(resumed.output, ['ans-A', 'ans-B', 'ans-C'])
+
+    // The core invariant: NO new adapter row for a prior iteration's work step —
+    // item 0 (a completed iteration) AND item 1's already-finished agent step
+    // are reused, never re-executed. (A re-run would have created a second row.)
+    assert.equal(await countRows('work#0'), 1, 'item 0 agent step must not re-run on resume')
+    assert.equal(await countRows('work#1'), 1, 'item 1 agent step (already done before the pause) must not re-run')
+    assert.equal(await countRows('work#2'), 1, 'item 2 agent step must not re-run on resume')
+
+    // The paused review resumed with the reply; nothing is left waiting.
+    const after: any[] = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
+    const resumedReview = after.filter((step) => step.nodeId === 'hr#1' && step.status === 'succeeded').at(-1)
+    assert.ok(resumedReview, 'hr#1 must have a resumed succeeded row')
+    assert.equal(resumedReview.output, 'ans-B')
+    assert.ok(!after.some((step) => step.status === 'waiting'), 'no step may be left waiting after resume')
+  })
 }

@@ -27,17 +27,24 @@ export function parseApprovalDecision(reply: string): ApprovalDecisionReply | nu
 
 /**
  * Should a resuming tool step consume this decision? Only when the decision
- * correlates — by approvalId — with an approval the run was actually paused
- * on. In a loop/parallel several items pause on their OWN approvals; another
- * item's decision must never be reported as this step's result. A step that
- * doesn't consume falls through to its normal execution path and re-queues
- * its own approval.
+ * correlates — by approvalId — with an approval the step was actually paused
+ * on. In a loop/parallel several iterations pause on their OWN approvals;
+ * another iteration's decision must never be reported as this step's result. A
+ * step that doesn't consume falls through to its normal execution path and
+ * re-queues its own approval.
+ *
+ * `pausedApproval` is either the SPECIFIC approval id this iteration paused on
+ * (per-iteration correlation — a mid-loop resume feeds each iteration only its
+ * own decision) or the run-wide set of paused approval ids (a single main-chain
+ * pause).
  */
 export function shouldConsumeApprovalDecision(
   decision: ApprovalDecisionReply | null,
-  pausedApprovalIds: ReadonlySet<string>,
+  pausedApproval: ReadonlySet<string> | string,
 ): boolean {
   if (!decision?.approvalId) return false
   if (decision.status !== 'approved' && decision.status !== 'rejected') return false
-  return pausedApprovalIds.has(decision.approvalId)
+  return typeof pausedApproval === 'string'
+    ? pausedApproval === decision.approvalId
+    : pausedApproval.has(decision.approvalId)
 }

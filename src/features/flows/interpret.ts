@@ -6,6 +6,12 @@ import { runDataOp } from '@/lib/flows/data-ops'
 
 export type StepOutcome = {
   nodeId: string
+  // The persistence key: `${nodeId}${indexKey}` — inside a loop it carries the
+  // iteration suffix (e.g. `agent#1`) so every iteration's step row is distinct;
+  // on the main chain it equals `nodeId`. `nodeId` stays bare (for
+  // {{step.<id>.output}} and onStep node-type lookups); callers that persist
+  // rows / build the resume `completed` map key by `iterationKey`.
+  iterationKey?: string
   status: 'succeeded' | 'failed' | 'skipped' | 'waiting' | 'stopped'
   output?: unknown
   error?: string
@@ -286,7 +292,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     graph.edges.find((edge) => edge.source === id && (branch === undefined || edge.branch === branch || edge.branch === undefined))
 
   const steps: StepOutcome[] = []
-  const emit = (outcome: StepOutcome) => {
+  const emitOutcome = (outcome: StepOutcome) => {
     steps.push(outcome)
     opts.onStep?.(outcome)
   }
@@ -297,13 +303,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   const runAgentWithReliability = async (
     node: Extract<FlowNode, { type: 'agent' }>,
     resolvedInput: string,
+    stepKey: string,
   ): Promise<RunAgentResult> => {
     const retries = node.data.retries ?? 0
     const timeoutMs = node.data.timeoutMs
-    const resume = opts.resumeNodeId === node.id
+    const resume = opts.resumeNodeId === stepKey
     let attempt = 0
     for (;;) {
-      const call = opts.runAgent({ id: node.id, agentId: node.data.agentId, input: resolvedInput, resume })
+      const call = opts.runAgent({ id: stepKey, agentId: node.data.agentId, input: resolvedInput, resume })
       const raced = timeoutMs ? await raceTimeout(call, timeoutMs) : await call
       // A timeout only ABANDONS the live agent execution — Promise.race cannot
       // cancel it, so it may still be running (and spending tokens / performing
@@ -327,8 +334,17 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
   // Execute one node against `ctx`. Never routes edges (the main-chain walker
   // and container bodies drive traversal); returns an output or control signal.
-  const execNode = async (node: FlowNode, ctx: FlowContext): Promise<NodeResult> => {
+  const execNode = async (node: FlowNode, ctx: FlowContext, indexKey = ''): Promise<NodeResult> => {
     if (overBudget()) return { kind: 'fail', error: 'Flow exceeded the maximum number of steps.' }
+
+    // Per-iteration keying: inside a loop `indexKey` is `#<index>` (nested loops
+    // append, e.g. `#0#2`), so each iteration persists/looks-up its step under a
+    // distinct `stepKey` while the in-memory `ctx.step[node.id]` stays bare for
+    // {{step.<id>.output}} resolution. On the main chain `indexKey` is '' and
+    // `stepKey === node.id` — byte-identical to before. `emit` reports the bare
+    // node id but tags each outcome with `iterationKey` for the persistence layer.
+    const stepKey = node.id + indexKey
+    const emit = (outcome: StepOutcome) => emitOutcome({ ...outcome, iterationKey: stepKey })
 
     if (node.type === 'trigger') return { kind: 'skip' }
 
@@ -337,8 +353,8 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     // covers container bodies the walk never enters), so a replayed variable
     // step must NOT re-apply here — that would rewind the symbol table to a
     // value from before a later completed write.
-    if (opts.completed && Object.prototype.hasOwnProperty.call(opts.completed, node.id)) {
-      const output = opts.completed[node.id]
+    if (opts.completed && Object.prototype.hasOwnProperty.call(opts.completed, stepKey)) {
+      const output = opts.completed[stepKey]
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'skipped', output })
       return { kind: 'ok', output }
@@ -356,8 +372,8 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
     if (node.type === 'humanReview') {
       // Request information: a first-class pause with no agent involved.
-      // Resuming this exact node? The reviewer's reply IS the step output.
-      if (opts.resumeNodeId === node.id) {
+      // Resuming this exact node (iteration)? The reviewer's reply IS the output.
+      if (opts.resumeNodeId === stepKey) {
         const output = opts.resumeReply ?? ''
         ctx.step[node.id] = { output }
         emit({ nodeId: node.id, status: 'succeeded', output })
@@ -369,7 +385,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       // and the existing reply machinery renders/answers it unchanged.
       const question = resolveTemplate(node.data.message, ctx)
       emit({ nodeId: node.id, status: 'waiting', output: { waiting: { kind: 'input', question } } })
-      return { kind: 'pause', nodeId: node.id, question }
+      return { kind: 'pause', nodeId: stepKey, question }
     }
 
     if (node.type === 'transform') {
@@ -471,12 +487,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
               timeoutMs: node.data.timeoutMs,
             }
       const res: RunAgentResult = opts.runAction
-        ? await opts.runAction({ id: node.id, kind: node.type, config, resume: opts.resumeNodeId === node.id })
+        ? await opts.runAction({ id: stepKey, kind: node.type, config, resume: opts.resumeNodeId === stepKey })
         : { error: `${node.type} steps are not supported in this runtime.` }
       if (res.waiting) {
         // A write tool queued for approval pauses the run, same as an agent step.
         emit({ nodeId: node.id, status: 'waiting' })
-        return { kind: 'pause', nodeId: node.id, question: res.waiting.question }
+        return { kind: 'pause', nodeId: stepKey, question: res.waiting.question }
       }
       if (res.error) {
         emit({ nodeId: node.id, status: 'failed', error: res.error })
@@ -494,7 +510,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const structured = node.data.responseFormat === 'structured' && outputFields.some((field) => field.name.trim())
       let resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx)
       if (structured) resolved = `${resolved}\n\n${structuredResponseInstruction(outputFields)}`
-      const res = await runAgentWithReliability(node, resolved)
+      const res = await runAgentWithReliability(node, resolved, stepKey)
       if (res.waiting) {
         if (node.data.humanAssistance === false) {
           const error = 'The agent asked for help, but human assistance is turned off for this step.'
@@ -503,7 +519,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
           return { kind: 'fail', error }
         }
         emit({ nodeId: node.id, status: 'waiting' })
-        return { kind: 'pause', nodeId: node.id, question: res.waiting.question }
+        return { kind: 'pause', nodeId: stepKey, question: res.waiting.question }
       }
       if (res.error) {
         emit({ nodeId: node.id, status: 'failed', error: res.error })
@@ -533,7 +549,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         // `variables` is shared by reference: writes inside the body persist
         // past the loop (one flow-global symbol table, MS parity).
         const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables }
-        return execBody(node.data.body, itemCtx)
+        // Each iteration's body persists/resumes under `#<index>` (nested loops
+        // append their own suffix) so a mid-loop pause never re-runs a prior
+        // iteration's side effects on resume.
+        return execBody(node.data.body, itemCtx, `${indexKey}#${index}`)
       })
       // Propagate the first hard control (stop / fail / pause); a 'drop' (filter)
       // just removes that item from the collected output.
@@ -552,7 +571,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const results = await Promise.all(
         node.data.branches.map(async (branch) => {
           const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables }
-          const res = await execBody(branch, branchCtx)
+          // Branch node ids are already unique, so parallel just propagates the
+          // ambient `indexKey` (a parallel nested in a loop keeps the loop's
+          // iteration suffix; a top-level parallel keeps bare ids).
+          const res = await execBody(branch, branchCtx, indexKey)
           return { key: branch[0] ?? node.id, res }
         }),
       )
@@ -572,12 +594,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
   // Execute an ordered list of node ids (a loop body / parallel branch) as a
   // sequence, threading outputs. Stops on the first control signal.
-  const execBody = async (nodeIds: string[], ctx: FlowContext): Promise<{ output: unknown; control?: NodeResult }> => {
+  const execBody = async (nodeIds: string[], ctx: FlowContext, indexKey = ''): Promise<{ output: unknown; control?: NodeResult }> => {
     let last: unknown = ctx.item
     for (const id of nodeIds) {
       const node = byId.get(id)
       if (!node) continue
-      const res = await execNode(node, ctx)
+      const res = await execNode(node, ctx, indexKey)
       if (res.kind === 'ok') {
         if (res.output !== undefined) {
           ctx.step[id] = { output: res.output }
@@ -610,7 +632,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   if (opts.completed) {
     const variables = (ctx.variables ??= {})
     for (const [nodeId, output] of Object.entries(opts.completed)) {
-      const node = byId.get(nodeId)
+      // Loop-body steps are keyed `${id}#${index}` — strip the suffix to find
+      // the graph node (a variable written inside a completed loop must replay).
+      const hash = nodeId.indexOf('#')
+      const node = byId.get(hash === -1 ? nodeId : nodeId.slice(0, hash))
       if (node?.type === 'variable' && node.data.name.trim()) variables[node.data.name.trim()] = output
     }
   }
@@ -631,7 +656,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       if (overBudget()) return { status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' }
       // First matching case wins; otherwise follow the 'default' edge.
       const hit = current.data.cases.find((c) => evalClause({ left: c.left, op: c.op, right: c.right }, ctx))
-      emit({ nodeId: current.id, status: 'succeeded', output: hit?.id ?? 'default' })
+      emitOutcome({ nodeId: current.id, status: 'succeeded', output: hit?.id ?? 'default' })
       const edge = outgoing(current.id, hit ? hit.id : 'default')
       current = edge ? byId.get(edge.target) : undefined
       continue

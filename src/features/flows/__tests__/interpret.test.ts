@@ -1235,3 +1235,79 @@ test('humanReview resume turns the reply into the step output for downstream ste
   assert.equal(hr?.output, 'Approved by Jane')
   assert.equal(result.output, 'ran:got Approved by Jane')
 })
+
+// ── Loop resume-from-cursor: a mid-loop pause must not re-run prior iterations ──
+
+test('a loop that paused on item 1 resumes without re-running item 0', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['a'] } },
+      { id: 'a', type: 'agent', data: { agentId: 'work', input: '{{item}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  // The stub keys off the per-iteration node id (`a#<index>`): item 1 pauses on
+  // its first visit and re-enters with the reply on resume; every other item
+  // echoes `out-<index>`.
+  let calls: number[] = []
+  const runAgent: RunAgentFn = async (node) => {
+    const index = Number(node.id.split('#')[1] ?? -1)
+    calls.push(index)
+    if (index === 1) {
+      return node.resume ? { output: 'reply-1' } : { waiting: { status: 'waiting_for_input', question: 'Which?' } }
+    }
+    return { output: `out-${index}` }
+  }
+
+  // First run pauses at item 1. The pause control must carry the iteration
+  // index so resume can target the exact paused iteration.
+  const first = await interpretFlow(graph, ['x', 'y', 'z'], { runAgent })
+  assert.equal(first.status, 'waiting')
+  assert.equal(first.waiting?.nodeId, 'a#1')
+
+  // Resume: item 0's body output is already recorded under its per-iteration
+  // key; the reply targets item 1's node.
+  calls = []
+  const resumed = await interpretFlow(graph, ['x', 'y', 'z'], {
+    runAgent,
+    completed: { 'a#0': 'out-0' },
+    resumeNodeId: 'a#1',
+    resumeReply: 'reply-1',
+  })
+  assert.equal(resumed.status, 'succeeded')
+  assert.ok(!calls.includes(0), 'item 0 must NOT be re-invoked on resume')
+  assert.deepEqual(calls, [1, 2]) // item 1 (resumed with reply), then item 2 (fresh)
+  assert.deepEqual(resumed.output, ['out-0', 'reply-1', 'out-2']) // all three, in order
+})
+
+test('a partially-completed iteration skips its finished body steps and resumes at the paused one', async () => {
+  // A two-node body: `b1` runs, then `b2` (the pauser). On resume, item 1's
+  // ALREADY-completed `b1#1` must not re-run — only `b2#1` resumes.
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['b1', 'b2'] } },
+      { id: 'b1', type: 'agent', data: { agentId: 'first', input: 'b1 {{item}}' } },
+      { id: 'b2', type: 'agent', data: { agentId: 'second', input: 'b2 {{item}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  const ran: string[] = []
+  const runAgent: RunAgentFn = async (node) => {
+    ran.push(node.id)
+    if (node.id === 'b2#1') return node.resume ? { output: 'answered-1' } : { waiting: { status: 'waiting_for_input' } }
+    return { output: node.input }
+  }
+  const resumed = await interpretFlow(graph, ['x', 'y'], {
+    runAgent,
+    completed: { 'b1#0': 'b1 x', 'b2#0': 'b2 x', 'b1#1': 'b1 y' },
+    resumeNodeId: 'b2#1',
+    resumeReply: 'answered-1',
+  })
+  assert.equal(resumed.status, 'succeeded')
+  // Neither iteration 0's body nor iteration 1's ALREADY-done b1 re-runs — only
+  // the paused b2#1 does.
+  assert.deepEqual(ran, ['b2#1'])
+  assert.deepEqual(resumed.output, ['b2 x', 'answered-1'])
+})

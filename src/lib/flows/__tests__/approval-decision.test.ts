@@ -57,3 +57,18 @@ test('consume-once: deleting the consumed id stops a second consume (loop items)
   paused.delete(String(decision?.approvalId))
   assert.equal(shouldConsumeApprovalDecision(decision, paused), false)
 })
+
+test('per-iteration form: a string correlates a decision to exactly one iteration', () => {
+  // The executor resumes each loop iteration against the approval id IT paused
+  // on (`${nodeId}#${index}` -> approvalId). Iteration 1 (paused on ap_1)
+  // consumes the ap_1 decision; iteration 2 (paused on ap_2) does NOT — it
+  // falls through and re-queues its own approval. This is what stops iteration
+  // 0/2 from swallowing iteration 1's decision when the loop re-enters.
+  const decision = parseApprovalDecision(JSON.stringify({ status: 'approved', approvalId: 'ap_1' }))
+  assert.equal(shouldConsumeApprovalDecision(decision, 'ap_1'), true)
+  assert.equal(shouldConsumeApprovalDecision(decision, 'ap_2'), false)
+  assert.equal(shouldConsumeApprovalDecision({ status: 'rejected', approvalId: 'ap_1' }, 'ap_1'), true)
+  assert.equal(shouldConsumeApprovalDecision({ status: 'pending', approvalId: 'ap_1' }, 'ap_1'), false)
+  assert.equal(shouldConsumeApprovalDecision({ status: 'approved' }, 'ap_1'), false)
+  assert.equal(shouldConsumeApprovalDecision(null, 'ap_1'), false)
+})

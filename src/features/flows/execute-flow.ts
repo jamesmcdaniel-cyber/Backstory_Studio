@@ -197,26 +197,37 @@ export async function runFlowExecution(
     input = storedRunInput(run.input) ?? ''
   }
 
+  const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
   // Resume state: nodes that already succeeded are skipped (reusing their
-  // stored output); the paused step is re-run with the reply injected.
+  // stored output); the paused step is re-run with the reply injected. Step
+  // rows inside a loop are keyed per iteration (`${nodeId}#${index}`), so
+  // `completed` and the resume target are keyed by that exact nodeId — a
+  // mid-loop pause resumes ONLY the paused iteration, never re-running prior
+  // iterations' side effects.
   const completed: Record<string, unknown> = {}
   let resumeNodeId: string | undefined
   let resumeExecutionId: string | undefined
-  // Approval ids persisted on the run's waiting step rows. A resuming tool
-  // step may only consume a decision reply whose approvalId is in this set —
-  // and each id is consumed at most once — so in loops/parallel one item's
-  // decision is never reported as another item's result.
-  const pausedApprovalIds = new Set<string>()
+  // The approval id each paused leaf node (`${nodeId}#${index}` inside a loop)
+  // paused on. On resume each iteration consumes ONLY its own decision — a
+  // decision for iteration i is never misattributed to iteration 0 when the
+  // loop re-enters, and each approval id is unique so it is consumed once.
+  const pausedApprovalByNode = new Map<string, string>()
   let order = 0
   if (resuming) {
     const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
     for (const step of priorSteps) {
       if (step.status === 'succeeded' || step.status === 'skipped') completed[step.nodeId] = step.output
       if (step.status === 'waiting') {
+        // A loop/parallel container persists its OWN `waiting` row for display,
+        // but only the leaf node inside it actually resumes. Skip container rows
+        // so the reply targets the paused leaf (`${nodeId}#${index}`), not the
+        // container (whose row sorts after the leaf and would otherwise win).
+        const baseType = nodeTypeById.get(step.nodeId.split('#')[0])
+        if (baseType === 'loop' || baseType === 'parallel') continue
         resumeNodeId = step.nodeId
         resumeExecutionId = step.agentExecutionId ?? undefined
         const approvalId = (step.output as { waiting?: { approvalId?: string } } | null)?.waiting?.approvalId
-        if (typeof approvalId === 'string' && approvalId) pausedApprovalIds.add(approvalId)
+        if (typeof approvalId === 'string' && approvalId) pausedApprovalByNode.set(step.nodeId, approvalId)
       }
     }
     // Resuming creates NEW step rows for the re-run node — resolve every stale
@@ -239,19 +250,21 @@ export async function runFlowExecution(
     if (priorSteps.length) order = Math.max(...priorSteps.map((step) => step.order)) + 1
   }
 
-  const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
   // Container (condition/loop/parallel/stop) outcomes are reported via onStep;
   // persist them so runs are fully inspectable. Agent/tool/http steps are
-  // persisted by their adapters because they need started/running rows.
+  // persisted by their adapters because they need started/running rows. The
+  // node type is looked up by the BARE `outcome.nodeId`; the row is keyed by
+  // `outcome.iterationKey` (the per-iteration `${nodeId}#${index}` inside a
+  // loop, or the bare id on the main chain).
   const pending: Promise<unknown>[] = []
-  const onStep = (outcome: { nodeId: string; status: string; output?: unknown; error?: string }) => {
+  const onStep = (outcome: { nodeId: string; iterationKey?: string; status: string; output?: unknown; error?: string }) => {
     if (!shouldPersistInterpreterStep(nodeTypeById.get(outcome.nodeId))) return
     pending.push(
       prisma.flowRunStep
         .create({
           data: {
             flowRunId: run.id,
-            nodeId: outcome.nodeId,
+            nodeId: outcome.iterationKey ?? outcome.nodeId,
             order: order++,
             status: outcome.status,
             output: jsonValue(outcome.output ?? null),
@@ -366,14 +379,15 @@ export async function runFlowExecution(
         // Re-entering a step paused on an approval: the reply carries the
         // decision (decideApproval already executed an approved write, exactly
         // as it does for agent runs) — consume it, never re-execute the write.
-        // CORRELATED consume only: the decision must name an approvalId this
-        // run actually paused on, and each decision is consumed once. A step
-        // whose approval the decision does NOT match (another loop item's
-        // pause) falls through and re-queues its own approval below.
-        if (node.resume && typeof job.reply === 'string') {
+        // PER-ITERATION correlated consume: this exact node (`${id}#${index}`
+        // inside a loop) consumes ONLY the decision naming the approval IT
+        // paused on. Another loop iteration's decision falls through here and
+        // re-queues that iteration's own approval below. Each approval id is
+        // unique, so it is consumed by exactly one iteration.
+        const ownApprovalId = pausedApprovalByNode.get(node.id)
+        if (ownApprovalId && typeof job.reply === 'string') {
           const decision = parseApprovalDecision(job.reply)
-          if (decision && shouldConsumeApprovalDecision(decision, pausedApprovalIds)) {
-            pausedApprovalIds.delete(String(decision.approvalId))
+          if (decision && shouldConsumeApprovalDecision(decision, ownApprovalId)) {
             if (decision.status === 'approved') {
               const output = decision.result ?? { status: 'approved', executed: decision.executed === true }
               await finish({ status: 'succeeded', output })
@@ -527,7 +541,10 @@ export async function runFlowExecution(
   // assignee is set — that the flow is waiting on them. Mirrors the
   // flow.needs_approval notify above; notify never throws into the run.
   if (status === 'waiting' && result.waiting) {
-    const waitingNode = graph.nodes.find((node) => node.id === result.waiting?.nodeId)
+    // The waiting node id may carry a loop iteration suffix (`${id}#${index}`);
+    // strip it to resolve the graph node.
+    const waitingBaseId = result.waiting.nodeId.split('#')[0]
+    const waitingNode = graph.nodes.find((node) => node.id === waitingBaseId)
     if (waitingNode?.type === 'humanReview') {
       await notify({
         organizationId: job.organizationId,
