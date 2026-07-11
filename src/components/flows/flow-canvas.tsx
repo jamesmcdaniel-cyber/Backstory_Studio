@@ -185,7 +185,7 @@ export function FlowCanvas({
       case 'trigger': {
         const type = (node.data.trigger as { type?: string } | undefined)?.type ?? 'manual'
         if (type === 'schedule') return 'Schedule trigger'
-        if (type === 'webhook') return 'Webhook trigger'
+        if (type === 'webhook') return 'When an HTTP request is received'
         if (type === 'signal') return 'Signal trigger'
         return 'Manually trigger a flow'
       }

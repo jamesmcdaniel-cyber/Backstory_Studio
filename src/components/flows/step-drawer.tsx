@@ -1421,7 +1421,7 @@ function TriggerEditor({
         >
           <option value="manual">Manual / on run</option>
           <option value="schedule">Schedule</option>
-          <option value="webhook">Webhook (external)</option>
+          <option value="webhook">When an HTTP request is received</option>
           <option value="signal">Signal (in-platform event)</option>
         </select>
       </div>
