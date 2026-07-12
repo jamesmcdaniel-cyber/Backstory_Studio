@@ -22,7 +22,9 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   const params = request.nextUrl.searchParams
   const statusList = (params.get('status') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
   const take = Math.min(Math.max(intParam(params.get('take'), DEFAULT_TAKE), 1), MAX_TAKE)
-  const skip = Math.max(intParam(params.get('skip'), 0), 0)
+  // Upper-bounded: an absurd skip (1e20) is finite, passes a bare >=0 clamp,
+  // and overflows the query engine's i64 into a 500.
+  const skip = Math.min(Math.max(intParam(params.get('skip'), 0), 0), 1_000_000)
 
   // Fetch one extra row purely to learn whether another page exists.
   const page = await prisma.approvalRequest.findMany({
