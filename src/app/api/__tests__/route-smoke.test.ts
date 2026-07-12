@@ -54,6 +54,7 @@ if (TEST_DB) {
     { name: 'GET /api/flows/tool-catalog', run: async () => (await import('../flows/tool-catalog/route')).GET(req('/api/flows/tool-catalog')) },
     { name: 'GET /api/granola/notes', run: async () => (await import('../granola/notes/route')).GET(req('/api/granola/notes')) },
     { name: 'GET /api/integrations/available', run: async () => (await import('../integrations/available/route')).GET(req('/api/integrations/available')) },
+    { name: 'GET /api/integrations/count', run: async () => (await import('../integrations/count/route')).GET(req('/api/integrations/count')) },
     { name: 'GET /api/integrations/granola', run: async () => (await import('../integrations/granola/route')).GET(req('/api/integrations/granola')) },
     { name: 'GET /api/integrations/status', run: async () => (await import('../integrations/status/route')).GET(req('/api/integrations/status')) },
     { name: 'GET /api/mcp-connections', run: async () => (await import('../mcp-connections/route')).GET(req('/api/mcp-connections')) },
