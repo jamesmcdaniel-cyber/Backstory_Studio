@@ -1,0 +1,128 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { aggregateUsage, USAGE_WINDOW_DAYS, type UsageRow } from '../usage-profile'
+
+const row = (provider: string, tool: string, runId: string | null, at: string): UsageRow => ({ provider, tool, runId, at })
+
+test('empty rows produce an empty profile with the default window', () => {
+  const profile = aggregateUsage([])
+  assert.deepEqual(profile.providers, [])
+  assert.deepEqual(profile.topTools, [])
+  assert.deepEqual(profile.coOccurrence, [])
+  assert.deepEqual(profile.sequences, [])
+  assert.equal(profile.runCount, 0)
+  assert.equal(profile.windowDays, USAGE_WINDOW_DAYS)
+})
+
+test('providers count rows per provider, desc with a deterministic tie-break', () => {
+  const rows = [
+    row('slack', 'send', 'r1', '2026-07-01T00:00:00Z'),
+    row('slack', 'send', 'r1', '2026-07-01T00:01:00Z'),
+    row('gmail', 'send', 'r1', '2026-07-01T00:02:00Z'),
+    row('asana', 'task', 'r2', '2026-07-01T00:03:00Z'),
+    row('gmail', 'read', 'r2', '2026-07-01T00:04:00Z'),
+  ]
+  const { providers } = aggregateUsage(rows)
+  // slack=2, gmail=2, asana=1 -> slack & gmail tie at 2, tie-break by provider string asc (gmail < slack)
+  assert.deepEqual(providers, [
+    { provider: 'gmail', calls: 2 },
+    { provider: 'slack', calls: 2 },
+    { provider: 'asana', calls: 1 },
+  ])
+})
+
+test('topTools counts per (provider,tool) and caps at 25, desc', () => {
+  const rows: UsageRow[] = []
+  // 30 distinct tools with descending call counts 30..1 so the top 25 are stable
+  for (let i = 0; i < 30; i++) {
+    const calls = 30 - i
+    for (let c = 0; c < calls; c++) {
+      rows.push(row('slack', `tool${String(i).padStart(2, '0')}`, `r${i}`, `2026-07-01T00:00:${String(c).padStart(2, '0')}Z`))
+    }
+  }
+  const { topTools } = aggregateUsage(rows)
+  assert.equal(topTools.length, 25)
+  assert.deepEqual(topTools[0], { provider: 'slack', tool: 'tool00', calls: 30 })
+  assert.equal(topTools[24].calls, 6) // 30th..? cap keeps counts 30 down to 6
+})
+
+test('coOccurrence counts distinct-provider SETS shared across runs (size >= 2 only)', () => {
+  const rows = [
+    // run 1 uses {slack, gmail} (with a dup slack row that must dedupe to a set)
+    row('slack', 'send', 'r1', '2026-07-01T00:00:00Z'),
+    row('slack', 'send', 'r1', '2026-07-01T00:00:30Z'),
+    row('gmail', 'send', 'r1', '2026-07-01T00:01:00Z'),
+    // run 2 uses {gmail, slack} in a different order -> SAME set
+    row('gmail', 'read', 'r2', '2026-07-01T00:02:00Z'),
+    row('slack', 'send', 'r2', '2026-07-01T00:03:00Z'),
+    // run 3 is single-provider -> set size 1 -> dropped
+    row('asana', 'task', 'r3', '2026-07-01T00:04:00Z'),
+    // null-run rows are ignored for co-occurrence
+    row('notion', 'page', null, '2026-07-01T00:05:00Z'),
+    row('linear', 'issue', null, '2026-07-01T00:06:00Z'),
+  ]
+  const { coOccurrence } = aggregateUsage(rows)
+  assert.deepEqual(coOccurrence, [{ providers: ['gmail', 'slack'], runs: 2 }])
+})
+
+test('sequences collapse consecutive same-provider and count identical chains (length >= 2)', () => {
+  const rows = [
+    // run 1: slack, slack, gmail -> collapse -> [slack, gmail]
+    row('slack', 'a', 'r1', '2026-07-01T00:00:00Z'),
+    row('slack', 'b', 'r1', '2026-07-01T00:00:10Z'),
+    row('gmail', 'c', 'r1', '2026-07-01T00:00:20Z'),
+    // run 2: slack, gmail, gmail -> collapse -> [slack, gmail] (SAME chain)
+    row('slack', 'a', 'r2', '2026-07-01T00:00:00Z'),
+    row('gmail', 'c', 'r2', '2026-07-01T00:00:10Z'),
+    row('gmail', 'd', 'r2', '2026-07-01T00:00:20Z'),
+    // run 3: slack, slack -> collapse -> [slack] length 1 -> dropped
+    row('slack', 'a', 'r3', '2026-07-01T00:00:00Z'),
+    row('slack', 'b', 'r3', '2026-07-01T00:00:10Z'),
+  ]
+  const { sequences } = aggregateUsage(rows)
+  assert.deepEqual(sequences, [{ steps: ['slack', 'gmail'], count: 2 }])
+})
+
+test('sequences are ordered by `at`, not by input order', () => {
+  const rows = [
+    row('gmail', 'c', 'r1', '2026-07-01T00:00:20Z'),
+    row('slack', 'a', 'r1', '2026-07-01T00:00:00Z'),
+  ]
+  const { sequences } = aggregateUsage(rows)
+  assert.deepEqual(sequences, [{ steps: ['slack', 'gmail'], count: 1 }])
+})
+
+test('output is deterministic and stable across shuffled input', () => {
+  const rows = [
+    row('slack', 'send', 'r1', '2026-07-01T00:00:00Z'),
+    row('gmail', 'send', 'r1', '2026-07-01T00:01:00Z'),
+    row('slack', 'send', 'r2', '2026-07-01T00:02:00Z'),
+    row('gmail', 'read', 'r2', '2026-07-01T00:03:00Z'),
+    row('asana', 'task', 'r3', '2026-07-01T00:04:00Z'),
+    row('gmail', 'send', 'r3', '2026-07-01T00:05:00Z'),
+    row('notion', 'page', 'r4', '2026-07-01T00:06:00Z'),
+    row('slack', 'send', 'r4', '2026-07-01T00:07:00Z'),
+  ]
+  const base = aggregateUsage(rows)
+  // A fixed, non-trivial reordering of the same multiset.
+  const shuffled = [rows[5], rows[0], rows[7], rows[2], rows[6], rows[1], rows[4], rows[3]]
+  const other = aggregateUsage(shuffled)
+  assert.deepEqual(other, base)
+  // A second, different reordering must also match.
+  const shuffled2 = [rows[3], rows[6], rows[1], rows[5], rows[0], rows[4], rows[7], rows[2]]
+  assert.deepEqual(aggregateUsage(shuffled2), base)
+})
+
+test('runCount is the number of distinct non-null runs', () => {
+  const rows = [
+    row('slack', 'send', 'r1', '2026-07-01T00:00:00Z'),
+    row('gmail', 'send', 'r1', '2026-07-01T00:01:00Z'),
+    row('slack', 'send', 'r2', '2026-07-01T00:02:00Z'),
+    row('notion', 'page', null, '2026-07-01T00:03:00Z'),
+  ]
+  assert.equal(aggregateUsage(rows).runCount, 2)
+})
+
+test('windowDays is passed through', () => {
+  assert.equal(aggregateUsage([], 30).windowDays, 30)
+})
