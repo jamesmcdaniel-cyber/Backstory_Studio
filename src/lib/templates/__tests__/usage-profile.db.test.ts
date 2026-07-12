@@ -147,13 +147,19 @@ if (TEST_DB) {
       const before = await buildUsageProfile(org.id)
       assert.deepEqual(before.themes, [], 'no themes without a People.ai connection')
 
-      // Connect People.ai + add a second distinct type (with a duplicate type).
-      await prisma.peopleAiConnection.create({ data: { organizationId: org.id, userId: user.id, accessToken: 'enc-token' } })
+      // Connect People.ai (default status 'active') + add a second distinct type.
+      const conn = await prisma.peopleAiConnection.create({ data: { organizationId: org.id, userId: user.id, accessToken: 'enc-token' } })
       await prisma.signal.create({ data: { organizationId: org.id, type: 'forecast.updated', payload: {}, dedupeKey: `d2-${crypto.randomUUID()}` } })
       await prisma.signal.create({ data: { organizationId: org.id, type: 'deal.risk_detected', payload: {}, dedupeKey: `d3-${crypto.randomUUID()}` } })
 
       const after = await buildUsageProfile(org.id)
       assert.deepEqual(after.themes, ['deal.risk_detected', 'forecast.updated'], 'distinct signal types, deduped + sorted')
+
+      // Revoke the connection → a disconnected People.ai must not leak themes,
+      // matching the canonical "connected" (status==='active') predicate.
+      await prisma.peopleAiConnection.update({ where: { id: conn.id }, data: { status: 'revoked' } })
+      const revoked = await buildUsageProfile(org.id)
+      assert.deepEqual(revoked.themes, [], 'no themes once the People.ai connection is revoked')
     } finally {
       await prisma.organization.delete({ where: { id: org.id } }).catch(() => {})
     }

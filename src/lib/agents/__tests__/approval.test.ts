@@ -89,6 +89,25 @@ if (TEST_DB) {
     assert.equal(current.status, 'superseded')
   })
 
+  test('an approved-but-not-executed delivery is not counted as a real tool call', async () => {
+    // No Nango connection exists in the test env, so spec.run never runs and the
+    // decision returns executed:false. The usage-counted 'approval.approved'
+    // audit (TOOL_USAGE_ACTIONS) must NOT be emitted — only a distinct,
+    // profile-ignored 'approval.approved_noexec' row — so buildUsageProfile
+    // never counts a delivery that never happened.
+    const { id } = await createApproval({
+      organizationId: ids.org, executionId: ids.execution, userId: ids.user,
+      provider: 'nango:slack', tool: 'slack_post_message', args: { channel: '#x', text: 'hi' },
+    })
+    const result = await decideApproval({ approvalId: id, organizationId: ids.org, deciderUserId: ids.user, approve: true })
+    assert.equal(result.status, 'approved')
+    assert.equal(result.executed, false)
+    const counted = await prisma.auditEvent.findMany({ where: { organizationId: ids.org, resourceId: id, action: 'approval.approved' } })
+    assert.equal(counted.length, 0, 'no usage-counted approval.approved row when the write never ran')
+    const noexec = await prisma.auditEvent.findMany({ where: { organizationId: ids.org, resourceId: id, action: 'approval.approved_noexec' } })
+    assert.equal(noexec.length, 1, 'a profile-ignored decision audit is still recorded')
+  })
+
   test('cross-org decision is refused', async () => {
     const { id } = await createApproval({
       organizationId: ids.org, executionId: ids.execution, userId: ids.user,

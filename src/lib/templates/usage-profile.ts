@@ -257,7 +257,10 @@ function splitNode(node: string): { provider: string; tool: string } | null {
 async function readThemes(organizationId: string, since: Date): Promise<string[]> {
   try {
     const connection = await prisma.peopleAiConnection.findFirst({
-      where: { organizationId },
+      // Only a live connection counts, matching the canonical "connected"
+      // predicate (client.ts drops 'revoked'; entitlement.ts requires 'active').
+      // A revoked / refresh_failed connection must not leak historical themes.
+      where: { organizationId, status: 'active' },
       select: { id: true },
     })
     if (!connection) return []

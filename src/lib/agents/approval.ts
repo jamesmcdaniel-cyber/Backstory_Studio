@@ -228,7 +228,13 @@ export async function decideApproval(input: {
     organizationId: input.organizationId,
     executionId: approval.executionId,
     actorUserId: input.deciderUserId,
-    action: 'approval.approved',
+    // 'approval.approved' is a TOOL_USAGE_ACTIONS row (usage-profile.ts) that
+    // counts as a real outbound delivery. Only emit it when the write actually
+    // ran; if the delivery was skipped (e.g. the Nango connection was removed
+    // between request and decision, so spec.run never ran) record a distinct,
+    // usage-profile-ignored action so a delivery that never happened isn't
+    // counted as one.
+    action: executed ? 'approval.approved' : 'approval.approved_noexec',
     tool: approval.tool,
     resourceType: payload.provider,
     resourceId: approval.id,

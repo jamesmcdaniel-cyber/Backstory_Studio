@@ -561,6 +561,34 @@ test('a switch on the main chain is NOT flagged', () => {
   assert.equal(issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED'), undefined)
 })
 
+test('join inside a loop body is flagged, not silently corrupting the merge', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'j1', type: 'join', data: {} },
+      { id: 'lp', type: 'loop', data: { over: '{{trigger.input}}', body: ['j1'] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'lp' }],
+  }
+  const { issues } = validateFlowGraph(graph)
+  const hit = issues.find((i) => i.code === 'CONTAINER_JOIN_UNSUPPORTED')
+  assert.ok(hit, 'expected CONTAINER_JOIN_UNSUPPORTED')
+  assert.equal(hit?.level, 'error')
+  assert.equal(hit?.nodeId, 'j1')
+})
+
+test('a join on the main chain is NOT flagged', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'j1', type: 'join', data: {} },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'j1' }],
+  }
+  const { issues } = validateFlowGraph(graph)
+  assert.equal(issues.find((i) => i.code === 'CONTAINER_JOIN_UNSUPPORTED'), undefined)
+})
+
 test('output node with a valid named output passes', () => {
   const graph: FlowGraph = {
     nodes: [

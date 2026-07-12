@@ -542,6 +542,19 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         node.id,
       )
     }
+    // A join merges main-chain branches; a container body is a flat ordered list
+    // with nothing to merge, and at run time a join inside one reads the stale
+    // main-chain `lastOutput` closure (interpret.ts) instead of the body's
+    // threaded value — silently corrupting the merged output. Block it.
+    if (node.type === 'join' && containerMemberIds.has(node.id)) {
+      add(
+        issues,
+        'error',
+        'CONTAINER_JOIN_UNSUPPORTED',
+        `${nodeLabel(node)} can't merge branches inside a loop or parallel — move it to the main flow.`,
+        node.id,
+      )
+    }
   }
 
   // Approval-gated writes (the Nango delivery plane) pause the whole run on
