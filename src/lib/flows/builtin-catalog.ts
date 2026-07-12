@@ -46,6 +46,16 @@ export const BUILTIN_GROUPS: PickerGroup[] = [
     ],
   },
   {
+    id: 'flow-basics',
+    label: 'Flow basics',
+    description: 'Return named results and merge branches back together.',
+    mode: 'action',
+    children: [
+      { id: 'flow-output', label: 'Output', description: 'Return one or more named results to whatever called this flow.', mode: 'action', stepType: 'output' },
+      { id: 'flow-join', label: 'Join paths', description: 'Merge branches back into a single path so later steps run once.', mode: 'action', stepType: 'join' },
+    ],
+  },
+  {
     id: 'data-operation',
     label: 'Data operations',
     description: 'Shape, parse, and filter data between steps.',

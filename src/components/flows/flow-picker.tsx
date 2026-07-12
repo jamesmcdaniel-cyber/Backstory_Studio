@@ -8,8 +8,10 @@ import {
   ChevronRight,
   CircleStop,
   Clock,
+  FileOutput,
   Filter,
   GitBranch,
+  GitMerge,
   Globe,
   Play,
   Repeat,
@@ -64,6 +66,8 @@ const STEP_ICON: Partial<Record<StepType, LucideIcon>> = {
   variable: Variable,
   data: Braces,
   humanReview: UserCheck,
+  output: FileOutput,
+  join: GitMerge,
 }
 
 const STEP_TONE: Partial<Record<StepType, string>> = {
@@ -80,6 +84,8 @@ const STEP_TONE: Partial<Record<StepType, string>> = {
   variable: 'bg-purple-600 text-white',
   data: 'bg-violet-600 text-white',
   humanReview: 'bg-blue-600 text-white',
+  output: 'bg-teal-600 text-white',
+  join: 'bg-indigo-600 text-white',
 }
 
 const LEAF_ICON: Record<string, LucideIcon> = {
@@ -94,6 +100,7 @@ const LEAF_TONE: Record<string, string> = {
 const GROUP_ICON: Record<string, LucideIcon> = {
   http: Globe,
   control: GitBranch,
+  'flow-basics': FileOutput,
   'data-operation': Braces,
   variable: Variable,
   'human-review': UserCheck,
@@ -102,6 +109,7 @@ const GROUP_ICON: Record<string, LucideIcon> = {
 const GROUP_TONE: Record<string, string> = {
   http: 'bg-emerald-600 text-white',
   control: 'bg-amber-500 text-white',
+  'flow-basics': 'bg-teal-600 text-white',
   'data-operation': 'bg-violet-600 text-white',
   variable: 'bg-purple-600 text-white',
   'human-review': 'bg-blue-600 text-white',

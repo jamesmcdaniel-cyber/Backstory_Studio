@@ -45,6 +45,7 @@ export function AdvancedParamsSection({
         >
           <option value="stop">Stop flow on error</option>
           <option value="continue">Continue on error</option>
+          <option value="route">Route failures to an error path</option>
         </select>
       )
     }

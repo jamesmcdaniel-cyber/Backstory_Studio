@@ -60,6 +60,39 @@ export type DataTreeSource = {
   lastOutputs?: Record<string, unknown>
   /** Variables initialized by upstream variable steps, exposed as {{var.<name>}}. */
   variables?: { name: string; type: string }[]
+  /** Include the run-context roots ({{now}} / {{run.*}}); default true. Off for
+   *  the pre-run trigger gate, where run metadata isn't meaningful yet. */
+  context?: boolean
+}
+
+/** The always-available run-context roots: the frozen clock and run metadata,
+ *  set automatically for every run. */
+function contextRoots(): DataField[] {
+  return [
+    {
+      label: 'Now',
+      token: '{{now}}',
+      type: 'string',
+      description: 'Set automatically for every run.',
+      children: [
+        { label: 'Date', token: '{{now.date}}', type: 'string', description: "Today's date, as YYYY-MM-DD." },
+        { label: 'Time of day', token: '{{now.time}}', type: 'string', description: 'The current time of day, as HH:MM.' },
+        { label: 'Timestamp', token: '{{now.unix}}', type: 'number', description: 'Seconds since the Unix epoch.' },
+      ],
+    },
+    {
+      label: 'This run',
+      token: '{{run.id}}',
+      type: 'string',
+      description: 'Set automatically for every run.',
+      children: [
+        { label: 'Flow name', token: '{{flow.name}}', type: 'string', description: 'The name of this flow.' },
+        { label: 'Trigger', token: '{{run.trigger}}', type: 'string', description: 'How this run was started.' },
+        { label: 'Started at', token: '{{run.startedAt}}', type: 'string', description: 'When this run began.' },
+        { label: 'Run link', token: '{{run.url}}', type: 'string', description: 'A link to this run in the builder.' },
+      ],
+    },
+  ]
 }
 
 /** Build the datatree roots for the field picker. */
@@ -140,5 +173,6 @@ export function buildDataTree(source: DataTreeSource): DataField[] {
       children: children.length ? children : undefined,
     })
   }
+  if (source.context !== false) roots.push(...contextRoots())
   return roots
 }

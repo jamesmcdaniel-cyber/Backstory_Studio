@@ -260,6 +260,7 @@ const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
   variable: 'var.value',
   data: 'data.input',
   humanReview: 'hr.message',
+  output: 'out.0.value',
 }
 
 // Chip editors still render when the caller omitted labelCtx: chips fall back
@@ -771,6 +772,10 @@ function renderNodeBody({
       return <DataBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'humanReview':
       return <HumanReviewBody node={node} members={members} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
+    case 'output':
+      return <OutputBody node={node} update={update} tokenWiring={tokenWiring} />
+    case 'join':
+      return <p className="text-sm text-slate-600">A merge point with no settings. Point the ends of different branches at this step so the steps after it run once, on whichever path actually ran.</p>
   }
 }
 
@@ -1852,6 +1857,85 @@ function HumanReviewBody({
         </select>
         <p className="text-xs text-slate-500">They&apos;ll be notified when the flow pauses here.</p>
       </div>
+    </div>
+  )
+}
+
+type OutputRow = { name: string; value: string; type?: 'text' | 'list' | 'any' }
+const OUTPUT_VALUE_TYPES: { value: 'text' | 'list' | 'any'; label: string }[] = [
+  { value: 'any', label: 'Any' },
+  { value: 'text', label: 'Text' },
+  { value: 'list', label: 'List' },
+]
+
+function OutputBody({
+  node,
+  update,
+  tokenWiring,
+}: {
+  node: Extract<FlowNode, { type: 'output' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+}) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
+  const outputs: OutputRow[] = node.data.outputs.length ? node.data.outputs : [{ name: 'output', value: '', type: 'any' }]
+  const setOutputs = (next: OutputRow[]) => update({ ...node, data: { ...node.data, outputs: next } })
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-slate-600">Return one or more named results to whatever called this flow.</p>
+      {outputs.map((row, index) => (
+        <div key={index} className="grid gap-2">
+          <div className="grid gap-2 sm:grid-cols-[1fr_130px_36px]">
+            <input
+              value={row.name}
+              onChange={(event) => setOutputs(outputs.map((r, j) => (j === index ? { ...r, name: event.target.value } : r)))}
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              className={controlClass}
+              placeholder="resultName"
+              aria-label="Output name"
+            />
+            <select
+              value={row.type ?? 'any'}
+              onChange={(event) => setOutputs(outputs.map((r, j) => (j === index ? { ...r, type: event.target.value as OutputRow['type'] } : r)))}
+              className={controlClass}
+              aria-label="Output type"
+            >
+              {OUTPUT_VALUE_TYPES.map((type) => (
+                <option key={type.value} value={type.value}>
+                  {type.label}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setOutputs(outputs.filter((_, j) => j !== index))}
+              disabled={outputs.length === 1}
+              className="flex h-10 w-10 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:pointer-events-none disabled:opacity-30"
+              aria-label="Remove output"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+          <TokenTextEditor
+            ref={registerEditor(`out.${index}.value`)}
+            value={row.value}
+            labelCtx={labelCtx}
+            onFocus={focusEditor(`out.${index}.value`)}
+            onChange={(value) => setOutputs(outputs.map((r, j) => (j === index ? { ...r, value } : r)))}
+            className={cn(tokenControlClass, 'min-w-0')}
+            placeholder="Value to return for this result"
+            ariaLabel={`Value for output ${row.name || index + 1}`}
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => setOutputs([...outputs, { name: '', value: '', type: 'any' }])}
+        className="text-left text-sm font-semibold text-blue-700 hover:text-blue-900"
+      >
+        Add output
+      </button>
     </div>
   )
 }

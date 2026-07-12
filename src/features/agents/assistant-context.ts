@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { readAgentMetadata } from '@/lib/agents/metadata'
 import { retrieveContext, renderContext } from '@/lib/rag/retrieve'
 import { getGraphRagStore } from '@/lib/rag/get-store'
+import { loadPeopleAiPlaneGroup } from '@/features/agents/tool-planes'
 
 /**
  * Server-side context assembly for the agent-scoped assistant chat. Pulls the
@@ -62,6 +63,8 @@ export type AssistantContext = {
   recentRuns: ReturnType<typeof summarizeRun>[]
   latestRun: (ReturnType<typeof summarizeRun> & { toolCalls: unknown[]; conversation: unknown[] }) | null
   latestFailedRun: (ReturnType<typeof summarizeRun> & { toolCalls: unknown[]; conversation: unknown[] }) | null
+  /** Live Backstory MCP catalog, scoped to the viewing user and organization. */
+  backstoryTools: { name: string; description: string }[]
   /** Graph-RAG correlated context (Sales AI signals, integration data, related runs). Empty string when RAG is unconfigured. */
   correlated: string
 }
@@ -130,7 +133,10 @@ export async function buildAssistantContext(agent: AgentTask, question = '', vie
   })
 
   const agentMetadata = readAgentMetadata(agent.metadata)
-  const correlated = await correlatedContext(agent, question, viewerUserId)
+  const [correlated, peopleAiGroup] = await Promise.all([
+    correlatedContext(agent, question, viewerUserId),
+    loadPeopleAiPlaneGroup(agent.organizationId, viewerUserId),
+  ])
 
   return {
     agent: {
@@ -147,6 +153,7 @@ export async function buildAssistantContext(agent: AgentTask, question = '', vie
     recentRuns: executions.map(summarizeRun),
     latestRun: latest ? detailFor(latest) : null,
     latestFailedRun: latestFailed ? detailFor(latestFailed) : null,
+    backstoryTools: (peopleAiGroup?.tools ?? []).map(({ name, description }) => ({ name, description })),
     correlated,
   }
 }

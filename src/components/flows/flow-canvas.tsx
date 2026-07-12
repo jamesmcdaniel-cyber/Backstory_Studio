@@ -222,14 +222,10 @@ export function FlowCanvas({
         return node.data.label || DATA_OP_LABELS[node.data.op]
       case 'humanReview':
         return node.data.label || 'Request information'
-      // NEUTRAL placeholder for Task 6 (builder UX) — real titleFor/subtitleFor
-      // (first output name) lands with the output editor.
       case 'output':
         return node.data.label || 'Output'
-      // NEUTRAL placeholder for Task 6 (builder UX) — real title/subtitle land
-      // with the join canvas + picker work.
       case 'join':
-        return node.data.label || 'Join'
+        return node.data.label || 'Join paths'
     }
   }
 
@@ -285,6 +281,14 @@ export function FlowCanvas({
         return node.data.note || node.data.input?.trim() || 'Choose the data to work with'
       case 'humanReview':
         return node.data.note || node.data.message.trim() || 'Write the question to ask'
+      case 'output': {
+        if (node.data.note) return node.data.note
+        const names = node.data.outputs.map((o) => o.name.trim()).filter(Boolean)
+        if (!names.length) return 'Name the results this flow returns'
+        return names.length === 1 ? `Returns ${names[0]}` : `Returns ${names[0]} +${names.length - 1}`
+      }
+      case 'join':
+        return node.data.note || 'Merge branches back into one path'
       default:
         return (node.data as { note?: string }).note || undefined
     }
@@ -374,6 +378,24 @@ export function FlowCanvas({
           {nestedCards(node)}
         </Fragment>,
       )
+      // Steps set to route on failure get a distinct, labeled error path — the
+      // 'error'-branch edge — rendered like a condition branch but amber-tinted.
+      // The step still continues down its normal edge below.
+      if ((node.type === 'agent' || node.type === 'tool' || node.type === 'http') && node.data.onError === 'route') {
+        parts.push(
+          <div key={`${node.id}-error`} className="my-3">
+            <div className="rounded-2xl border border-dashed border-amber-300 bg-amber-50/70 p-3">
+              <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                <span className="inline-block h-2 w-2 rounded-full bg-amber-500" /> On error
+              </p>
+              <div className="space-y-3">
+                {renderChain(branchHead(node.id, 'error'), seen)}
+                <InsertMenu compact agents={agents} toolCatalog={toolCatalog} onPick={(type, seed) => onAppendBranch(node.id, 'error', type, seed)} />
+              </div>
+            </div>
+          </div>,
+        )
+      }
       if (node.type === 'condition') {
         parts.push(
           <div key={`${node.id}-branches`} className="my-3 grid gap-4 md:grid-cols-2">

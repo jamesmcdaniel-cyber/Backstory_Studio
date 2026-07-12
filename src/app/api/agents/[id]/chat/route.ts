@@ -25,6 +25,7 @@ const SYSTEM_PROMPT = [
   'When the user asks to change the agent — its instructions/objective, schedule, skills, connected tools/integrations, model, name, or description — fill in the proposal object with only the fields that should change and set every other proposal field to null. The instructions field must contain the complete updated instructions text, not a diff. Never claim a change was applied; the user reviews and confirms it in the interface.',
   'When the message is not a change request, set proposal to null.',
   'When debugging, use the latest failed run: quote the relevant error and the tool calls around it.',
+  'When asked what Backstory MCP does or what can be done with it, enumerate every tool in context.backstoryTools by exact name and explain what each one does. Do not group tools in a way that omits individual names. If the catalog is empty, say it could not be loaded rather than inventing a list.',
   'Write concise markdown in sentence case. No emoji.',
 ].join('\n')
 

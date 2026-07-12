@@ -18,7 +18,7 @@ import { TokenTextEditor, type TokenTextEditorHandle } from '@/components/flows/
 import type { TokenLabelContext } from '@/lib/flows/token-text'
 import { cn } from '@/lib/utils'
 
-type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview'>
+type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'agent', label: 'Run agent' },
   { value: 'tool', label: 'Tool call' },
@@ -32,6 +32,8 @@ const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'filter', label: 'Filter' },
   { value: 'loop', label: 'For each' },
   { value: 'parallel', label: 'Parallel' },
+  { value: 'output', label: 'Output' },
+  { value: 'join', label: 'Join paths' },
   { value: 'stop', label: 'Stop' },
 ]
 
@@ -274,6 +276,7 @@ const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
   variable: 'var.value',
   data: 'data.input',
   humanReview: 'hr.message',
+  output: 'out.0.value',
 }
 
 /** Workspace member as returned by GET /api/organizations/members. */
@@ -953,6 +956,26 @@ export function StepDrawer({
             </div>
           </div>
         )}
+
+        {node.type === 'output' && (
+          <OutputEditor
+            node={node}
+            onChange={onChange}
+            dataFields={dataFields}
+            labelCtx={labelCtx}
+            registerEditor={registerEditor}
+            focusEditor={focusEditor}
+            insertToken={insertToken}
+            blockActive={blockActive}
+            unblockActive={unblockActive}
+          />
+        )}
+
+        {node.type === 'join' && (
+          <p className="text-xs text-muted-foreground">
+            A merge point with no settings. Point the ends of different branches at this step so the steps after it run once, on whichever path actually ran.
+          </p>
+        )}
       </div>
 
       {!isTrigger && (
@@ -1264,6 +1287,91 @@ function DataEditor({
   )
 }
 
+/** Value shapes an Output node's named result can declare. */
+const OUTPUT_VALUE_TYPES: { value: 'text' | 'list' | 'any'; label: string }[] = [
+  { value: 'any', label: 'Any' },
+  { value: 'text', label: 'Text' },
+  { value: 'list', label: 'List' },
+]
+
+type OutputRow = { name: string; value: string; type?: 'text' | 'list' | 'any' }
+
+/** Output step editor: repeatable named results (name / templated value / type). */
+function OutputEditor({
+  node,
+  onChange,
+  dataFields,
+  labelCtx,
+  registerEditor,
+  focusEditor,
+  insertToken,
+  blockActive,
+  unblockActive,
+}: {
+  node: Extract<FlowNode, { type: 'output' }>
+  onChange: (node: FlowNode) => void
+} & TokenEditorPlumbing) {
+  const outputs: OutputRow[] = node.data.outputs.length ? node.data.outputs : [{ name: 'output', value: '', type: 'any' }]
+  const setOutputs = (next: OutputRow[]) => onChange({ ...node, data: { ...node.data, outputs: next } })
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">Return one or more named results to whatever called this flow — the webhook response, the completion signal, or a parent flow.</p>
+      {outputs.map((row, i) => (
+        <div key={i} className="space-y-1.5 rounded-lg border border-border/70 p-2">
+          <div className="flex gap-1.5">
+            <input
+              className={`${smallField} flex-1`}
+              value={row.name}
+              placeholder="resultName"
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              onChange={(e) => setOutputs(outputs.map((r, j) => (j === i ? { ...r, name: e.target.value } : r)))}
+              aria-label="Output name"
+            />
+            <select
+              className={smallField}
+              value={row.type ?? 'any'}
+              onChange={(e) => setOutputs(outputs.map((r, j) => (j === i ? { ...r, type: e.target.value as OutputRow['type'] } : r)))}
+              aria-label="Output type"
+            >
+              {OUTPUT_VALUE_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+            {outputs.length > 1 && (
+              <button type="button" onClick={() => setOutputs(outputs.filter((_, j) => j !== i))} className="px-1 text-red-500 hover:text-red-700" aria-label="Remove output">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          <TokenTextEditor
+            ref={registerEditor(`out.${i}.value`)}
+            className="px-2 py-1.5"
+            value={row.value}
+            labelCtx={labelCtx}
+            placeholder="Value to return — choose data from below"
+            onFocus={focusEditor(`out.${i}.value`)}
+            onChange={(value) => setOutputs(outputs.map((r, j) => (j === i ? { ...r, value } : r)))}
+            ariaLabel={`Value for output ${row.name || i + 1}`}
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => setOutputs([...outputs, { name: '', value: '', type: 'any' }])}
+        className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+      >
+        <Plus className="h-3.5 w-3.5" /> Add output
+      </button>
+      <div>
+        <DataTree fields={dataFields} onInsert={insertToken} />
+      </div>
+    </div>
+  )
+}
+
 /** Declare a step's output fields so downstream steps can map from them. */
 function OutputFieldsEditor({
   fields,
@@ -1346,6 +1454,13 @@ function InputFieldsEditor({ fields, onChange }: { fields: TriggerInputField[]; 
               placeholder="What should the user or webhook send here?"
               onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, description: e.target.value || undefined } : f)))}
             />
+            <input
+              className={`${smallField} w-full`}
+              value={field.default ?? ''}
+              placeholder="Default value if none is provided"
+              onChange={(e) => onChange(fields.map((f, j) => (j === i ? { ...f, default: e.target.value || undefined } : f)))}
+              aria-label="Default value"
+            />
             <label className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
               <input
                 type="checkbox"
@@ -1404,7 +1519,7 @@ function TriggerEditor({
   // Only the trigger's own declared input fields are pickable here — nothing
   // precedes the trigger, so there is no upstream step data to offer.
   const conditionDataFields = useMemo(
-    () => buildDataTree({ upstream: [], inputFields: trigger.inputFields ?? [] }),
+    () => buildDataTree({ upstream: [], inputFields: trigger.inputFields ?? [], context: false }),
     [trigger.inputFields],
   )
   const conditionClauses = clausesOf(trigger.condition ?? {})
