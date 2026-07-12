@@ -1,6 +1,9 @@
 import { withAuthenticatedApi } from '@/lib/server/api-handler'
-import { listConnectedProviders } from '@/lib/integrations/connected'
-import { MIN_INTEGRATIONS_FOR_TEMPLATES, meetsTemplateGate } from '@/lib/integrations/integration-count'
+import {
+  MIN_INTEGRATIONS_FOR_TEMPLATES,
+  meetsTemplateGate,
+  summarizeConnectedIntegrations,
+} from '@/lib/integrations/integration-count'
 
 /**
  * GET /api/integrations/count
@@ -8,26 +11,16 @@ import { MIN_INTEGRATIONS_FOR_TEMPLATES, meetsTemplateGate } from '@/lib/integra
  * The auto-template onboarding meter's read: how many DISTINCT integrations the
  * org has connected, the ≥3 threshold that unlocks AI template generation,
  * whether the gate is met, and the deduped providers behind the number.
- * Org+user scoped; "connected" is the same per-org definition
- * /api/integrations/available uses (see listConnectedProviders).
+ * Org+user scoped; the count and providers share the SAME dedupe as
+ * countConnectedIntegrations (summarizeConnectedIntegrations), so they can't drift.
  */
 export const GET = withAuthenticatedApi(async (_request, auth) => {
-  const raw = await listConnectedProviders(auth.organizationId, auth.userId)
-
-  // Dedupe across planes by the lowercased key — a provider connected two ways
-  // is one integration. First occurrence wins its label.
-  const seen = new Map<string, { key: string; label: string }>()
-  for (const p of raw) {
-    const id = p.key.toLowerCase()
-    if (!seen.has(id)) seen.set(id, { key: p.key, label: p.label })
-  }
-  const providers = [...seen.values()]
-  const connected = providers.length
+  const { count, providers } = await summarizeConnectedIntegrations(auth.organizationId, auth.userId)
 
   return {
-    connected,
+    connected: count,
     required: MIN_INTEGRATIONS_FOR_TEMPLATES,
-    meetsGate: meetsTemplateGate(connected),
+    meetsGate: meetsTemplateGate(count),
     providers,
   }
 })

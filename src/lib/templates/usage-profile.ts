@@ -16,6 +16,9 @@
  */
 
 import { prisma } from '@/lib/prisma'
+import { PROVIDER_CAPABILITIES } from '@/lib/mcp/provider-capabilities'
+import { granolaTools } from '@/lib/integrations/granola'
+import { listConnectedProviders, type ConnectedProvider } from '@/lib/integrations/connected'
 
 export type UsageRow = { provider: string; tool: string; runId: string | null; at: string }
 
@@ -26,6 +29,18 @@ export type UsageProfile = {
   sequences: { steps: string[]; count: number }[]
   runCount: number
   windowDays: number
+  /**
+   * Static capability list per CONNECTED provider (from PROVIDER_CAPABILITIES /
+   * Klavis tool lists), independent of whether the org has CALLED the provider —
+   * so a freshly-connected integration still contributes signal for a low-run
+   * org. Populated by {@link buildUsageProfile}; the pure aggregator leaves it [].
+   */
+  capabilities: { provider: string; capabilities: string[] }[]
+  /**
+   * High-level People.ai themes (distinct Sales-AI signal types) when a People.ai
+   * connection exists, else []. Populated by {@link buildUsageProfile}.
+   */
+  themes: string[]
 }
 
 /** Window: last 90 days AND at most the most-recent 500 audit rows (whichever tighter). */
@@ -33,23 +48,36 @@ export const USAGE_WINDOW_DAYS = 90
 export const MAX_AUDIT_ROWS = 500
 
 /**
- * AuditEvent.action values that represent a GENUINE tool invocation — the only
- * rows that feed the usage profile. Both executors tag a real tool call as
- * 'tool.write' (write/delivery planes) or 'tool.call' (read planes); the choice
- * is provider-based (see `writePlanes`/`WRITE_PLANES` in execute-agent.ts:936 /
- * execute-flow.ts:475), so we accept both.
+ * AuditEvent.action values that represent a GENUINE, EXECUTED tool invocation —
+ * the only rows that feed the usage profile.
  *
- * Everything else is deliberately excluded, because it is not a tool call:
- *  - approval lifecycle ('approval.requested' | 'approval.approved' |
- *    'approval.rejected' | 'approval.failed', approval.ts) — all carry
- *    resourceType=provider for the SAME executionId, so an approval-gated call
- *    would be double/triple-counted and its provider over-weighted.
+ *  - 'tool.write' / 'tool.call': a tool executed INLINE. Both executors tag a
+ *    real call as 'tool.write' (write/delivery planes) or 'tool.call' (read
+ *    planes) — provider-based (see `writePlanes`/`WRITE_PLANES` in
+ *    execute-agent.ts:936 / execute-flow.ts:475), so we accept both.
+ *  - 'approval.approved': an approval-GATED outbound delivery (Slack/Gmail/
+ *    Salesforce) that actually ran. When an agent requires approval, the write
+ *    plane short-circuits BEFORE any tool.write (execute-agent.ts:918 /
+ *    execute-flow.ts:447 return/continue): the call is queued
+ *    ('approval.requested'), and decideApproval later runs the delivery via
+ *    spec.run and records ONLY 'approval.approved' (approval.ts:227 —
+ *    resourceType=provider e.g. 'nango:slack', tool=the delivery tool). It is
+ *    thus the SOLE audit signal for an approved delivery. Approved deliveries
+ *    are high-value template signal, so we count them — exactly ONCE, with NO
+ *    re-introduced double-count: 'approval.approved' and 'tool.write' are
+ *    mutually exclusive per call (a gated call takes the approval path and never
+ *    emits tool.write; a non-gated call never emits approval.approved).
+ *
+ * Everything else is excluded, because it is not an executed tool call:
+ *  - 'approval.requested' pairs 1:1 with 'approval.approved' for the same run —
+ *    counting it too would re-introduce the double-count. 'approval.rejected' /
+ *    'approval.failed' never executed the write.
  *  - resource lifecycle ('flow.published', publish route; config changes;
  *    connects) — not a tool call, and carries a non-provider resourceType
  *    (e.g. 'flow', tool=null) that would surface as a phantom provider.
  * The @@index([organizationId, action]) on AuditEvent makes this filter cheap.
  */
-export const TOOL_USAGE_ACTIONS = ['tool.call', 'tool.write'] as const
+export const TOOL_USAGE_ACTIONS = ['tool.call', 'tool.write', 'approval.approved'] as const
 /**
  * Below this many audit rows an org is "thin" and we fold in WorkflowStep-derived
  * rows (from executions not already represented in the audit slice) so few-run
@@ -60,6 +88,8 @@ export const THIN_AUDIT_ROW_THRESHOLD = 20
 const TOP_TOOLS_CAP = 25
 const CO_OCCURRENCE_CAP = 25
 const SEQUENCES_CAP = 25
+/** Cap on distinct People.ai themes folded into the profile. */
+export const MAX_THEMES = 25
 
 // Composite map keys are JSON-encoded tuples/arrays: collision-free for any
 // provider/tool string, pure-ASCII, and reversible via JSON.parse.
@@ -140,7 +170,46 @@ export function aggregateUsage(rows: UsageRow[], windowDays: number = USAGE_WIND
     .slice(0, SEQUENCES_CAP)
     .map(([key, count]) => ({ steps: JSON.parse(key) as string[], count }))
 
-  return { providers, topTools, coOccurrence, sequences, runCount: runs.size, windowDays }
+  // capabilities/themes are enrichment layers keyed off CONNECTED providers and
+  // People.ai — data the pure aggregator has no access to. buildUsageProfile
+  // fills them; here they're empty so aggregateUsage stays a pure fn of `rows`.
+  return { providers, topTools, coOccurrence, sequences, runCount: runs.size, windowDays, capabilities: [], themes: [] }
+}
+
+/**
+ * Static capability list for a connected-provider key, or null when we have no
+ * catalogued capabilities for it. PROVIDER_CAPABILITIES (the curated Klavis tool
+ * lists, which also cover the Nango delivery slugs slack/gmail/salesforce) is the
+ * source; Granola is the one built-in with a fixed tool set. Custom MCP servers
+ * (`mcp:*`) and Strata servers (`strata:*`) have no static catalogue here, so
+ * they contribute no capabilities (they still count toward the gate elsewhere).
+ */
+function capabilitiesForKey(key: string): string[] | null {
+  const catalog = (PROVIDER_CAPABILITIES as Record<string, { verbs: string[] }>)[key]
+  if (catalog) return catalog.verbs
+  if (key === 'granola') return granolaTools().map((t) => t.name)
+  return null
+}
+
+/**
+ * Map the org's CONNECTED providers to their static capability lists, deduped by
+ * the lowercased provider key (a provider connected via two planes yields one
+ * capability entry) and sorted for determinism. A freshly-connected provider
+ * with ZERO calls still lands here, so the profile is meaningful for low-run orgs.
+ */
+export function capabilitiesForProviders(
+  providers: ConnectedProvider[],
+): { provider: string; capabilities: string[] }[] {
+  const byKey = new Map<string, string[]>()
+  for (const p of providers) {
+    const key = p.key.toLowerCase()
+    if (byKey.has(key)) continue
+    const caps = capabilitiesForKey(key)
+    if (caps && caps.length) byKey.set(key, caps)
+  }
+  return [...byKey.entries()]
+    .sort(([a], [b]) => asc(a, b))
+    .map(([provider, capabilities]) => ({ provider, capabilities }))
 }
 
 const normProvider = (v: string | null | undefined): string => (v ?? '').trim().toLowerCase()
@@ -169,12 +238,67 @@ function splitNode(node: string): { provider: string; tool: string } | null {
 }
 
 /**
+ * People.ai themes for the org: the DISTINCT Sales-AI signal TYPES it receives
+ * (a controlled vocabulary — deal.risk_detected, forecast.updated,
+ * stakeholder.engagement_changed, …) that describe what's happening on the org's
+ * accounts/opportunities WITHOUT leaking any account name or other PII.
+ *
+ * Gated on a People.ai connection existing (the brief's "when People.ai present")
+ * and bounded to the most-recent {@link MAX_AUDIT_ROWS} signals within the usage
+ * window, deduped, sorted, capped at {@link MAX_THEMES}. Returns [] when People.ai
+ * is absent, when there are no signals, or on any read error — the enrichment is
+ * additive and must never break the profile.
+ *
+ * We deliberately do NOT source themes from retrieveContext / Sales-AI entity
+ * summaries: those return free-text account/opportunity summaries that carry PII
+ * (names, deal specifics) and need RAG infra (embeddings + a durable store) live.
+ * Signal.type is the bounded, PII-safe, always-available theme source.
+ */
+async function readThemes(organizationId: string, since: Date): Promise<string[]> {
+  try {
+    const connection = await prisma.peopleAiConnection.findFirst({
+      where: { organizationId },
+      select: { id: true },
+    })
+    if (!connection) return []
+    const signals = await prisma.signal.findMany({
+      where: { organizationId, receivedAt: { gte: since } },
+      orderBy: { receivedAt: 'desc' },
+      take: MAX_AUDIT_ROWS,
+      select: { type: true },
+    })
+    const themes = [...new Set(signals.map((s) => s.type).filter((t): t is string => Boolean(t)))]
+    themes.sort(asc)
+    return themes.slice(0, MAX_THEMES)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Capability lists for the org's CONNECTED providers, via the single "connected"
+ * source ({@link listConnectedProviders} — org-scoped exactly like
+ * /api/integrations/available). Best-effort: any read failure yields [] so the
+ * enrichment never blocks the profile.
+ */
+async function readCapabilities(organizationId: string): Promise<{ provider: string; capabilities: string[] }[]> {
+  try {
+    // The connected planes are org-visible; listConnectedProviders ignores its
+    // userId arg (parity only), so '' means "the whole org, no specific user".
+    const connected = await listConnectedProviders(organizationId, '')
+    return capabilitiesForProviders(connected)
+  } catch {
+    return []
+  }
+}
+
+/**
  * DB wrapper: org-scoped, bounded read of integration activity -> `UsageProfile`.
  *
  * Source of truth is AuditEvent (resourceType = provider, tool = tool, executionId
  * = the run/execution id), restricted to genuine tool-invocation actions
- * ({@link TOOL_USAGE_ACTIONS}) so lifecycle/approval rows do not distort the
- * signal, windowed to the last {@link USAGE_WINDOW_DAYS} days and capped at the
+ * ({@link TOOL_USAGE_ACTIONS}) so lifecycle rows do not distort the signal,
+ * windowed to the last {@link USAGE_WINDOW_DAYS} days and capped at the
  * most-recent {@link MAX_AUDIT_ROWS} rows (whichever is tighter).
  *
  * When audit coverage is thin ({@link THIN_AUDIT_ROW_THRESHOLD}), we ALSO fold in
@@ -183,6 +307,11 @@ function splitNode(node: string): { provider: string; tool: string } | null {
  * double-counting the same execution. FlowRunStep is intentionally not read: it
  * carries only a graph nodeId (no provider/tool), and flow tool calls are already
  * captured in AuditEvent (executionId = the flow run id).
+ *
+ * Two ADDITIVE enrichment layers make the profile meaningful even for a low-run
+ * org (both org-scoped, non-blocking, and empty when their source is absent):
+ * `capabilities` (what the org's connected providers CAN do, from the registry,
+ * regardless of call history) and `themes` (high-level People.ai signal types).
  */
 export async function buildUsageProfile(organizationId: string): Promise<UsageProfile> {
   const since = new Date(Date.now() - USAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
@@ -227,5 +356,14 @@ export async function buildUsageProfile(organizationId: string): Promise<UsagePr
     }
   }
 
-  return aggregateUsage(rows, USAGE_WINDOW_DAYS)
+  const base = aggregateUsage(rows, USAGE_WINDOW_DAYS)
+
+  // Enrichment layers, in parallel; each owns its own failure and returns empty,
+  // so a missing/failing source degrades to [] rather than breaking the profile.
+  const [capabilities, themes] = await Promise.all([
+    readCapabilities(organizationId),
+    readThemes(organizationId, since),
+  ])
+
+  return { ...base, capabilities, themes }
 }

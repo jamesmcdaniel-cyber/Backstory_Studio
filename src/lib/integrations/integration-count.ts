@@ -12,23 +12,57 @@ export function meetsTemplateGate(count: number): boolean {
   return count >= MIN_INTEGRATIONS_FOR_TEMPLATES
 }
 
+export type ConnectedIntegration = { key: string; label: string }
+export type ConnectedIntegrationsSummary = { count: number; providers: ConnectedIntegration[] }
+
 /**
- * Distinct connected-provider keys, deduped across planes (case-insensitive).
- * Pure so the dedupe rule is unit-testable without a DB. A provider connected
- * through two planes shares one lowercased key and therefore counts once.
+ * The SINGLE dedupe of connected providers across planes: a provider connected
+ * two ways is one integration (case-insensitive on the key); the first occurrence
+ * wins its label. Pure so the rule is unit-testable without a DB. Both the count
+ * and the /api/integrations/count read go through this, so the number and the
+ * providers behind it can never drift.
+ */
+export function dedupeConnectedProviders(providers: ConnectedIntegration[]): ConnectedIntegration[] {
+  const seen = new Map<string, ConnectedIntegration>()
+  for (const p of providers) {
+    const id = p.key.toLowerCase()
+    if (!seen.has(id)) seen.set(id, { key: p.key, label: p.label })
+  }
+  return [...seen.values()]
+}
+
+/**
+ * Distinct connected-provider keys (lowercased), deduped across planes. Thin
+ * lowercased view over {@link dedupeConnectedProviders} so there is ONE dedupe
+ * rule; a provider connected through two planes counts once.
  */
 export function distinctProviderKeys(providers: { key: string }[]): string[] {
-  return [...new Set(providers.map((p) => p.key.toLowerCase()))]
+  return dedupeConnectedProviders(providers.map((p) => ({ key: p.key, label: '' }))).map((p) =>
+    p.key.toLowerCase(),
+  )
+}
+
+/**
+ * The org+user's connected integrations, deduped across planes: the count AND the
+ * providers behind it from ONE read + ONE dedupe. Org+user scoped via
+ * listConnectedProviders (org-scoped exactly like /api/integrations/available).
+ * The read endpoint and countConnectedIntegrations both call this.
+ */
+export async function summarizeConnectedIntegrations(
+  organizationId: string,
+  userId: string,
+): Promise<ConnectedIntegrationsSummary> {
+  const raw = await listConnectedProviders(organizationId, userId)
+  const providers = dedupeConnectedProviders(raw)
+  return { count: providers.length, providers }
 }
 
 /**
  * Count of DISTINCT integrations the org+user have connected, deduped across
- * planes — a provider reachable through two planes counts once. Org+user scoped
- * via listConnectedProviders (which is org-scoped exactly like
- * /api/integrations/available). C's generateTemplateProposals gate-checks with
+ * planes — a provider reachable through two planes counts once. C's
+ * generateTemplateProposals gate-checks with
  * `countConnectedIntegrations(...) >= MIN_INTEGRATIONS_FOR_TEMPLATES`.
  */
 export async function countConnectedIntegrations(organizationId: string, userId: string): Promise<number> {
-  const providers = await listConnectedProviders(organizationId, userId)
-  return distinctProviderKeys(providers).length
+  return (await summarizeConnectedIntegrations(organizationId, userId)).count
 }

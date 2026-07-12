@@ -1,8 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { aggregateUsage, USAGE_WINDOW_DAYS, type UsageRow } from '../usage-profile'
+import { aggregateUsage, capabilitiesForProviders, USAGE_WINDOW_DAYS, type UsageRow } from '../usage-profile'
+import type { ConnectedProvider, ConnectedPlane } from '@/lib/integrations/connected'
 
 const row = (provider: string, tool: string, runId: string | null, at: string): UsageRow => ({ provider, tool, runId, at })
+const cp = (key: string, plane: ConnectedPlane = 'klavis', label = key): ConnectedProvider => ({ key, label, plane })
 
 test('empty rows produce an empty profile with the default window', () => {
   const profile = aggregateUsage([])
@@ -12,6 +14,10 @@ test('empty rows produce an empty profile with the default window', () => {
   assert.deepEqual(profile.sequences, [])
   assert.equal(profile.runCount, 0)
   assert.equal(profile.windowDays, USAGE_WINDOW_DAYS)
+  // Enrichment fields are populated only by buildUsageProfile; the pure
+  // aggregator always leaves them empty.
+  assert.deepEqual(profile.capabilities, [])
+  assert.deepEqual(profile.themes, [])
 })
 
 test('providers count rows per provider, desc with a deterministic tie-break', () => {
@@ -125,6 +131,39 @@ test('runCount is the number of distinct non-null runs', () => {
 
 test('windowDays is passed through', () => {
   assert.equal(aggregateUsage([], 30).windowDays, 30)
+})
+
+// ── capabilitiesForProviders (pure enrichment, no DB) ────────────────────────
+
+test('capabilitiesForProviders maps a connected provider to its catalogued capabilities', () => {
+  const caps = capabilitiesForProviders([cp('github')])
+  assert.equal(caps.length, 1)
+  assert.equal(caps[0].provider, 'github')
+  // The registry verbs for GitHub (source: PROVIDER_CAPABILITIES / Klavis tools).
+  assert.ok(caps[0].capabilities.includes('create_issue'))
+  assert.ok(caps[0].capabilities.length > 0)
+})
+
+test('capabilitiesForProviders dedupes a provider connected via two planes (case-insensitive)', () => {
+  const caps = capabilitiesForProviders([cp('slack', 'nango'), cp('SLACK', 'klavis')])
+  assert.equal(caps.length, 1, 'one capability entry per distinct provider')
+  assert.equal(caps[0].provider, 'slack')
+})
+
+test('capabilitiesForProviders covers the Granola built-in from its fixed tool set', () => {
+  const caps = capabilitiesForProviders([cp('granola', 'builtin')])
+  assert.deepEqual(caps, [{ provider: 'granola', capabilities: ['list_notes', 'get_note'] }])
+})
+
+test('capabilitiesForProviders omits providers with no static catalogue (custom MCP / Strata)', () => {
+  // Custom servers and Strata servers still count toward the gate elsewhere, but
+  // have no catalogued capability list, so they contribute nothing here.
+  assert.deepEqual(capabilitiesForProviders([cp('mcp:abc', 'mcp'), cp('strata:foo', 'strata')]), [])
+})
+
+test('capabilitiesForProviders is sorted by provider for determinism', () => {
+  const caps = capabilitiesForProviders([cp('slack', 'nango'), cp('github', 'klavis')])
+  assert.deepEqual(caps.map((c) => c.provider), ['github', 'slack'])
 })
 
 test('a non-empty provider with an empty tool still counts (lifecycle rows must be filtered at the query, not here)', () => {

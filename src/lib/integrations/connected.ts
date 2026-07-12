@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { granolaConfigured } from '@/lib/integrations/granola'
+import { granolaConfigured, getGranolaApiKey } from '@/lib/integrations/granola'
 import { getOrgStrataConnection, getStrataServerNames, isStrataUrl, STRATA_KEY_PREFIX } from '@/lib/mcp/strata'
 import {
   BUILTIN_CONNECTORS,
@@ -144,9 +144,12 @@ export type ConnectedProvider = { key: string; label: string; plane: ConnectedPl
  * platform builtins (HTTP API, Backstory) and env-configured Slack/Email are
  * capabilities every org has, not integrations THIS org connected — counting
  * them would inflate every org past the gate and make the number env-dependent.
- * Granola is the one builtin that counts, and only via a per-ORG API key
- * (integration_secrets) — never the GRANOLA_API_KEY env fallback that
- * granolaConfigured() also honors, since an env key is platform-level.
+ * Granola is the one builtin that counts, and only via a per-ORG API key that
+ * actually RESOLVES — getGranolaApiKey with source 'org' (an active
+ * integration_secret whose apiKey DECRYPTS). This matches /api/integrations/
+ * available's decryptable-key definition (granolaConfigured), so a dead
+ * (undecryptable) key no longer holds an org past the gate; and it still excludes
+ * the GRANOLA_API_KEY env fallback (source 'env'), which is platform-level.
  *
  * Org-scoped exactly like /api/integrations/available (all of the org's
  * connections, not just this user's). `_userId` is accepted for signature parity
@@ -156,12 +159,9 @@ export async function listConnectedProviders(
   organizationId: string,
   _userId: string,
 ): Promise<ConnectedProvider[]> {
-  const [{ connectionsRaw, nango, klavis, strataServers }, granolaSecret] = await Promise.all([
+  const [{ connectionsRaw, nango, klavis, strataServers }, granolaKey] = await Promise.all([
     readPlanes(organizationId),
-    prisma.integrationSecret.findUnique({
-      where: { organizationId_provider: { organizationId, provider: 'granola' } },
-      select: { isActive: true },
-    }),
+    getGranolaApiKey(organizationId),
   ])
 
   const providers: ConnectedProvider[] = []
@@ -188,7 +188,7 @@ export async function listConnectedProviders(
       plane: 'strata',
     })
   }
-  if (granolaSecret?.isActive) {
+  if (granolaKey?.source === 'org') {
     providers.push({ key: 'granola', label: 'Granola', plane: 'builtin' })
   }
 
