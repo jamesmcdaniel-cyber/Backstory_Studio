@@ -539,10 +539,30 @@ export async function runFlowExecution(
     }
   }
 
+  // Context tokens. Freeze ONE clock so every `{{now}}` in this run agrees; on a
+  // resume this is the resume moment (a fresh capture is correct). Run/flow
+  // metadata rides alongside: `startedAt` is the run row's STORED start (never a
+  // fresh Date), and `trigger` reads the run's own persisted provenance so a
+  // resumed run keeps its original trigger. `url` is a builder deep-link PATH —
+  // it carries no secret.
+  const clock = new Date()
+  const clockIso = clock.toISOString()
+  const now = { iso: clockIso, date: clockIso.slice(0, 10), time: clockIso.slice(11, 19), unix: Math.floor(clock.getTime() / 1000) }
+  const runMeta = {
+    id: run.id,
+    url: `/flows/${run.flowId}?run=${run.id}`,
+    trigger: (run.trigger as unknown as { type?: string } | null)?.type ?? 'manual',
+    startedAt: run.startedAt.toISOString(),
+    flowId: run.flowId,
+    flowName: flow.name,
+  }
+
   const result = await interpretFlow(graph, input, {
     runAgent,
     runAction,
     onStep,
+    now,
+    run: runMeta,
     ...(resuming ? { completed, resumeNodeId, resumeReply: job.reply } : {}),
   })
   await Promise.all(pending) // ensure all container-step rows are written

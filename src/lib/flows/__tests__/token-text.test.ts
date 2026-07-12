@@ -58,3 +58,16 @@ test('friendlyTokenLabel humanizes variable tokens', () => {
   assert.equal(friendlyTokenLabel('var.deal_count', ctx), 'Variable › deal_count')
   assert.equal(friendlyTokenLabel('var.deal.stage', ctx), 'Variable › deal › stage')
 })
+
+test('friendlyTokenLabel maps now / run / flow context tokens', () => {
+  assert.equal(friendlyTokenLabel('now', ctx), 'Current time')
+  assert.equal(friendlyTokenLabel('now.date', ctx), "Today's date")
+  assert.equal(friendlyTokenLabel('now.time', ctx), 'Current time of day')
+  assert.equal(friendlyTokenLabel('now.unix', ctx), 'Timestamp')
+  assert.equal(friendlyTokenLabel('run.id', ctx), 'This run › id')
+  assert.equal(friendlyTokenLabel('run.startedAt', ctx), 'This run › started')
+  assert.equal(friendlyTokenLabel('run.trigger', ctx), 'This run › trigger')
+  assert.equal(friendlyTokenLabel('run.url', ctx), 'This run › link')
+  assert.equal(friendlyTokenLabel('flow.id', ctx), 'This flow › id')
+  assert.equal(friendlyTokenLabel('flow.name', ctx), 'This flow › name')
+})

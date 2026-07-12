@@ -14,6 +14,13 @@ export type FlowContext = {
   // `{{var.<name>}}` tokens. One shared map per run (loop/parallel bodies
   // mutate the same object so writes persist past the container).
   variables?: Record<string, unknown>
+  // The run's frozen clock — one `new Date()` captured at run start so every
+  // `{{now}}` in a run agrees. `{{now}}` reads `iso`; `{{now.date/time/unix}}`
+  // read the parts. On resume this is the resume moment (a fresh capture).
+  now?: { iso: string; date: string; time: string; unix: number }
+  // Run/flow metadata: `{{run.id}}`/`{{run.url}}`/`{{run.trigger}}`/
+  // `{{run.startedAt}}` and the `{{flow.id}}`/`{{flow.name}}` aliases.
+  run?: { id: string; url: string; trigger: string; startedAt: string; flowId: string; flowName: string }
 }
 
 /** Read a dot-path off the context (e.g. 'trigger.input', 'step.n1.output.score', 'item'). */
@@ -28,6 +35,36 @@ export function readPath(ctx: FlowContext, path: string): unknown {
       cursor = (cursor as Record<string, unknown>)[part]
     }
     return cursor
+  }
+  // `now.*` reads the run's frozen clock; bare `{{now}}` is the ISO timestamp.
+  // Unknown subpaths read as undefined (→ '' when templated) — never crash.
+  if (parts[0] === 'now') {
+    const now = ctx.now
+    if (!now) return undefined
+    if (parts.length === 1) return now.iso
+    if (parts[1] === 'iso') return now.iso
+    if (parts[1] === 'date') return now.date
+    if (parts[1] === 'time') return now.time
+    if (parts[1] === 'unix') return now.unix
+    return undefined
+  }
+  // `flow.id`/`flow.name` alias the running flow's identity off the run metadata.
+  if (parts[0] === 'flow') {
+    const run = ctx.run
+    if (!run) return undefined
+    if (parts[1] === 'id') return run.flowId
+    if (parts[1] === 'name') return run.flowName
+    return undefined
+  }
+  // `run.*` reads this run's metadata (id, link, provenance, start time).
+  if (parts[0] === 'run') {
+    const run = ctx.run
+    if (!run) return undefined
+    if (parts[1] === 'id') return run.id
+    if (parts[1] === 'url') return run.url
+    if (parts[1] === 'trigger') return run.trigger
+    if (parts[1] === 'startedAt') return run.startedAt
+    return undefined
   }
   let cursor: unknown = ctx
   for (const part of parts) {

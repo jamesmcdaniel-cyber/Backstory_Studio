@@ -15,6 +15,34 @@ test('readPath reads trigger, nested step output, and item', () => {
   assert.equal(readPath(ctx, 'step.nope.output'), undefined)
 })
 
+test('readPath reads now / flow / run roots; unknown subpaths → undefined', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: {},
+    now: { iso: '2026-07-12T09:30:00.000Z', date: '2026-07-12', time: '09:30:00', unix: 1_752_312_600 },
+    run: { id: 'r1', url: '/flows/f1?run=r1', trigger: 'manual', startedAt: '2026-07-12T09:00:00.000Z', flowId: 'f1', flowName: 'Digest' },
+  }
+  assert.equal(readPath(c, 'now'), '2026-07-12T09:30:00.000Z')
+  assert.equal(readPath(c, 'now.date'), '2026-07-12')
+  assert.equal(readPath(c, 'now.time'), '09:30:00')
+  assert.equal(readPath(c, 'now.unix'), 1_752_312_600)
+  assert.equal(readPath(c, 'flow.id'), 'f1')
+  assert.equal(readPath(c, 'flow.name'), 'Digest')
+  assert.equal(readPath(c, 'run.id'), 'r1')
+  assert.equal(readPath(c, 'run.startedAt'), '2026-07-12T09:00:00.000Z')
+  assert.equal(readPath(c, 'run.trigger'), 'manual')
+  assert.equal(readPath(c, 'run.url'), '/flows/f1?run=r1')
+  // Unknown subpaths never crash — they read as undefined (→ '' when templated).
+  assert.equal(readPath(c, 'run.bogus'), undefined)
+  assert.equal(readPath(c, 'flow.bogus'), undefined)
+  assert.equal(readPath(c, 'now.bogus'), undefined)
+})
+
+test('now / flow / run tokens resolve to empty when the context lacks them', () => {
+  const c: FlowContext = { trigger: { input: '' }, step: {} }
+  assert.equal(resolveTemplate('{{now}}|{{run.id}}|{{flow.name}}', c), '||')
+})
+
 test('resolveTemplate substitutes tokens; missing → empty; objects → JSON', () => {
   assert.equal(resolveTemplate('Score {{item}}', ctx), 'Score Acme')
   assert.equal(resolveTemplate('{{step.n3.output}}', ctx), '{"score":91}')

@@ -49,6 +49,11 @@ type Opts = {
   // it); a humanReview step has no adapter, so the interpreter itself turns
   // this reply into the resuming step's output.
   resumeReply?: string
+  // Context tokens: the run's frozen clock (`{{now}}`) and run/flow metadata
+  // (`{{run.*}}`/`{{flow.*}}`), injected by execute-flow and threaded into the
+  // ctx (and every loop/parallel sub-context) so they resolve everywhere.
+  now?: { iso: string; date: string; time: string; unix: number }
+  run?: { id: string; url: string; trigger: string; startedAt: string; flowId: string; flowName: string }
 }
 
 // Result of executing a single node — an output, or a control signal that
@@ -548,7 +553,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item, index) => {
         // `variables` is shared by reference: writes inside the body persist
         // past the loop (one flow-global symbol table, MS parity).
-        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables }
+        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables, now: ctx.now, run: ctx.run }
         // Each iteration's body persists/resumes under `#<index>` (nested loops
         // append their own suffix) so a mid-loop pause never re-runs a prior
         // iteration's side effects on resume.
@@ -570,7 +575,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'parallel') {
       const results = await Promise.all(
         node.data.branches.map(async (branch) => {
-          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables }
+          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables, now: ctx.now, run: ctx.run }
           // Branch node ids are already unique, so parallel just propagates the
           // ambient `indexKey` (a parallel nested in a loop keeps the loop's
           // iteration suffix; a top-level parallel keeps bare ids).
@@ -620,7 +625,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     ),
   )
 
-  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {} }
+  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {}, now: opts.now, run: opts.run }
 
   // Resume: rebuild the symbol table from EVERY completed variable step before
   // walking. A completed loop/parallel short-circuits without entering its

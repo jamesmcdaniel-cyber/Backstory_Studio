@@ -1311,3 +1311,104 @@ test('a partially-completed iteration skips its finished body steps and resumes 
   assert.deepEqual(ran, ['b2#1'])
   assert.deepEqual(resumed.output, ['b2 x', 'answered-1'])
 })
+
+// ── Context tokens: {{now}} + run/flow metadata ─────────────────────────────
+
+const NOW = { iso: '2026-07-12T09:30:00.000Z', date: '2026-07-12', time: '09:30:00', unix: 1_752_312_600 }
+const RUN = {
+  id: 'run_42',
+  url: '/flows/flow_7?run=run_42',
+  trigger: 'schedule',
+  startedAt: '2026-07-12T09:29:00.000Z',
+  flowId: 'flow_7',
+  flowName: 'Weekly digest',
+}
+
+test('{{now}} resolves to the injected run clock', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'at {{now}} ({{now.date}} {{now.time}} #{{now.unix}})' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: node.input })
+  const result = await interpretFlow(graph, '', { runAgent, now: NOW })
+  assert.equal(result.output, 'at 2026-07-12T09:30:00.000Z (2026-07-12 09:30:00 #1752312600)')
+})
+
+test('{{flow.name}} and {{run.id}} resolve from run metadata', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{flow.name}} [{{flow.id}}] / {{run.id}} / {{run.trigger}} / {{run.url}} / {{run.startedAt}}' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: node.input })
+  const result = await interpretFlow(graph, '', { runAgent, run: RUN })
+  assert.equal(result.output, 'Weekly digest [flow_7] / run_42 / schedule / /flows/flow_7?run=run_42 / 2026-07-12T09:29:00.000Z')
+})
+
+test('unknown run/flow/now subpaths resolve to empty (never crash)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'a{{run.bogus}}b{{flow.bogus}}c{{now.bogus}}d' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: node.input })
+  const result = await interpretFlow(graph, '', { runAgent, now: NOW, run: RUN })
+  assert.equal(result.output, 'abcd')
+})
+
+test('context tokens resolve to empty when no metadata is injected', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'x{{now}}y{{run.id}}z{{flow.name}}w' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: node.input })
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.output, 'xyzw')
+})
+
+test('{{now}} is stable across two steps in one run (same injected clock)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{now}}' } },
+      { id: 'n2', type: 'agent', data: { agentId: 'a2', input: '{{now}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'n2' },
+    ],
+  }
+  const seen: string[] = []
+  const runAgent: RunAgentFn = async (node) => {
+    seen.push(node.input)
+    return { output: node.input }
+  }
+  await interpretFlow(graph, '', { runAgent, now: NOW })
+  assert.equal(seen.length, 2)
+  assert.equal(seen[0], seen[1])
+  assert.equal(seen[0], NOW.iso)
+})
+
+test('{{now}} and {{run.id}} are available inside a loop body', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'loop', type: 'loop', data: { over: '{{trigger.input}}', body: ['echo'] } },
+      { id: 'echo', type: 'agent', data: { agentId: 'echo', input: '{{item}}@{{now}}#{{run.id}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'loop' }],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: node.input })
+  const result = await interpretFlow(graph, ['A', 'B'], { runAgent, now: NOW, run: RUN })
+  assert.deepEqual(result.output, [`A@${NOW.iso}#run_42`, `B@${NOW.iso}#run_42`])
+})

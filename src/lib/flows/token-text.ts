@@ -48,8 +48,27 @@ function joinParts(root: string, rest: string[]): string {
   return [root, ...rest.map(fieldPart)].join(' › ')
 }
 
+/**
+ * Fixed labels for the run-context tokens: the frozen clock (`{{now}}`) and the
+ * run/flow metadata (`{{run.*}}`/`{{flow.*}}`). Whole-path lookups — these have
+ * no user-authored parts to humanize.
+ */
+const CONTEXT_TOKEN_LABELS: Record<string, string> = {
+  now: 'Current time',
+  'now.date': "Today's date",
+  'now.time': 'Current time of day',
+  'now.unix': 'Timestamp',
+  'run.id': 'This run › id',
+  'run.startedAt': 'This run › started',
+  'run.trigger': 'This run › trigger',
+  'run.url': 'This run › link',
+  'flow.id': 'This flow › id',
+  'flow.name': 'This flow › name',
+}
+
 /** Map a token path (no braces) to a plain-English label. */
 export function friendlyTokenLabel(path: string, ctx: TokenLabelContext): string {
+  if (CONTEXT_TOKEN_LABELS[path]) return CONTEXT_TOKEN_LABELS[path]
   const parts = path.split('.')
   if (parts[0] === 'trigger' && parts[1] === 'input') return joinParts('Run input', parts.slice(2))
   if (parts[0] === 'step' && parts[1] && parts[2] === 'output') {
