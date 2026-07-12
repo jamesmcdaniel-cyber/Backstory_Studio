@@ -1496,3 +1496,54 @@ test('no output node leaves namedOutputs undefined and keeps the last-step outpu
   assert.equal(result.output, 'DONE') // last-step output is untouched
   assert.equal(result.namedOutputs, undefined) // no named outputs when no output node ran
 })
+
+test('resume reconstructs named outputs from a completed output node before a pause', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'o', type: 'output', data: { outputs: [{ name: 'summary', value: '{{trigger.input}}', type: 'text' }] } },
+      { id: 'h', type: 'humanReview', data: { message: 'Approve?' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'o' },
+      { id: 'e1', source: 'o', target: 'h' },
+    ],
+  }
+  const runAgent: RunAgentFn = async () => ({ output: 'unused' })
+  // Prior run: the output node ran (its resolved named map was stored on the
+  // step row and reloaded into `completed`) and the humanReview paused. On
+  // resume the output node hits the completed short-circuit and never re-enters
+  // its branch, so the run-level namedOutputs collector must be rebuilt from the
+  // completed map — otherwise the reviewer's reply (the last-step output) would
+  // clobber the declared named outputs on final completion.
+  const result = await interpretFlow(graph, 'Acme', {
+    runAgent,
+    completed: { o: { summary: 'Acme' } },
+    resumeNodeId: 'h',
+    resumeReply: 'looks good',
+  })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.namedOutputs, { summary: 'Acme' }) // survives the resume
+  assert.equal(result.output, 'looks good') // the reply is the last-step output — but namedOutputs wins downstream
+})
+
+test('an output node with an empty outputs array does not clobber the last-step output at runtime', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: 'x' } },
+      { id: 'out', type: 'output', data: { outputs: [] } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'out' },
+    ],
+  }
+  // validate.ts blocks an empty outputs array; this is the belt-and-suspenders
+  // runtime guard for the degenerate case. An empty named-output map must not
+  // register as named outputs, nor overwrite the real last-step output with {}.
+  const result = await interpretFlow(graph, '', { runAgent: stub({ a1: 'REAL' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'REAL') // agent's real result, not {}
+  assert.equal(result.namedOutputs, undefined) // an empty map is not "named outputs"
+})

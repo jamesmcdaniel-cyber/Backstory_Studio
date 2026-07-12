@@ -458,9 +458,21 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
     }
 
     if (node.type === 'output') {
+      // An output node with no rows builds an empty named map at runtime, which
+      // would silently drop the real last-step output — block it outright.
+      if (node.data.outputs.length === 0) {
+        add(issues, 'error', 'EMPTY_OUTPUT', `${nodeLabel(node)} needs at least one output.`, node.id)
+      }
       const names = node.data.outputs.map((entry) => entry.name.trim()).filter(Boolean)
-      node.data.outputs.forEach((entry) => {
-        if (!entry.name.trim()) add(issues, 'error', 'MISSING_OUTPUT_NAME', `${nodeLabel(node)} needs a name for each output.`, node.id)
+      node.data.outputs.forEach((entry, index) => {
+        // Index the message (mirrors transform) so two empty names read distinctly.
+        if (!entry.name.trim()) {
+          add(issues, 'error', 'MISSING_OUTPUT_NAME', `${nodeLabel(node)} output ${index + 1} needs a name.`, node.id)
+        } else if (!entry.value.trim()) {
+          // A named-but-blank value is a nudge, not a blocker: the name is
+          // user-declared, and an empty value may be intentional.
+          add(issues, 'warning', 'EMPTY_OUTPUT_VALUE', `${nodeLabel(node)} output "${entry.name.trim()}" has no value.`, node.id)
+        }
       })
       for (const name of unique(names)) {
         if (names.filter((entry) => entry === name).length > 1) {

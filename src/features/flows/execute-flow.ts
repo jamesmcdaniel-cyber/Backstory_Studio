@@ -577,8 +577,11 @@ export async function runFlowExecution(
   // named object; otherwise the implicit last-step output stands (back-compat —
   // a flow with no output node behaves EXACTLY as before). This effective output
   // is what persists on the run, chains via flow.completed, and returns to the
-  // webhook caller.
-  const effectiveOutput = result.namedOutputs !== undefined ? result.namedOutputs : result.output
+  // webhook caller. Only a NON-EMPTY named map overrides: an empty {} (a
+  // degenerate output node with no rows — validate.ts blocks it) must never
+  // clobber the real last-step output.
+  const hasNamedOutputs = result.namedOutputs !== undefined && Object.keys(result.namedOutputs).length > 0
+  const effectiveOutput = hasNamedOutputs ? result.namedOutputs : result.output
   // A failed run persists WHY it failed (e.g. the step-timeout message) — the
   // runs API surfaces FlowRun.error, so it must never stay null on failure.
   const runError = status === 'failed' ? (result.error ?? 'The flow failed.').slice(0, 300) : null

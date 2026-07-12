@@ -411,10 +411,16 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         if (!name) continue // validate.ts blocks empty names; skip defensively at runtime
         map[name] = resolveTemplateValue(entry.value ?? '', ctx)
       }
-      namedOutputs = { ...(namedOutputs ?? {}), ...map }
+      // An output node with no named entries is a no-op passthrough: it must
+      // neither register an empty named-output map (which would surface as the
+      // flow's named outputs and clobber the real last-step output) nor
+      // overwrite the chained value with {}. validate.ts blocks an empty
+      // outputs array as an error; this guards the degenerate case at runtime.
+      const named = Object.keys(map).length > 0
+      if (named) namedOutputs = { ...(namedOutputs ?? {}), ...map }
       ctx.step[node.id] = { output: map }
       emit({ nodeId: node.id, status: 'succeeded', output: map })
-      return { kind: 'ok', output: map }
+      return { kind: 'ok', output: named ? map : undefined }
     }
 
     if (node.type === 'transform') {
@@ -666,6 +672,17 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const hash = nodeId.indexOf('#')
       const node = byId.get(hash === -1 ? nodeId : nodeId.slice(0, hash))
       if (node?.type === 'variable' && node.data.name.trim()) variables[node.data.name.trim()] = output
+      // Named outputs are lost the same way: a completed output node hits the
+      // short-circuit above and never re-enters the output branch, so its
+      // declared names would fall back to the last-step output on final
+      // completion (e.g. an output node BEFORE a humanReview pause). Rebuild the
+      // run-level collector from each completed output step's stored map, in
+      // completed-map order (execute-flow loads rows `order asc`, so later
+      // output nodes override earlier — matching the live merge).
+      if (node?.type === 'output' && output && typeof output === 'object' && !Array.isArray(output)) {
+        const stored = output as Record<string, unknown>
+        if (Object.keys(stored).length > 0) namedOutputs = { ...(namedOutputs ?? {}), ...stored }
+      }
     }
   }
 

@@ -547,7 +547,7 @@ test('output node with an empty output name is an error', () => {
   assert.equal(result.ok, false)
   const issue = result.errors.find((i) => i.code === 'MISSING_OUTPUT_NAME')
   assert.ok(issue, 'expected MISSING_OUTPUT_NAME')
-  assert.match(issue!.message, /needs a name for each output/)
+  assert.match(issue!.message, /needs a name/)
 })
 
 test('output node with duplicate output names is an error', () => {
@@ -561,4 +561,47 @@ test('output node with duplicate output names is an error', () => {
   const result = validateFlowGraph(graph)
   assert.equal(result.ok, false)
   assert.ok(result.errors.some((i) => i.code === 'DUPLICATE_OUTPUT_NAME' && i.message.includes('dupe')))
+})
+
+test('output node with an empty outputs array is an error', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'out' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  const issue = result.errors.find((i) => i.code === 'EMPTY_OUTPUT')
+  assert.ok(issue, 'expected EMPTY_OUTPUT')
+  assert.match(issue!.message, /needs at least one output/)
+})
+
+test('output node with a blank value warns but does not error', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [{ name: 'summary', value: '' }] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'out' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, true) // a blank value is a nudge, not a blocker
+  assert.ok(result.warnings.some((i) => i.code === 'EMPTY_OUTPUT_VALUE' && i.message.includes('summary')))
+})
+
+test('two empty output names read distinctly (indexed message)', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [{ name: '', value: '1' }, { name: '', value: '2' }] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'out' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  const missing = result.errors.filter((i) => i.code === 'MISSING_OUTPUT_NAME')
+  assert.equal(missing.length, 2)
+  assert.notEqual(missing[0].message, missing[1].message) // indexed — the two reads differ
 })
