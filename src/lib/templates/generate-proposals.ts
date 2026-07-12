@@ -279,10 +279,13 @@ export function normalizeProposal(raw: RawProposal, ctx: NormalizeContext): Prop
     if (!targetType || !targetId) return null
     const known = targetType === 'flow' ? ctx.flowIds : ctx.agentIds
     if (!known.has(targetId)) return null // must target a real, current flow/agent
+    // Server-validated targetType/targetId go LAST so a model-supplied
+    // configJson can never override the ids we just checked against
+    // ctx.flowIds/agentIds (mirrors the sourceEvidence merge below).
     const configuration = {
+      ...tolerantObject(raw.configJson),
       targetType,
       targetId,
-      ...tolerantObject(raw.configJson),
     } as unknown as Prisma.InputJsonValue
     return {
       userId: null,
@@ -424,6 +427,9 @@ const GENERATION_SYSTEM = [
  *    threshold — the model is NEVER called (cost + correctness).
  *  - `skipped:'parse'` (written 0) when the model reply can't be parsed.
  *  - otherwise `skipped:null` and `written` = rows created (0 is valid).
+ * A hard `generateStructured` failure (provider outage) PROPAGATES rather than
+ * skipping, so the BullMQ job retries the org instead of silently giving up;
+ * it throws before any write, so there is never a half-written batch.
  *
  * @param deps injected for testing; defaults are the real DB/model calls.
  */
