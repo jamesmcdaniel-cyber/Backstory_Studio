@@ -11,6 +11,12 @@ export const QUEUE_NAMES = {
   DEAD_LETTER: 'agent-dead-letter',
   FLOW_EXECUTION: 'flow-execution',
   FLOW_DEAD_LETTER: 'flow-dead-letter',
+  // Gated, org-level AI template generation (sub-project C). Enqueued when an
+  // org's 3-integration gate first clears and by a daily debounced cron sweep.
+  // A failed job is additive-only (it writes new `open` proposals via one
+  // createMany) so its dead-letter has no in-flight run row to terminalize.
+  TEMPLATE_GENERATION: 'template-generation',
+  TEMPLATE_GENERATION_DEAD_LETTER: 'template-generation-dead-letter',
 } as const
 
 const buildPhase = process.env.NEXT_PHASE === 'phase-production-build'

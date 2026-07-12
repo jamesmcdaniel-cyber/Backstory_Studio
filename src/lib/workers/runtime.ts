@@ -6,6 +6,8 @@ import { executeFlowJob } from '@/features/flows/execute-flow'
 import { getRedisConnection, QUEUE_NAMES, workerConfig } from '@/lib/queue/config'
 import { deadLetterFromJob } from '@/lib/queue/dead-letter'
 import { deadLetterFromFlowJob } from '@/lib/queue/flow-dead-letter'
+import { deadLetterFromTemplateGenerationJob } from '@/lib/queue/template-generation-dead-letter'
+import { executeTemplateGenerationJob } from '@/lib/templates/generation-queue'
 import { registerAgentSchedules } from '@/lib/workers/agent-schedule-registrar'
 import { initSentry, captureError, flushErrorReporting } from '@/lib/observability/sentry'
 
@@ -21,6 +23,10 @@ class WorkerRuntime {
     // Flow execution: same worker pool, its own queue and dead-letter target
     // (flowRun rows, not agentExecution rows) — see flow-dead-letter.ts.
     { queue: QUEUE_NAMES.FLOW_EXECUTION, handler: executeFlowJob, onFailed: deadLetterFromFlowJob(QUEUE_NAMES.FLOW_EXECUTION) },
+    // Gated AI template generation: its own queue + dead-letter target. The
+    // dead-letter terminalizes nothing (generation is additive) — see
+    // template-generation-dead-letter.ts.
+    { queue: QUEUE_NAMES.TEMPLATE_GENERATION, handler: executeTemplateGenerationJob, onFailed: deadLetterFromTemplateGenerationJob(QUEUE_NAMES.TEMPLATE_GENERATION) },
   ]
   private workers = this.workerSpecs.map(
     (spec) => new Worker(spec.queue, spec.handler, { ...workerConfig, connection: getRedisConnection() }),

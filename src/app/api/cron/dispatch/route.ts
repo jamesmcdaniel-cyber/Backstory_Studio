@@ -25,6 +25,7 @@ import { workersEnabled } from '@/lib/queue/config'
 import { EXECUTION_MODE } from '@/lib/queue/execution-mode'
 import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 import { reapStuckFlowRuns } from '@/lib/flows/reap'
+import { sweepTemplateGeneration } from '@/lib/templates/generation-queue'
 import { blocksSchedule } from '@/lib/flows/schedule-blocking'
 import { captureError } from '@/lib/observability/sentry'
 
@@ -284,7 +285,19 @@ export async function GET(request: Request) {
       }
     }
 
-    return Response.json({ success: true, due: dueCount, ran: ranIds, ranFlows: ranFlowIds })
+    // Auto-template generation: a daily, debounced, per-org sweep. Each org that
+    // meets the 3-integration gate, has no open proposals, and hasn't generated
+    // within GENERATION_DEBOUNCE_MS gets ONE generation dispatch (capped per
+    // tick). Isolated so a generation failure never aborts the dispatch tick.
+    let generatedOrgs: string[] = []
+    try {
+      generatedOrgs = await sweepTemplateGeneration(now)
+    } catch (error) {
+      apiLogger.error('cron/dispatch: template-generation sweep failed', { error: capError(error) })
+      captureError(error, { source: 'cron.dispatch.templateGeneration' })
+    }
+
+    return Response.json({ success: true, due: dueCount, ran: ranIds, ranFlows: ranFlowIds, generatedOrgs })
   } catch (error) {
     apiLogger.error('cron/dispatch: unhandled error', {
       error: error instanceof Error ? error.message : String(error),
