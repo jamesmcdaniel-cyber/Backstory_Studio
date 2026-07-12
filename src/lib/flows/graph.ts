@@ -23,8 +23,9 @@ export type FieldType = (typeof FIELD_TYPES)[number]
 export const outputFieldSchema = z.object({ name: z.string(), type: z.enum(FIELD_TYPES).default('any'), description: z.string().optional() })
 export type OutputField = z.infer<typeof outputFieldSchema>
 
-/** A trigger input field: an OutputField plus whether the run must supply it. */
-export const triggerInputFieldSchema = outputFieldSchema.extend({ required: z.boolean().optional() })
+/** A trigger input field: an OutputField plus whether the run must supply it
+ * and a `default` used at run start when the caller omits/blanks the value. */
+export const triggerInputFieldSchema = outputFieldSchema.extend({ required: z.boolean().optional(), default: z.string().optional() })
 export type TriggerInputField = z.infer<typeof triggerInputFieldSchema>
 
 const triggerNode = z.object({

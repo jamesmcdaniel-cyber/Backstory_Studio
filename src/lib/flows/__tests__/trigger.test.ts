@@ -44,20 +44,20 @@ test('preserveWebhookSecretHash keeps the existing secret across trigger edits',
   )
 })
 
-test('triggerInputFieldsFromTrigger normalizes fields and required flags', () => {
+test('triggerInputFieldsFromTrigger normalizes fields, required flags, and defaults', () => {
   const fields = triggerInputFieldsFromTrigger({
     type: 'manual',
     inputFields: [
-      { name: 'account', type: 'string', description: 'Customer', required: true },
+      { name: 'account', type: 'string', description: 'Customer', required: true, default: 'Acme' },
       { name: 'count', type: 'number' },
-      { name: 'weird', type: 'nope' },
+      { name: 'weird', type: 'nope', default: '' },
       'not-a-record',
     ],
   })
   assert.deepEqual(fields, [
-    { name: 'account', type: 'string', description: 'Customer', required: true },
-    { name: 'count', type: 'number', description: undefined, required: false },
-    { name: 'weird', type: 'any', description: undefined, required: false },
+    { name: 'account', type: 'string', description: 'Customer', required: true, default: 'Acme' },
+    { name: 'count', type: 'number', description: undefined, required: false, default: undefined },
+    { name: 'weird', type: 'any', description: undefined, required: false, default: undefined },
   ])
   assert.deepEqual(triggerInputFieldsFromTrigger(undefined), [])
   assert.deepEqual(triggerInputFieldsFromTrigger({ type: 'manual' }), [])

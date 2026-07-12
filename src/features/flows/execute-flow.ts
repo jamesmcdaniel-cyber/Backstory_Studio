@@ -16,7 +16,7 @@ import { recordAudit } from '@/lib/audit'
 import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
 import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
-import { missingRequiredInputFields } from '@/lib/flows/input-validation'
+import { applyInputDefaults, missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { shouldReuseInput, storedRunInput } from '@/lib/flows/reuse-input'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 import { flowActionRetries, flowActionTimeoutMs, runWithRetries, shouldRetryAfterTimeout } from './action-reliability'
@@ -151,6 +151,12 @@ export async function runFlowExecution(
   let reusedInput = false
   if (!resuming) {
     const inputFields = triggerInputFieldsFromTrigger(triggerFromGraph(graph, flow.trigger))
+    // Fill declared per-field defaults into absent/blank structured inputs
+    // BEFORE the required-check, so a required field WITH a default is
+    // satisfied. Precedence: explicit provided value > field default >
+    // last-successful-reuse fallback (a field with neither an explicit value
+    // nor a default stays missing and can still trigger the reuse fallback).
+    input = applyInputDefaults(inputFields, input)
     let missing = missingRequiredInputFields(inputFields, input)
     if (missing.length) {
       const lastSuccess = await prisma.flowRun.findFirst({

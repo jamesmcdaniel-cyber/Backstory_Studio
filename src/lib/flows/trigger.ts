@@ -51,5 +51,6 @@ export function triggerInputFieldsFromTrigger(trigger: unknown): TriggerInputFie
     type: (FIELD_TYPES as readonly string[]).includes(String(field.type)) ? (field.type as TriggerInputField['type']) : 'any',
     description: typeof field.description === 'string' ? field.description : undefined,
     required: field.required === true,
+    default: typeof field.default === 'string' && field.default !== '' ? field.default : undefined,
   }))
 }
