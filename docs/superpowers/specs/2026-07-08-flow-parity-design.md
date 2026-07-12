@@ -296,6 +296,18 @@ User reports: "the flow doesn't execute as well as the agents do"; "it doesn't s
 
 Reference: `docs/superpowers/specs/references/2026-07-09-ms-config-settings.md`. New step families to reach MS Agent flows parity: Variables (initialize/set/increment/decrement/append with typed symbol table), Data operations (compose, parse JSON with schema-from-sample, join, CSV/HTML table, filter array, select), Human review (request information = first-class pause step; multistage approval later). Scoped and planned separately after WS9.
 
+## 11. Gumloop "Flow Basics" parity (added 2026-07-12, user reference docs.gumloop.com/nodes/flow_basics)
+
+Gumloop's Flow Basics set benchmarks the orchestration primitives a workflow builder needs: Input, Output, Router, Filter, Join Paths, Error Shield, Current Datetime, Current Automation Info. Gap analysis (ledger 2026-07-12): Router (our switch has a `default`/else edge) and Filter are covered. The confirmed gaps:
+
+- **Output node (GAP):** today `FlowRun.output` is implicitly the last main-chain step's output; there is no named-output declaration. Add an `output` node type declaring one or more NAMED outputs (name + value token + type Text/List/Any); on completion `FlowRun.output` becomes `{ <name>: value, … }` (single-output flows keep a bare value for back-compat). The `flow.completed` signal payload, the webhook trigger response, and any subflow/agent-tool caller receive the named outputs. No output node → last-step behavior unchanged.
+- **Join Paths node (GAP):** condition/switch branches diverge and only reconverge if hand-wired to a shared target, with no "path that ran" merge value. Add a `join` node: only-one-active passthrough — it forwards whichever incoming branch actually executed (no buffering, no waiting), so branches after a Router merge back into one path without duplicating downstream steps.
+- **Error path routing (Error Shield, PARTIAL→fuller):** we already surface per-step `onError: stop|continue` + retries + timeout. Add `onError: 'route'` — on failure the step routes down a labeled `error` edge (reusing the condition true/false edge machinery) and the step's output becomes `{ error: <message>, input: <the step input> }` so a downstream step can handle/log/fallback and a Join can merge the paths back. This gives Gumloop's success/error split + pass-inputs-through without a container abstraction.
+- **Context tokens (Current Datetime + Current Automation Info, GAP):** token-native rather than nodes. New readPath roots resolvable anywhere: `{{now}}` (ISO), `{{now.date}}`, `{{now.time}}`, `{{now.unix}}`; and run/flow metadata `{{flow.id}}`, `{{flow.name}}`, `{{run.id}}`, `{{run.startedAt}}`, `{{run.trigger}}` (manual|schedule|webhook|signal), `{{run.url}}` (builder run deep-link). Exposed in the DataTree under a "Now" and "This run" root.
+- **Input default values (GAP):** trigger input fields gain an optional `default` value applied at run start when the caller omits that field (distinct from whole-run last-successful reuse). Editor gains a Default column.
+
+Router stays as-is (switch already has the else/default branch). Filter stays as-is. UX + copilot ripple follows the WS10 pattern (picker leaves for output/join, editors, canvas titles, copilot STEP_TYPES/grounding, DataTree roots).
+
 ## Out of scope
 
 - React Flow / canvas replatform
