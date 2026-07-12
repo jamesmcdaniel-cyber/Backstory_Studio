@@ -423,6 +423,20 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       return { kind: 'ok', output: named ? map : undefined }
     }
 
+    if (node.type === 'join') {
+      // Branch merge point (Gumloop "Join Paths"): condition/switch/error
+      // branches all target this node, so downstream steps aren't duplicated per
+      // branch. Pure passthrough — it forwards the value from whichever branch
+      // reached it (the current `lastOutput`) as its own output and the walk
+      // continues down its single outgoing edge. Only-one-active semantics fall
+      // out of the linear walk: condition/switch/error already follow exactly
+      // one edge, so only one path ever arrives here. `{{step.<id>.output}}`
+      // reads "the value from whichever path ran".
+      ctx.step[node.id] = { output: lastOutput }
+      emit({ nodeId: node.id, status: 'succeeded', output: lastOutput })
+      return { kind: 'ok', output: lastOutput }
+    }
+
     if (node.type === 'transform') {
       // Build an object from templated field assignments (deterministic "Set").
       // A value that parses as JSON (number/bool/object/array) is typed; anything

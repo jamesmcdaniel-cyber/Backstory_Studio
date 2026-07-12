@@ -71,6 +71,8 @@ function nodeLabel(node: FlowNode | undefined) {
       return 'Request information'
     case 'output':
       return 'Output'
+    case 'join':
+      return 'Join'
     case 'variable':
       switch (node.data.op) {
         case 'initialize':
@@ -478,6 +480,14 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         if (names.filter((entry) => entry === name).length > 1) {
           add(issues, 'error', 'DUPLICATE_OUTPUT_NAME', `${nodeLabel(node)} has duplicate output "${name}".`, node.id)
         }
+      }
+    }
+
+    if (node.type === 'join') {
+      // A join is a merge target: branches point their edges at it. With no
+      // incoming edge it can never run — a harmless warning, not a blocker.
+      if (!graph.edges.some((edge) => edge.target === node.id)) {
+        add(issues, 'warning', 'JOIN_NO_INCOMING', `${nodeLabel(node)} isn't reached by any branch.`, node.id)
       }
     }
 

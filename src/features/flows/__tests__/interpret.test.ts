@@ -485,6 +485,75 @@ test('switch routes to the matching case, else default', async () => {
   assert.equal((await interpretFlow(graph('smb'), 'smb', { runAgent })).output, 'DEFAULT')
 })
 
+// ── Join node: branches reconverge into one path ─────────────────────────────
+
+// A condition whose true/false branches both point at ONE join, then a
+// downstream agent that reads the join's output. The stub map decides which
+// branch runs; `after` is NOT in the map, so it echoes `ran:<resolved input>`,
+// proving it read {{step.j.output}} (the value from whichever path ran).
+const conditionJoinGraph: FlowGraph = {
+  nodes: [
+    { id: 'trigger', type: 'trigger', data: {} },
+    { id: 'n1', type: 'agent', data: { agentId: 'score', input: '{{trigger.input}}' } },
+    { id: 'c', type: 'condition', data: { left: '{{step.n1.output.score}}', op: 'gt', right: '80' } },
+    { id: 'hi', type: 'agent', data: { agentId: 'high', input: 'x' } },
+    { id: 'lo', type: 'agent', data: { agentId: 'low', input: 'x' } },
+    { id: 'j', type: 'join', data: {} },
+    { id: 'after', type: 'agent', data: { agentId: 'after', input: 'saw {{step.j.output}}' } },
+  ],
+  edges: [
+    { id: 'e0', source: 'trigger', target: 'n1' },
+    { id: 'e1', source: 'n1', target: 'c' },
+    { id: 'e2', source: 'c', target: 'hi', branch: 'true' },
+    { id: 'e3', source: 'c', target: 'lo', branch: 'false' },
+    { id: 'e4', source: 'hi', target: 'j' },
+    { id: 'e5', source: 'lo', target: 'j' },
+    { id: 'e6', source: 'j', target: 'after' },
+  ],
+}
+
+test('condition true-branch merges into a join whose output is the branch value', async () => {
+  const result = await interpretFlow(conditionJoinGraph, 'Acme', { runAgent: stub({ score: '{"score":91}', high: 'HIGH', low: 'LOW' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'j')?.output, 'HIGH') // join forwarded the true branch's value
+  assert.equal(result.output, 'ran:saw HIGH') // the downstream step read {{step.j.output}}
+})
+
+test('condition false-branch merges into the same join (symmetric)', async () => {
+  const result = await interpretFlow(conditionJoinGraph, 'Acme', { runAgent: stub({ score: '{"score":40}', high: 'HIGH', low: 'LOW' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'j')?.output, 'LOW')
+  assert.equal(result.output, 'ran:saw LOW')
+})
+
+test('a matched switch case merges into a join', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'sw', type: 'switch', data: { cases: [{ id: 'ent', left: '{{trigger.input}}', op: 'eq', right: 'enterprise' }, { id: 'mid', left: '{{trigger.input}}', op: 'eq', right: 'mid' }] } },
+      { id: 'e', type: 'agent', data: { agentId: 'ent', input: 'ENT' } },
+      { id: 'm', type: 'agent', data: { agentId: 'mid', input: 'MID' } },
+      { id: 'd', type: 'agent', data: { agentId: 'def', input: 'DEFAULT' } },
+      { id: 'j', type: 'join', data: {} },
+      { id: 'after', type: 'agent', data: { agentId: 'after', input: 'saw {{step.j.output}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'sw' },
+      { id: 'e1', source: 'sw', target: 'e', branch: 'ent' },
+      { id: 'e2', source: 'sw', target: 'm', branch: 'mid' },
+      { id: 'e3', source: 'sw', target: 'd', branch: 'default' },
+      { id: 'e4', source: 'e', target: 'j' },
+      { id: 'e5', source: 'm', target: 'j' },
+      { id: 'e6', source: 'd', target: 'j' },
+      { id: 'e7', source: 'j', target: 'after' },
+    ],
+  }
+  const result = await interpretFlow(graph, 'mid', { runAgent: stub({ ent: 'ENT', mid: 'MID', def: 'DEFAULT' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.steps.find((s) => s.nodeId === 'j')?.output, 'MID') // forwarded the matched case's value
+  assert.equal(result.output, 'ran:saw MID')
+})
+
 test('onStep reports every node including containers', async () => {
   const graph: FlowGraph = {
     nodes: [

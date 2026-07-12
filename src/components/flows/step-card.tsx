@@ -15,6 +15,7 @@ import {
   FileText,
   Filter,
   GitBranch,
+  GitMerge,
   Globe,
   Hash,
   FileOutput,
@@ -84,6 +85,8 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   humanReview: UserCheck,
   // NEUTRAL placeholder for Task 6 (builder UX) — icon/tone finalized with the editor.
   output: FileOutput,
+  // NEUTRAL placeholder for Task 6 (builder UX) — icon/tone finalized with the join editor.
+  join: GitMerge,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -102,6 +105,8 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   data: 'bg-violet-600 text-white',
   humanReview: 'bg-blue-600 text-white',
   output: 'bg-teal-600 text-white',
+  // NEUTRAL placeholder for Task 6 (builder UX) — finalized with the join editor.
+  join: 'bg-indigo-600 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {

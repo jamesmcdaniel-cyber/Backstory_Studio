@@ -275,8 +275,19 @@ const outputNode = z.object({
   }),
 })
 
+// Branch merge point (Gumloop "Join Paths"): condition/switch/error branches
+// all point their edges at ONE join node so downstream steps aren't duplicated
+// per branch. Pure passthrough — no config. The interpreter forwards the value
+// from whichever branch reached it (only one ever does — the linear walk
+// follows a single edge) and continues down the join's one outgoing edge.
+const joinNode = z.object({
+  id: z.string(),
+  type: z.literal('join'),
+  data: z.object({ label: z.string().optional(), note: z.string().optional() }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

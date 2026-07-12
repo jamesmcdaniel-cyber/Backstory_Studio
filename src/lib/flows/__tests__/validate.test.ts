@@ -129,6 +129,25 @@ test('validateFlowGraph warns when an http step authenticates with an unavailabl
   assert.ok(!noContext.warnings.some((issue) => issue.code === 'UNKNOWN_HTTP_CONNECTION'))
 })
 
+test('validateFlowGraph warns about a join with no incoming branch, not a wired one', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'agent-1', input: 'x' } },
+      { id: 'j', type: 'join', data: {} }, // wired: reached from `a`
+      { id: 'orphan', type: 'join', data: { label: 'Merge' } }, // no incoming edge
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'a' },
+      { id: 'e2', source: 'a', target: 'j' },
+    ],
+  }
+  const result = validateFlowGraph(graph, { agents: [{ id: 'agent-1', title: 'Agent' }] })
+  assert.ok(result.warnings.some((issue) => issue.code === 'JOIN_NO_INCOMING' && issue.nodeId === 'orphan'))
+  assert.equal(result.warnings.some((issue) => issue.code === 'JOIN_NO_INCOMING' && issue.nodeId === 'j'), false)
+  assert.match(result.warnings.find((issue) => issue.code === 'JOIN_NO_INCOMING')?.message ?? '', /Merge isn't reached by any branch\./)
+})
+
 test('validateFlowGraph checks loop bodies and switch defaults', () => {
   const graph: FlowGraph = {
     nodes: [

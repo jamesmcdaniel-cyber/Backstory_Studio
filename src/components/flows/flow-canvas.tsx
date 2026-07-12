@@ -226,6 +226,10 @@ export function FlowCanvas({
       // (first output name) lands with the output editor.
       case 'output':
         return node.data.label || 'Output'
+      // NEUTRAL placeholder for Task 6 (builder UX) — real title/subtitle land
+      // with the join canvas + picker work.
+      case 'join':
+        return node.data.label || 'Join'
     }
   }
 

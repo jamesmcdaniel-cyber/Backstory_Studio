@@ -46,6 +46,9 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
       return { message: '' }
     case 'output':
       return { outputs: [{ name: 'output', value: '', type: 'any' }] }
+    case 'join':
+      // Pure passthrough merge point — no config.
+      return {}
     case 'trigger':
       return { trigger: { type: 'manual' } }
   }
