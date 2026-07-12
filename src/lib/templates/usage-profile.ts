@@ -31,6 +31,25 @@ export type UsageProfile = {
 /** Window: last 90 days AND at most the most-recent 500 audit rows (whichever tighter). */
 export const USAGE_WINDOW_DAYS = 90
 export const MAX_AUDIT_ROWS = 500
+
+/**
+ * AuditEvent.action values that represent a GENUINE tool invocation — the only
+ * rows that feed the usage profile. Both executors tag a real tool call as
+ * 'tool.write' (write/delivery planes) or 'tool.call' (read planes); the choice
+ * is provider-based (see `writePlanes`/`WRITE_PLANES` in execute-agent.ts:936 /
+ * execute-flow.ts:475), so we accept both.
+ *
+ * Everything else is deliberately excluded, because it is not a tool call:
+ *  - approval lifecycle ('approval.requested' | 'approval.approved' |
+ *    'approval.rejected' | 'approval.failed', approval.ts) — all carry
+ *    resourceType=provider for the SAME executionId, so an approval-gated call
+ *    would be double/triple-counted and its provider over-weighted.
+ *  - resource lifecycle ('flow.published', publish route; config changes;
+ *    connects) — not a tool call, and carries a non-provider resourceType
+ *    (e.g. 'flow', tool=null) that would surface as a phantom provider.
+ * The @@index([organizationId, action]) on AuditEvent makes this filter cheap.
+ */
+export const TOOL_USAGE_ACTIONS = ['tool.call', 'tool.write'] as const
 /**
  * Below this many audit rows an org is "thin" and we fold in WorkflowStep-derived
  * rows (from executions not already represented in the audit slice) so few-run
@@ -127,7 +146,22 @@ export function aggregateUsage(rows: UsageRow[], windowDays: number = USAGE_WIND
 const normProvider = (v: string | null | undefined): string => (v ?? '').trim().toLowerCase()
 const normTool = (v: string | null | undefined): string => (v ?? '').trim()
 
-/** Split a WorkflowStep.node ('<provider>.<tool>') on the LAST dot. */
+/**
+ * Split a WorkflowStep.node ('<provider>.<tool>') on the LAST dot. This keeps a
+ * dotted provider intact for the common single-token tool (e.g.
+ * 'people.ai.get_account' -> provider 'people.ai', tool 'get_account').
+ *
+ * KNOWN LIMITATION: from the joined string alone, a dotted provider and a dotted
+ * TOOL name are ambiguous. An MCP tool whose name contains a dot (e.g.
+ * 'slack.chat.postMessage') mis-attributes to provider 'slack.chat'. A robust
+ * fix needs an authoritative connected-provider set to match longest-known-prefix
+ * against — not reliably available here (this is the THIN-org fallback, used
+ * precisely when audit coverage is sparse), and a naive prefix match would risk a
+ * NEW mis-split ('people' as a prefix of 'people.ai'). Left as last-dot: the
+ * audit path (correct provider/tool split) is the primary source; this fallback
+ * only supplies extra signal for few-run orgs. Revisit if MCP dotted tool names
+ * become common.
+ */
 function splitNode(node: string): { provider: string; tool: string } | null {
   const idx = node.lastIndexOf('.')
   if (idx <= 0 || idx === node.length - 1) return null // no dot, or nothing on a side
@@ -138,8 +172,10 @@ function splitNode(node: string): { provider: string; tool: string } | null {
  * DB wrapper: org-scoped, bounded read of integration activity -> `UsageProfile`.
  *
  * Source of truth is AuditEvent (resourceType = provider, tool = tool, executionId
- * = the run/execution id), windowed to the last {@link USAGE_WINDOW_DAYS} days and
- * capped at the most-recent {@link MAX_AUDIT_ROWS} rows (whichever is tighter).
+ * = the run/execution id), restricted to genuine tool-invocation actions
+ * ({@link TOOL_USAGE_ACTIONS}) so lifecycle/approval rows do not distort the
+ * signal, windowed to the last {@link USAGE_WINDOW_DAYS} days and capped at the
+ * most-recent {@link MAX_AUDIT_ROWS} rows (whichever is tighter).
  *
  * When audit coverage is thin ({@link THIN_AUDIT_ROW_THRESHOLD}), we ALSO fold in
  * WorkflowStep rows (node = '<provider>.<tool>') from executions NOT already
@@ -151,8 +187,14 @@ function splitNode(node: string): { provider: string; tool: string } | null {
 export async function buildUsageProfile(organizationId: string): Promise<UsageProfile> {
   const since = new Date(Date.now() - USAGE_WINDOW_DAYS * 24 * 60 * 60 * 1000)
 
+  // Restrict to GENUINE tool-invocation actions (see TOOL_USAGE_ACTIONS): this
+  // drops lifecycle rows like flow.published (a phantom 'flow' provider) and the
+  // approval.requested/approved rows that would otherwise multi-count a single
+  // approval-gated call. The retained tool.call/tool.write is counted once. The
+  // action filter also implies a non-null resourceType (both executors always
+  // set resourceType=provider on these rows).
   const auditRows = await prisma.auditEvent.findMany({
-    where: { organizationId, createdAt: { gte: since }, resourceType: { not: null } },
+    where: { organizationId, createdAt: { gte: since }, action: { in: [...TOOL_USAGE_ACTIONS] } },
     orderBy: { createdAt: 'desc' },
     take: MAX_AUDIT_ROWS,
     select: { resourceType: true, tool: true, executionId: true, createdAt: true },

@@ -126,3 +126,14 @@ test('runCount is the number of distinct non-null runs', () => {
 test('windowDays is passed through', () => {
   assert.equal(aggregateUsage([], 30).windowDays, 30)
 })
+
+test('a non-empty provider with an empty tool still counts (lifecycle rows must be filtered at the query, not here)', () => {
+  // aggregateUsage has no notion of an audit `action`: a leaked lifecycle row
+  // like flow.published (resourceType='flow', tool=null) would count as a 'flow'
+  // provider here. buildUsageProfile therefore restricts by action at the DB
+  // query (TOOL_USAGE_ACTIONS). This locks the aggregator's correct
+  // non-filtering behavior so the responsibility stays where the signal exists.
+  const { providers, topTools } = aggregateUsage([row('flow', '', 'r1', '2026-07-01T00:00:00Z')])
+  assert.deepEqual(providers, [{ provider: 'flow', calls: 1 }])
+  assert.deepEqual(topTools, [{ provider: 'flow', tool: '', calls: 1 }])
+})

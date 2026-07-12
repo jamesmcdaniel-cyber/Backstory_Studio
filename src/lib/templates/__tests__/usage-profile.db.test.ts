@@ -75,6 +75,37 @@ if (TEST_DB) {
     assert.ok(toolKeys.includes('gmail.read_thread'))
   })
 
+  test('buildUsageProfile counts only genuine tool actions, not lifecycle/approval events', async () => {
+    const org = await prisma.organization.create({ data: { name: 'usage filter', slug: `usage-filter-${Date.now()}` } })
+    try {
+      const ev = (action: string, resourceType: string | null, tool: string | null, runId: string | null) =>
+        prisma.auditEvent.create({ data: { organizationId: org.id, action, resourceType, tool, executionId: runId } })
+
+      // A normal (non-gated) tool call — counts once.
+      await ev('tool.call', 'notion', 'create_page', 'run1')
+      // A lifecycle event: publishing a flow. resourceType='flow', tool=null.
+      // Must NOT surface as a phantom 'flow' provider.
+      await ev('flow.published', 'flow', null, null)
+      // An approval-gated call: the SAME execution writes requested + approved +
+      // the real tool.write, all resourceType=provider. Must count the provider
+      // exactly ONCE (only the tool.write survives the action filter).
+      await ev('approval.requested', 'salesforce', 'create_lead', 'run2')
+      await ev('approval.approved', 'salesforce', 'create_lead', 'run2')
+      await ev('tool.write', 'salesforce', 'create_lead', 'run2')
+
+      const profile = await buildUsageProfile(org.id)
+      const providerMap = Object.fromEntries(profile.providers.map((p: any) => [p.provider, p.calls]))
+
+      assert.equal(providerMap.notion, 1, 'a normal tool.call counts once')
+      assert.equal(providerMap.salesforce, 1, 'approval-gated call counts the provider exactly once (not 3)')
+      assert.equal(providerMap.flow, undefined, 'flow.published lifecycle event is not a provider')
+      // runCount = 2 genuine tool runs (run1, run2); the null-run lifecycle row is ignored.
+      assert.equal(profile.runCount, 2)
+    } finally {
+      await prisma.organization.delete({ where: { id: org.id } }).catch(() => {})
+    }
+  })
+
   test('buildUsageProfile is empty for an org with no activity', async () => {
     const org = await prisma.organization.create({ data: { name: 'usage empty', slug: `usage-empty-${Date.now()}` } })
     try {
