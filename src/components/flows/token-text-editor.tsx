@@ -225,6 +225,34 @@ export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditor
     insertPlainText(event.dataTransfer.getData('text/plain'))
   }
 
+  /**
+   * Dragging a chip-containing selection would natively carry the friendly
+   * labels; overwrite the payload with the canonical `{{token}}` text so any
+   * drop target gets text that resolves (our own onDrop re-chips it via the
+   * `{{` parse path). No preventDefault — the browser must still run its
+   * native drag; we only correct the payload. We also declare the drag a COPY:
+   * our onDrop preventDefaults, which cancels the native "move" half anyway
+   * (the source selection always survives), so duplicate-on-drop is the
+   * honest, predictable semantics rather than a sometimes-move.
+   */
+  const handleDragStart = (event: DragEvent<HTMLDivElement>) => {
+    const editor = editorRef.current
+    if (!editor) return
+    const range = selectionRangeInside(editor)
+    if (range && !range.collapsed) {
+      const container = document.createElement('div')
+      container.appendChild(range.cloneContents())
+      event.dataTransfer.setData('text/plain', serializeEditorDom(container))
+    } else {
+      // Chips are contentEditable=false, so browsers can drag one directly
+      // with no selection around it — same label-instead-of-token loss.
+      const token = event.target instanceof HTMLElement ? event.target.closest('[data-token]')?.getAttribute('data-token') : null
+      if (!token) return
+      event.dataTransfer.setData('text/plain', `{{${token}}}`)
+    }
+    event.dataTransfer.effectAllowed = 'copy'
+  }
+
   /** Copy/cut the canonical `{{token}}` text, not the friendly chip labels. */
   const handleCopyCut = (event: ClipboardEvent<HTMLDivElement>, cut: boolean) => {
     const editor = editorRef.current
@@ -253,6 +281,7 @@ export const TokenTextEditor = forwardRef<TokenTextEditorHandle, TokenTextEditor
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       onDrop={handleDrop}
+      onDragStart={handleDragStart}
       onCopy={(event) => handleCopyCut(event, false)}
       onCut={(event) => handleCopyCut(event, true)}
       onFocus={onFocus}
