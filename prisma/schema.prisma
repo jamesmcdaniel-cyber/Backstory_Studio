@@ -56,6 +56,7 @@ model Organization {
   pushSubscriptions   PushSubscription[]
   knowledgeDocuments  KnowledgeDocument[]
   sharedSkills        SharedSkill[]
+  templateProposals   TemplateProposal[]
 
   @@map("organizations")
 }
@@ -799,6 +800,35 @@ model SharedSkill {
 
   @@index([isActive, updatedAt])
   @@map("shared_skills")
+}
+
+// The AI proposal review queue (sub-project C). A proposal is NOT a live
+// template — the auto-generation engine writes `status:'open'` suggestions
+// that a human reviews, then accepts (promoting a template-kind proposal via
+// createTemplate) or dismisses. Nothing here is published without an explicit
+// accept. `userId` null = an org-wide proposal; set = proposed for that rep.
+model TemplateProposal {
+  id                String   @id @default(cuid())
+  organizationId    String   @db.Uuid
+  userId            String?
+  title             String
+  rationale         String   @db.Text
+  // agent_template | flow_template | process_improvement
+  kind              String
+  configuration     Json
+  // open | accepted | dismissed
+  status            String   @default("open")
+  sourceEvidence    Json
+  // Stamped on accept for a template-kind proposal (the AgentTemplate created).
+  createdTemplateId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Org deletion cascades pending proposals — a proposal outlives no org.
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@map("template_proposals")
 }
 
 enum Plan {
