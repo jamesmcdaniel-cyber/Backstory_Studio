@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Check, RefreshCw, ShieldCheck, X } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowUpRight, Check, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,6 +13,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { humanizeToolName } from '@/lib/flows/humanize-tool-name'
 import { cn } from '@/lib/utils'
 
+// Where the approval came from, resolved server-side from its executionId
+// (which ambiguously holds an AgentExecution id or a FlowRun id).
+type ApprovalSource = { kind: 'flow'; flowId: string } | { kind: 'agent'; agentId: string | null } | null
+
 type ApprovalRow = {
   id: string
   tool: string
@@ -19,13 +24,16 @@ type ApprovalRow = {
   status: string
   createdAt: string
   executionId: string
+  source: ApprovalSource
 }
 
 type Filter = 'pending' | 'decided'
 
-// The list endpoint takes exactly one `status` per request, so "Decided" is a
-// small fan-out over every settled status, merged newest-first.
+// The list endpoint accepts a comma-separated status set, so "Decided" is one
+// fetch over every settled status, returned newest-first and pageable.
 const DECIDED_STATUSES = ['approved', 'rejected', 'superseded', 'failed'] as const
+
+const PAGE_SIZE = 50
 
 // Plain-English labels for stored decision statuses — raw values never render.
 const STATUS_LABEL: Record<string, string> = {
@@ -76,6 +84,18 @@ function providerLabel(provider: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
+/**
+ * Deep link to the run that raised this approval. Flow runs live on the
+ * flow's activity page; agent runs are inspected via the dashboard's run
+ * pane (`?run=`), the same deep link the notification bell uses — there is
+ * no per-agent activity page. Null when the source row no longer exists.
+ */
+function activityHref(row: ApprovalRow): string | null {
+  if (row.source?.kind === 'flow') return `/flows/${row.source.flowId}/activity`
+  if (row.source?.kind === 'agent') return `/dashboard?run=${row.executionId}`
+  return null
+}
+
 export default function ApprovalsPage() {
   const [filter, setFilter] = useState<Filter>('pending')
   const [rows, setRows] = useState<ApprovalRow[]>([])
@@ -83,25 +103,20 @@ export default function ApprovalsPage() {
   const [decidingId, setDecidingId] = useState<string | null>(null)
   const [decidingAction, setDecidingAction] = useState<'approve' | 'reject' | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  const statusParam = filter === 'pending' ? 'pending' : DECIDED_STATUSES.join(',')
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
-      const statuses = filter === 'pending' ? ['pending'] : [...DECIDED_STATUSES]
-      const lists = await Promise.all(
-        statuses.map((status) =>
-          fetch(`/api/approvals?status=${status}`, { cache: 'no-store' })
-            .then((response) => response.json())
-            .then((data) => (data?.success ? (data.approvals as ApprovalRow[]) : []))
-            .catch(() => [] as ApprovalRow[]),
-        ),
-      )
+      const page = await fetch(`/api/approvals?status=${statusParam}&skip=0&take=${PAGE_SIZE}`, { cache: 'no-store' })
+        .then((response) => response.json())
+        .catch(() => null)
       if (cancelled) return
-      setRows(
-        lists
-          .flat()
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-      )
+      setRows(page?.success ? (page.approvals as ApprovalRow[]) : [])
+      setHasMore(Boolean(page?.success && page.hasMore))
       setLoading(false)
     }
     setLoading(true)
@@ -109,7 +124,31 @@ export default function ApprovalsPage() {
     return () => {
       cancelled = true
     }
-  }, [filter, refreshKey])
+  }, [statusParam, refreshKey])
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    try {
+      // Offset pagination: rows already shown = the offset. New arrivals can
+      // shift the window, so appends are deduped by id.
+      const page = await fetch(`/api/approvals?status=${statusParam}&skip=${rows.length}&take=${PAGE_SIZE}`, { cache: 'no-store' })
+        .then((response) => response.json())
+        .catch(() => null)
+      if (!page?.success) {
+        toast.error('Could not load more approvals — try again.')
+        return
+      }
+      const incoming = page.approvals as ApprovalRow[]
+      setRows((previous) => {
+        const seen = new Set(previous.map((row) => row.id))
+        return [...previous, ...incoming.filter((row) => !seen.has(row.id))]
+      })
+      setHasMore(Boolean(page.hasMore))
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [loadingMore, statusParam, rows.length])
 
   const decide = useCallback(
     async (row: ApprovalRow, approve: boolean) => {
@@ -197,12 +236,16 @@ export default function ApprovalsPage() {
               <TableHead>Action</TableHead>
               <TableHead>Requested</TableHead>
               <TableHead className="text-right">{filter === 'pending' ? 'Decision' : 'Outcome'}</TableHead>
+              <TableHead className="w-0">
+                <span className="sr-only">Activity</span>
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.map((row) => {
               const provider = providerFromSummary(row.summary)
               const deciding = decidingId === row.id
+              const href = activityHref(row)
               return (
                 <TableRow key={row.id}>
                   <TableCell>
@@ -241,11 +284,30 @@ export default function ApprovalsPage() {
                       </Badge>
                     )}
                   </TableCell>
+                  <TableCell className="whitespace-nowrap text-right">
+                    {href && (
+                      <Link
+                        href={href}
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        View activity
+                        <ArrowUpRight className="h-3 w-3" />
+                      </Link>
+                    )}
+                  </TableCell>
                 </TableRow>
               )
             })}
           </TableBody>
         </Table>
+      )}
+
+      {!loading && rows.length > 0 && hasMore && (
+        <div className="flex justify-center">
+          <Button variant="outline" size="sm" onClick={loadMore} loading={loadingMore}>
+            Load more
+          </Button>
+        </div>
       )}
     </div>
   )
