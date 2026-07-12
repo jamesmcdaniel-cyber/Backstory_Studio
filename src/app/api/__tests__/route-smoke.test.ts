@@ -60,6 +60,7 @@ if (TEST_DB) {
     { name: 'GET /api/mcp-connections/oauth/start', run: async () => (await import('../mcp-connections/oauth/start/route')).GET(req('/api/mcp-connections/oauth/start')) },
     { name: 'GET /api/mcp/connections', run: async () => (await import('../mcp/connections/route')).GET(req('/api/mcp/connections')) },
     { name: 'GET /api/mcp/strata-catalog', run: async () => (await import('../mcp/strata-catalog/route')).GET(req('/api/mcp/strata-catalog')) },
+    { name: 'GET /api/organizations/members', run: async () => (await import('../organizations/members/route')).GET(req('/api/organizations/members')) },
     // nango/integrations, nango/status: skipped — no NANGO_SECRET_KEY in the
     // test env, so both deliberately throw a 503 ApiError (NANGO_UNAVAILABLE)
     // before any network call. Correct behavior, but 503 >= 500 trips this
