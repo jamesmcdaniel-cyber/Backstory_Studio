@@ -276,10 +276,18 @@ const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
   humanReview: 'hr.message',
 }
 
+/** Workspace member as returned by GET /api/organizations/members. */
+export type OrgMember = { id: string; name: string | null; email: string | null }
+
+export function orgMemberLabel(member: OrgMember): string {
+  return member.name?.trim() || member.email?.trim() || 'Member'
+}
+
 export function StepDrawer({
   node,
   flowId,
   agents,
+  members,
   toolCatalog,
   dataFields,
   labelCtx,
@@ -295,6 +303,7 @@ export function StepDrawer({
   node: FlowNode
   flowId: string
   agents: { id: string; title: string }[]
+  members?: OrgMember[]
   toolCatalog: ToolCatalog
   dataFields: DataField[]
   labelCtx: TokenLabelContext
@@ -920,12 +929,27 @@ export function StepDrawer({
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
             </div>
-            {/* No org-member roster is fetched anywhere in the builder today, so
-                an assignee select would need a new members API + fetch. v1 keeps
-                the engine default (assigneeUserId unset = run owner is asked). */}
             <div>
-              <label className={labelClass}>Assigned to</label>
-              <p className="rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">The flow owner is asked by default. The run pauses here until they reply, and the reply becomes this step&apos;s output.</p>
+              <label className={labelClass}>Assign to (optional)</label>
+              {/* Empty value = engine default (the run owner is asked). A stored
+                  assignee missing from the roster (departed member) stays selected
+                  as "Former member" so opening the editor never rewrites data. */}
+              <select
+                className={fieldClass}
+                value={node.data.assigneeUserId ?? ''}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, assigneeUserId: e.target.value || undefined } })}
+              >
+                <option value="">Flow owner (default)</option>
+                {(members ?? []).map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {orgMemberLabel(member)}
+                  </option>
+                ))}
+                {node.data.assigneeUserId && !(members ?? []).some((member) => member.id === node.data.assigneeUserId) && (
+                  <option value={node.data.assigneeUserId}>Former member</option>
+                )}
+              </select>
+              <p className="mt-1.5 text-xs text-muted-foreground">They&apos;ll be notified when the flow pauses here.</p>
             </div>
           </div>
         )}

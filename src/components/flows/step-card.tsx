@@ -45,7 +45,7 @@ import { DATA_OP_HELPER, DATA_OP_INPUT_PLACEHOLDER, VARIABLE_VALUE_PLACEHOLDER, 
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
-import type { ToolCatalog } from './step-drawer'
+import { orgMemberLabel, type OrgMember, type ToolCatalog } from './step-drawer'
 import { AdvancedParamsSection } from './advanced-params'
 import { DataTree } from './data-tree'
 import { TokenTextEditor, type TokenTextEditorHandle } from './token-text-editor'
@@ -275,6 +275,7 @@ export function StepCard({
   selected,
   highlighted,
   agents,
+  members,
   toolCatalog,
   dataFields,
   labelCtx,
@@ -297,6 +298,7 @@ export function StepCard({
   selected?: boolean
   highlighted?: boolean
   agents: Agent[]
+  members?: OrgMember[]
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
@@ -637,7 +639,7 @@ export function StepCard({
             className="overflow-hidden"
           >
             <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-              {renderNodeBody({ node, agents, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors, variableNames })}
+              {renderNodeBody({ node, agents, members, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors, variableNames })}
             </div>
           </motion.div>
         ) : (
@@ -713,6 +715,7 @@ export function StepCard({
 function renderNodeBody({
   node,
   agents,
+  members,
   toolCatalog,
   update,
   onRefreshAgents,
@@ -722,6 +725,7 @@ function renderNodeBody({
 }: {
   node: FlowNode
   agents: Agent[]
+  members?: OrgMember[]
   toolCatalog: ToolCatalog
   update: (node: FlowNode) => void
   onRefreshAgents?: () => void
@@ -757,7 +761,7 @@ function renderNodeBody({
     case 'data':
       return <DataBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'humanReview':
-      return <HumanReviewBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
+      return <HumanReviewBody node={node} members={members} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
   }
 }
 
@@ -1784,16 +1788,18 @@ function DataBody({
 
 function HumanReviewBody({
   node,
+  members,
   update,
   tokenWiring,
   showErrors,
 }: {
   node: Extract<FlowNode, { type: 'humanReview' }>
+  members?: OrgMember[]
   update: (node: FlowNode) => void
   tokenWiring: TokenEditorWiring
   showErrors?: boolean
 }) {
-  const { labelCtx, registerEditor, focusEditor } = tokenWiring
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
   const messageInvalid = Boolean(showErrors && !node.data.message.trim())
   return (
     <div className="space-y-4">
@@ -1813,13 +1819,29 @@ function HumanReviewBody({
           ariaLabel="Message"
         />
       </div>
-      {/* No org-member roster is fetched anywhere in the builder today, so an
-          assignee select would need a new members API + fetch. v1 keeps the
-          engine default (data.assigneeUserId unset = the run owner is asked)
-          and says so in plain english. */}
       <div className="grid gap-2">
-        <label className={labelClass}>Assigned to</label>
-        <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">The flow owner is asked by default. The run pauses here until they reply, and the reply becomes this step&apos;s output.</p>
+        <label className={labelClass}>Assign to (optional)</label>
+        {/* Empty value = engine default (the run owner is asked). A stored
+            assignee missing from the roster (departed member) stays selected
+            as "Former member" so opening the editor never rewrites data. */}
+        <select
+          value={node.data.assigneeUserId ?? ''}
+          onChange={(event) => update({ ...node, data: { ...node.data, assigneeUserId: event.target.value || undefined } })}
+          onFocus={blockActive}
+          onBlur={unblockActive}
+          className={controlClass}
+        >
+          <option value="">Flow owner (default)</option>
+          {(members ?? []).map((member) => (
+            <option key={member.id} value={member.id}>
+              {orgMemberLabel(member)}
+            </option>
+          ))}
+          {node.data.assigneeUserId && !(members ?? []).some((member) => member.id === node.data.assigneeUserId) && (
+            <option value={node.data.assigneeUserId}>Former member</option>
+          )}
+        </select>
+        <p className="text-xs text-slate-500">They&apos;ll be notified when the flow pauses here.</p>
       </div>
     </div>
   )

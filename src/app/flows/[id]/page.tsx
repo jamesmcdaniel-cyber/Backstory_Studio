@@ -22,7 +22,7 @@ import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { storedRunInput, prefillTextFromRunInput } from '@/lib/flows/reuse-input'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
 import { CanvasRail } from '@/components/flows/canvas-rail'
-import { StepDrawer, type ToolCatalog } from '@/components/flows/step-drawer'
+import { StepDrawer, type OrgMember, type ToolCatalog } from '@/components/flows/step-drawer'
 import { CopilotPanel } from '@/components/flows/copilot-panel'
 import { RunPanel, type FlowRunDetail } from '@/components/flows/run-panel'
 import { CheckerPanel } from '@/components/flows/checker-panel'
@@ -173,6 +173,9 @@ function FlowBuilder() {
   const [published, setPublished] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [agents, setAgents] = useState<Agent[]>([])
+  // Workspace roster for the humanReview "Assign to" select — fetched once per
+  // builder session and passed down like agents/toolCatalog.
+  const [members, setMembers] = useState<OrgMember[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
@@ -245,6 +248,14 @@ function FlowBuilder() {
       .then((r) => r.json())
       .then((data) => {
         if (!cancelled && data.success) setToolCatalog(data.connections)
+      })
+      .catch(() => undefined)
+    // The workspace roster also loads separately — it only feeds the
+    // humanReview "Assign to" select.
+    fetch('/api/organizations/members', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data.success) setMembers(data.members)
       })
       .catch(() => undefined)
     return () => {
@@ -981,6 +992,7 @@ function FlowBuilder() {
               graph={canvasGraph}
               agentName={(agentId) => agentsById.get(agentId) ?? ''}
               agents={agents}
+              members={members}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
               labelCtx={labelCtx}
@@ -1069,6 +1081,7 @@ function FlowBuilder() {
               flowId={id}
               issues={issuesByNode[selectedNode.id]?.items}
               agents={agents}
+              members={members}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
               labelCtx={labelCtx}

@@ -10,7 +10,7 @@ import type { DataField } from '@/lib/flows/datatree'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { StepCard, type StepStatus } from './step-card'
 import { FlowPicker } from './flow-picker'
-import type { ToolCatalog } from './step-drawer'
+import type { OrgMember, ToolCatalog } from './step-drawer'
 
 type Agent = { id: string; title: string }
 
@@ -117,6 +117,7 @@ export function FlowCanvas({
   graph,
   agentName,
   agents,
+  members,
   toolCatalog,
   dataFields,
   labelCtx,
@@ -140,6 +141,7 @@ export function FlowCanvas({
   graph: FlowGraph
   agentName: (agentId: string) => string
   agents: Agent[]
+  members?: OrgMember[]
   toolCatalog: ToolCatalog
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
@@ -292,6 +294,7 @@ export function FlowCanvas({
         selected={selectedId === node.id}
         highlighted={highlightIds?.includes(node.id)}
         agents={agents}
+        members={members}
         toolCatalog={toolCatalog}
         dataFields={selectedId === node.id ? dataFields : undefined}
         labelCtx={labelCtx}
