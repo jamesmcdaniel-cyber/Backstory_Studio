@@ -41,7 +41,7 @@ const agentNode = z.object({
     label: z.string().optional(),
     note: z.string().optional(),
     input: z.string().optional(),
-    onError: z.enum(['stop', 'continue']).optional(),
+    onError: z.enum(['stop', 'continue', 'route']).optional(),
     // Per-step reliability: retry the agent up to `retries` times with backoff,
     // and abort a single attempt after `timeoutMs`.
     retries: z.number().int().min(0).max(5).optional(),
@@ -93,7 +93,7 @@ const toolNode = z.object({
     args: z.string().optional(),
     retries: z.number().int().min(0).max(5).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
-    onError: z.enum(['stop', 'continue']).optional(),
+    onError: z.enum(['stop', 'continue', 'route']).optional(),
     outputFields: z.array(outputFieldSchema).optional(),
   }),
 })
@@ -119,7 +119,7 @@ const httpNode = z.object({
     failOnHttpError: z.boolean().optional(),
     retries: z.number().int().min(0).max(5).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
-    onError: z.enum(['stop', 'continue']).optional(),
+    onError: z.enum(['stop', 'continue', 'route']).optional(),
     outputFields: z.array(outputFieldSchema).optional(),
   }),
 })

@@ -433,6 +433,71 @@ test('a failing tool step honors onError', async () => {
   assert.equal((await interpretFlow(graph('continue'), '', { runAgent, runAction })).output, 'OK')
 })
 
+test('onError:route sends a failed tool step down its labeled error edge (Error Shield)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'boom', args: '{"who":"{{trigger.input}}"}', onError: 'route' } },
+      { id: 'handle', type: 'agent', data: { agentId: 'log', input: 'failed: {{step.t1.output.error}} for {{step.t1.output.input.args.who}}' } },
+      { id: 'happy', type: 'agent', data: { agentId: 'happy', input: 'should not run' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 't1' },
+      { id: 'e1', source: 't1', target: 'happy' }, // normal (success) edge
+      { id: 'e2', source: 't1', target: 'handle', branch: 'error' }, // labeled error edge
+    ],
+  }
+  const runAction: RunActionFn = async () => ({ error: 'tool exploded' })
+  const seen: string[] = []
+  const runAgent: RunAgentFn = async (n) => { seen.push(n.agentId); return { output: n.input } }
+  const result = await interpretFlow(graph, 'Acme', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  // Only the error-branch handler ran; the success branch (`happy`) was skipped.
+  assert.deepEqual(seen, ['log'])
+  // The handler read the error message AND the passed-through resolved input.
+  assert.equal(result.output, 'failed: tool exploded for Acme')
+})
+
+test('onError:route without an error edge falls through to the normal edge (continue-like)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'boom', onError: 'route' } },
+      { id: 'next', type: 'agent', data: { agentId: 'next', input: 'saw {{step.t1.output.error}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 't1' },
+      { id: 'e1', source: 't1', target: 'next' }, // only a normal edge — no error path
+    ],
+  }
+  const runAction: RunActionFn = async () => ({ error: 'tool exploded' })
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, '', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  // No crash, no dead-end: the walk continues down the normal edge and the
+  // error object is still readable as the failed step's output.
+  assert.equal(result.output, 'saw tool exploded')
+})
+
+test('onError:route on an agent step routes its failure down the error edge', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'agent', data: { agentId: 'boom', input: 'work on {{trigger.input}}', onError: 'route' } },
+      { id: 'handle', type: 'agent', data: { agentId: 'log', input: 'recover {{step.a1.output.error}} :: {{step.a1.output.input}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a1' },
+      { id: 'e1', source: 'a1', target: 'handle', branch: 'error' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => (n.agentId === 'boom' ? { error: 'agent kaboom' } : { output: n.input })
+  const result = await interpretFlow(graph, 'X', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  // The error message and the resolved prompt string both passed through.
+  assert.equal(result.output, 'recover agent kaboom :: work on X')
+})
+
 test('transform builds an object from templated fields', async () => {
   const graph: FlowGraph = {
     nodes: [

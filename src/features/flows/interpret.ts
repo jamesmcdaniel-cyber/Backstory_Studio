@@ -70,6 +70,11 @@ type NodeResult =
   | { kind: 'pause'; nodeId: string; question?: string }
   // A filter that didn't pass: drops the current loop item, or ends the main chain.
   | { kind: 'drop' }
+  // A step with onError:'route' that FAILED — its output is the `{ error, input }`
+  // pass-through object, and the main-chain walk follows the node's labeled
+  // 'error' edge (Error Shield). Inside a container body (no branch edges) this
+  // is treated like 'continue': the body threads the error object and proceeds.
+  | { kind: 'route'; output: unknown }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -299,6 +304,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   }
   const outgoing = (id: string, branch?: string): FlowEdge | undefined =>
     graph.edges.find((edge) => edge.source === id && (branch === undefined || edge.branch === branch || edge.branch === undefined))
+  // The normal (success/default) edge out of a node — an 'error'-labeled edge is
+  // reserved for a route-on-error step that FAILED, so it must never be taken on
+  // the success path (regardless of edge order). For every node without an error
+  // edge this is identical to `outgoing(id)` (the first edge from the source).
+  const normalOutgoing = (id: string): FlowEdge | undefined =>
+    graph.edges.find((edge) => edge.source === id && edge.branch !== 'error')
 
   const steps: StepOutcome[] = []
   const emitOutcome = (outcome: StepOutcome) => {
@@ -358,6 +369,23 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     // node id but tags each outcome with `iterationKey` for the persistence layer.
     const stepKey = node.id + indexKey
     const emit = (outcome: StepOutcome) => emitOutcome({ ...outcome, iterationKey: stepKey })
+
+    // Shared failure disposition for a step that carries an `onError` policy
+    // (agent/tool/http). 'stop' → fail the run; 'continue' → swallow the error
+    // and proceed with no output; 'route' → the output becomes a pass-through
+    // `{ error, input }` object and the main walk follows the labeled 'error'
+    // edge (or, with none, continues down the normal edge — the walk decides).
+    // `resolvedInput` is the step's already-resolved input, surfaced so a
+    // downstream handler can read `{{step.<id>.output.input}}`.
+    const onFailure = (mode: 'stop' | 'continue' | 'route', error: string, resolvedInput: unknown): NodeResult => {
+      if (mode === 'route') {
+        const output = { error, input: resolvedInput }
+        ctx.step[node.id] = { output }
+        return { kind: 'route', output }
+      }
+      if (mode === 'continue') return { kind: 'ok', output: undefined }
+      return { kind: 'fail', error }
+    }
 
     if (node.type === 'trigger') return { kind: 'skip' }
 
@@ -544,9 +572,9 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         return { kind: 'pause', nodeId: stepKey, question: res.waiting.question }
       }
       if (res.error) {
-        emit({ nodeId: node.id, status: 'failed', error: res.error })
-        if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
-        return { kind: 'fail', error: res.error }
+        const mode = node.data.onError ?? 'stop'
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: config } } : {}) })
+        return onFailure(mode, res.error, config)
       }
       const output = asStructured(res.output)
       ctx.step[node.id] = { output }
@@ -563,25 +591,25 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       if (res.waiting) {
         if (node.data.humanAssistance === false) {
           const error = 'The agent asked for help, but human assistance is turned off for this step.'
-          emit({ nodeId: node.id, status: 'failed', error })
-          if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
-          return { kind: 'fail', error }
+          const mode = node.data.onError ?? 'stop'
+          emit({ nodeId: node.id, status: 'failed', error, ...(mode === 'route' ? { output: { error, input: resolved } } : {}) })
+          return onFailure(mode, error, resolved)
         }
         emit({ nodeId: node.id, status: 'waiting' })
         return { kind: 'pause', nodeId: stepKey, question: res.waiting.question }
       }
       if (res.error) {
-        emit({ nodeId: node.id, status: 'failed', error: res.error })
-        if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
-        return { kind: 'fail', error: res.error }
+        const mode = node.data.onError ?? 'stop'
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: resolved } } : {}) })
+        return onFailure(mode, res.error, resolved)
       }
       let output: unknown
       if (structured) {
         const parsed = parseStructuredAgentOutput(res.output, outputFields)
         if (parsed.error) {
-          emit({ nodeId: node.id, status: 'failed', error: parsed.error })
-          if ((node.data.onError ?? 'stop') === 'continue') return { kind: 'ok', output: undefined }
-          return { kind: 'fail', error: parsed.error }
+          const mode = node.data.onError ?? 'stop'
+          emit({ nodeId: node.id, status: 'failed', error: parsed.error, ...(mode === 'route' ? { output: { error: parsed.error, input: resolved } } : {}) })
+          return onFailure(mode, parsed.error, resolved)
         }
         output = parsed.output
       } else {
@@ -649,7 +677,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const node = byId.get(id)
       if (!node) continue
       const res = await execNode(node, ctx, indexKey)
-      if (res.kind === 'ok') {
+      // A container body is a flat list with no branch edges, so a route-on-error
+      // failure can't follow an 'error' edge here — it behaves like 'continue',
+      // threading the `{ error, input }` object to the next step in the body.
+      if (res.kind === 'ok' || res.kind === 'route') {
         if (res.output !== undefined) {
           ctx.step[id] = { output: res.output }
           last = res.output
@@ -732,12 +763,22 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (res.kind === 'pause') return done({ status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } })
     // A stop node or a main-chain filter that didn't pass ends the flow cleanly.
     if (res.kind === 'stop' || res.kind === 'drop') return done({ status: 'succeeded', steps, output: lastOutput })
-    if (res.kind === 'ok' && res.output !== undefined) lastOutput = res.output
+    // A route-on-error failure and a successful step both surface their output as
+    // the chained value; the difference is only which edge the walk follows next.
+    if (res.kind === 'route' || (res.kind === 'ok' && res.output !== undefined)) lastOutput = res.output
 
-    const edge = outgoing(current.id)
+    // Error Shield routing: a step that FAILED with onError:'route' follows its
+    // labeled 'error' edge when one exists; with none it falls through to the
+    // normal edge (continue-like) — never a dead-end. Every other case (and a
+    // route step that SUCCEEDED) follows the normal, non-error edge. The visit
+    // budget (`overBudget` in execNode) bounds this exactly like any other walk,
+    // so an error edge that loops back can't spin forever.
+    const currentId = current.id
+    const errorEdge = res.kind === 'route' ? graph.edges.find((edge) => edge.source === currentId && edge.branch === 'error') : undefined
+    const edge = errorEdge ?? normalOutgoing(currentId)
     let next = edge ? byId.get(edge.target) : undefined
     while (next && contained.has(next.id)) {
-      const skip = outgoing(next.id)
+      const skip = normalOutgoing(next.id)
       next = skip ? byId.get(skip.target) : undefined
     }
     current = next

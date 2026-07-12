@@ -398,6 +398,15 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
       }
     }
 
+    // Error Shield: a step set to route failures needs a labeled 'error' edge to
+    // route them down. Without one the failure just continues on the normal path
+    // (never a crash) — a nudge, not a blocker.
+    if ((node.type === 'agent' || node.type === 'tool' || node.type === 'http') && node.data.onError === 'route') {
+      if (!graph.edges.some((edge) => edge.source === node.id && edge.branch === 'error')) {
+        add(issues, 'warning', 'ROUTE_NO_ERROR_PATH', `${nodeLabel(node)} routes on error but has no error path — failures continue on the normal path.`, node.id)
+      }
+    }
+
     if (node.type === 'loop') {
       if (!node.data.over.trim()) add(issues, 'error', 'MISSING_LOOP_SOURCE', `${nodeLabel(node)} needs a list to process.`, node.id)
       if (node.data.body.length === 0) add(issues, 'error', 'EMPTY_LOOP_BODY', `${nodeLabel(node)} needs at least one nested step.`, node.id)

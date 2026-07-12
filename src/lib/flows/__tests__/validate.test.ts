@@ -148,6 +148,26 @@ test('validateFlowGraph warns about a join with no incoming branch, not a wired 
   assert.match(result.warnings.find((issue) => issue.code === 'JOIN_NO_INCOMING')?.message ?? '', /Merge isn't reached by any branch\./)
 })
 
+test('validateFlowGraph warns when a route-on-error step has no error path', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'nopath', type: 'tool', data: { connectionId: 'c1', toolName: 't', label: 'Send', onError: 'route' } },
+      { id: 'wired', type: 'tool', data: { connectionId: 'c1', toolName: 't', onError: 'route' } },
+      { id: 'handler', type: 'agent', data: { agentId: 'agent-1', input: 'x' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'nopath' },
+      { id: 'e1', source: 'nopath', target: 'wired' },
+      { id: 'e2', source: 'wired', target: 'handler', branch: 'error' }, // has an error path
+    ],
+  }
+  const result = validateFlowGraph(graph, { agents: [{ id: 'agent-1', title: 'Agent' }] })
+  assert.ok(result.warnings.some((issue) => issue.code === 'ROUTE_NO_ERROR_PATH' && issue.nodeId === 'nopath'))
+  assert.equal(result.warnings.some((issue) => issue.code === 'ROUTE_NO_ERROR_PATH' && issue.nodeId === 'wired'), false)
+  assert.match(result.warnings.find((issue) => issue.code === 'ROUTE_NO_ERROR_PATH')?.message ?? '', /Send routes on error but has no error path — failures continue on the normal path\./)
+})
+
 test('validateFlowGraph checks loop bodies and switch defaults', () => {
   const graph: FlowGraph = {
     nodes: [
