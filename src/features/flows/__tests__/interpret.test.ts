@@ -1412,3 +1412,87 @@ test('{{now}} and {{run.id}} are available inside a loop body', async () => {
   const result = await interpretFlow(graph, ['A', 'B'], { runAgent, now: NOW, run: RUN })
   assert.deepEqual(result.output, [`A@${NOW.iso}#run_42`, `B@${NOW.iso}#run_42`])
 })
+
+// ── Output node: named flow outputs ──────────────────────────────────────────
+
+test('output node records named values from templated values, preserving structure', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'score', input: 'x' } },
+      {
+        id: 'out',
+        type: 'output',
+        data: {
+          outputs: [
+            { name: 'greeting', value: 'Hi {{trigger.input}}', type: 'text' },
+            { name: 'score', value: '{{step.n1.output.score}}', type: 'any' },
+          ],
+        },
+      },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'out' },
+    ],
+  }
+  const result = await interpretFlow(graph, 'Acme', { runAgent: stub({ score: '{"score":91}' }) })
+  assert.equal(result.status, 'succeeded')
+  // Both names present; the exact-token value keeps its number type, the mixed
+  // template resolves to a string.
+  assert.deepEqual(result.namedOutputs, { greeting: 'Hi Acme', score: 91 })
+})
+
+test('a step after an output node still runs (output is a passthrough, not a terminator)', async () => {
+  const seen: string[] = []
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [{ name: 'greeting', value: 'hello', type: 'text' }] } },
+      { id: 'after', type: 'agent', data: { agentId: 'after', input: 'ran-after' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'out' },
+      { id: 'e1', source: 'out', target: 'after' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (n) => {
+    seen.push(n.agentId)
+    return { output: n.input }
+  }
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(seen, ['after']) // the downstream step ran after the output node
+  assert.deepEqual(result.namedOutputs, { greeting: 'hello' })
+})
+
+test('later output nodes merge and override earlier named outputs', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'o1', type: 'output', data: { outputs: [{ name: 'a', value: '1' }, { name: 'b', value: '2' }] } },
+      { id: 'o2', type: 'output', data: { outputs: [{ name: 'b', value: '99' }, { name: 'c', value: '3' }] } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'o1' },
+      { id: 'e1', source: 'o1', target: 'o2' },
+    ],
+  }
+  const result = await interpretFlow(graph, '', { runAgent: stub({}) })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(result.namedOutputs, { a: '1', b: '99', c: '3' })
+})
+
+test('no output node leaves namedOutputs undefined and keeps the last-step output (regression)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'n1' }],
+  }
+  const result = await interpretFlow(graph, 'hello', { runAgent: stub({ a1: 'DONE' }) })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'DONE') // last-step output is untouched
+  assert.equal(result.namedOutputs, undefined) // no named outputs when no output node ran
+})

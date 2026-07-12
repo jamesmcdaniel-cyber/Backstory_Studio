@@ -257,8 +257,26 @@ const humanReviewNode = z.object({
   }),
 })
 
+// Named flow outputs (Gumloop parity): a flow declares NAMED outputs that
+// callers (webhook response, flow.completed signal, subflow) receive by name,
+// instead of the implicit last-step output. Each `value` is templated; `type`
+// is a downstream typing hint. A passthrough node — the walk continues.
+const outputNode = z.object({
+  id: z.string(),
+  type: z.literal('output'),
+  data: z.object({
+    label: z.string().optional(),
+    note: z.string().optional(),
+    outputs: z.array(z.object({
+      name: z.string(),
+      value: z.string(),
+      type: z.enum(['text', 'list', 'any']).optional(),
+    })).default([]),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

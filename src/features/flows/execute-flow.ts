@@ -573,12 +573,18 @@ export async function runFlowExecution(
   })
   await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'
+  // Output node parity: when a flow declared named outputs, callers receive the
+  // named object; otherwise the implicit last-step output stands (back-compat —
+  // a flow with no output node behaves EXACTLY as before). This effective output
+  // is what persists on the run, chains via flow.completed, and returns to the
+  // webhook caller.
+  const effectiveOutput = result.namedOutputs !== undefined ? result.namedOutputs : result.output
   // A failed run persists WHY it failed (e.g. the step-timeout message) — the
   // runs API surfaces FlowRun.error, so it must never stay null on failure.
   const runError = status === 'failed' ? (result.error ?? 'The flow failed.').slice(0, 300) : null
   await prisma.flowRun.update({
     where: { id: run.id, organizationId: job.organizationId },
-    data: { status, output: jsonValue(result.output), error: runError, finishedAt: status === 'waiting' ? null : new Date() },
+    data: { status, output: jsonValue(effectiveOutput), error: runError, finishedAt: status === 'waiting' ? null : new Date() },
   })
   // A humanReview ("Request information") pause has no adapter: its waiting
   // FlowRunStep row was persisted by the interpreter's onStep path (the
@@ -637,7 +643,7 @@ export async function runFlowExecution(
         signals.emitFlowSignal({
           organizationId: job.organizationId,
           signal: 'flow.completed',
-          payload: { flowId: flow.id, flowName: flow.name, output: result.output },
+          payload: { flowId: flow.id, flowName: flow.name, output: effectiveOutput },
           sourceFlowId: flow.id,
           depth: signals.signalDepthOf(job.trigger) + 1,
         }),
@@ -645,7 +651,7 @@ export async function runFlowExecution(
       .catch(() => undefined)
   }
 
-  return { flowRunId: run.id, status, output: result.output }
+  return { flowRunId: run.id, status, output: effectiveOutput }
 }
 
 /**

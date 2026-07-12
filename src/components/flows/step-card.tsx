@@ -17,6 +17,7 @@ import {
   GitBranch,
   Globe,
   Hash,
+  FileOutput,
   Mail,
   MoreHorizontal,
   PanelRight,
@@ -81,6 +82,8 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   variable: Variable,
   data: Braces,
   humanReview: UserCheck,
+  // NEUTRAL placeholder for Task 6 (builder UX) — icon/tone finalized with the editor.
+  output: FileOutput,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -98,6 +101,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   variable: 'bg-purple-600 text-white',
   data: 'bg-violet-600 text-white',
   humanReview: 'bg-blue-600 text-white',
+  output: 'bg-teal-600 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {

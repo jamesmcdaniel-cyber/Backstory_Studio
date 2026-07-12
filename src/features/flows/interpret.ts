@@ -31,6 +31,10 @@ export type InterpretResult = {
   // Why a failed run failed — the failing node's error (e.g. the timeout
   // message) so callers can persist it on the run record.
   error?: string
+  // Named flow outputs collected from every `output` node that ran (later names
+  // merge/override earlier). Undefined when no output node ran — callers then
+  // fall back to `output` (the last-step value) for full back-compat.
+  namedOutputs?: Record<string, unknown>
 }
 
 type Opts = {
@@ -301,6 +305,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     steps.push(outcome)
     opts.onStep?.(outcome)
   }
+  // Run-level named-output collector: populated the moment any `output` node
+  // runs (main chain or container body). Stays undefined otherwise so callers
+  // keep the last-step-output back-compat behavior.
+  let namedOutputs: Record<string, unknown> | undefined
   let visits = 0
   const overBudget = () => ++visits > maxSteps
 
@@ -391,6 +399,22 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const question = resolveTemplate(node.data.message, ctx)
       emit({ nodeId: node.id, status: 'waiting', output: { waiting: { kind: 'input', question } } })
       return { kind: 'pause', nodeId: stepKey, question }
+    }
+
+    if (node.type === 'output') {
+      // Named flow outputs: resolve each output's templated value and record a
+      // named map into the run-level collector (later names override earlier).
+      // A passthrough — the output IS the resolved map and the walk continues.
+      const map: Record<string, unknown> = {}
+      for (const entry of node.data.outputs) {
+        const name = entry.name.trim()
+        if (!name) continue // validate.ts blocks empty names; skip defensively at runtime
+        map[name] = resolveTemplateValue(entry.value ?? '', ctx)
+      }
+      namedOutputs = { ...(namedOutputs ?? {}), ...map }
+      ctx.step[node.id] = { output: map }
+      emit({ nodeId: node.id, status: 'succeeded', output: map })
+      return { kind: 'ok', output: map }
     }
 
     if (node.type === 'transform') {
@@ -648,9 +672,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   let lastOutput: unknown = input
   let current: FlowNode | undefined = byId.get('trigger') ?? graph.nodes[0]
 
+  // Attach the run-level named outputs (present only when ≥1 output node ran) to
+  // every result. Undefined when no output node ran, preserving back-compat.
+  const done = (result: InterpretResult): InterpretResult =>
+    namedOutputs !== undefined ? { ...result, namedOutputs } : result
+
   while (current) {
     if (current.type === 'condition') {
-      if (overBudget()) return { status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' }
+      if (overBudget()) return done({ status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' })
       const branch = evalCondition(current.data, ctx) ? 'true' : 'false'
       const edge = outgoing(current.id, branch)
       current = edge ? byId.get(edge.target) : undefined
@@ -658,7 +687,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     if (current.type === 'switch') {
-      if (overBudget()) return { status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' }
+      if (overBudget()) return done({ status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' })
       // First matching case wins; otherwise follow the 'default' edge.
       const hit = current.data.cases.find((c) => evalClause({ left: c.left, op: c.op, right: c.right }, ctx))
       emitOutcome({ nodeId: current.id, status: 'succeeded', output: hit?.id ?? 'default' })
@@ -668,10 +697,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
 
     const res = await execNode(current, ctx)
-    if (res.kind === 'fail') return { status: 'failed', steps, output: lastOutput, error: res.error }
-    if (res.kind === 'pause') return { status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } }
+    if (res.kind === 'fail') return done({ status: 'failed', steps, output: lastOutput, error: res.error })
+    if (res.kind === 'pause') return done({ status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } })
     // A stop node or a main-chain filter that didn't pass ends the flow cleanly.
-    if (res.kind === 'stop' || res.kind === 'drop') return { status: 'succeeded', steps, output: lastOutput }
+    if (res.kind === 'stop' || res.kind === 'drop') return done({ status: 'succeeded', steps, output: lastOutput })
     if (res.kind === 'ok' && res.output !== undefined) lastOutput = res.output
 
     const edge = outgoing(current.id)
@@ -683,5 +712,5 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     current = next
   }
 
-  return { status: 'succeeded', steps, output: lastOutput }
+  return done({ status: 'succeeded', steps, output: lastOutput })
 }

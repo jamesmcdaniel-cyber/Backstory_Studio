@@ -521,3 +521,44 @@ test('a switch on the main chain is NOT flagged', () => {
   const { issues } = validateFlowGraph(graph)
   assert.equal(issues.find((i) => i.code === 'CONTAINER_BRANCHING_UNSUPPORTED'), undefined)
 })
+
+test('output node with a valid named output passes', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [{ name: 'summary', value: '{{trigger.input}}', type: 'text' }] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'out' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.errors, [])
+})
+
+test('output node with an empty output name is an error', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [{ name: '', value: 'x' }] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'out' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  const issue = result.errors.find((i) => i.code === 'MISSING_OUTPUT_NAME')
+  assert.ok(issue, 'expected MISSING_OUTPUT_NAME')
+  assert.match(issue!.message, /needs a name for each output/)
+})
+
+test('output node with duplicate output names is an error', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'out', type: 'output', data: { outputs: [{ name: 'dupe', value: '1' }, { name: 'dupe', value: '2' }] } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'out' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  assert.ok(result.errors.some((i) => i.code === 'DUPLICATE_OUTPUT_NAME' && i.message.includes('dupe')))
+})

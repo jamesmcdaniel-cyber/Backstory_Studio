@@ -69,6 +69,8 @@ function nodeLabel(node: FlowNode | undefined) {
       break
     case 'humanReview':
       return 'Request information'
+    case 'output':
+      return 'Output'
     case 'variable':
       switch (node.data.op) {
         case 'initialize':
@@ -452,6 +454,18 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
     if (node.type === 'humanReview') {
       if (!node.data.message.trim()) {
         add(issues, 'error', 'MISSING_REVIEW_MESSAGE', `${nodeLabel(node)} needs a message for the reviewer.`, node.id)
+      }
+    }
+
+    if (node.type === 'output') {
+      const names = node.data.outputs.map((entry) => entry.name.trim()).filter(Boolean)
+      node.data.outputs.forEach((entry) => {
+        if (!entry.name.trim()) add(issues, 'error', 'MISSING_OUTPUT_NAME', `${nodeLabel(node)} needs a name for each output.`, node.id)
+      })
+      for (const name of unique(names)) {
+        if (names.filter((entry) => entry === name).length > 1) {
+          add(issues, 'error', 'DUPLICATE_OUTPUT_NAME', `${nodeLabel(node)} has duplicate output "${name}".`, node.id)
+        }
       }
     }
 

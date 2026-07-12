@@ -222,6 +222,10 @@ export function FlowCanvas({
         return node.data.label || DATA_OP_LABELS[node.data.op]
       case 'humanReview':
         return node.data.label || 'Request information'
+      // NEUTRAL placeholder for Task 6 (builder UX) — real titleFor/subtitleFor
+      // (first output name) lands with the output editor.
+      case 'output':
+        return node.data.label || 'Output'
     }
   }
 
