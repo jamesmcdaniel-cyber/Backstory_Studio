@@ -34,6 +34,7 @@ import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
 import { retrieveContext, renderContext, type RetrievedContext } from '@/lib/rag/retrieve'
 import { getGraphRagStore } from '@/lib/rag/get-store'
 import { readAgentMetadata } from '@/lib/agents/metadata'
+import { enhanceAutomationInstructions } from '@/lib/templates/automation-assets'
 
 /** The three proposal kinds. Template kinds promote to an AgentTemplate on accept. */
 export const PROPOSAL_KINDS = ['agent_template', 'flow_template', 'process_improvement'] as const
@@ -43,7 +44,7 @@ const TEMPLATE_KINDS: ReadonlySet<string> = new Set(['agent_template', 'flow_tem
 /** Never write more than this many proposals per run — bounds review-queue spam. */
 export const MAX_PROPOSALS = 8
 /** Bounded output for the single structured call (cost cap). */
-export const PROPOSAL_MAX_TOKENS = 4000
+export const PROPOSAL_MAX_TOKENS = 8000
 /**
  * The gate is an ORG-level count. `countConnectedIntegrations` →
  * `listConnectedProviders(orgId, userId)` IGNORES its userId arg (parity only —
@@ -89,7 +90,7 @@ export const PROPOSAL_SCHEMA = {
           category: { type: 'string', description: 'Domain category, e.g. "Sales", "Reporting", "Ops". Empty string if unsure.' },
           instructions: {
             type: 'string',
-            description: 'For a template kind: full second-person operating instructions. Empty string for process_improvement.',
+            description: 'For a template kind: detailed second-person operating instructions covering objective, inputs, exact tool sequence, decision logic, edge cases, data-quality rules, outputs, delivery, and success criteria. Empty string for process_improvement.',
           },
           integrations: {
             type: 'array',
@@ -101,7 +102,7 @@ export const PROPOSAL_SCHEMA = {
             enum: ['manual', 'hourly', 'daily', 'weekly', 'cron', ''],
             description: 'Cadence when the template should run; empty string if not applicable.',
           },
-          exampleOutput: { type: 'string', description: 'A short concrete example of what a run would produce. Empty string if not applicable.' },
+          exampleOutput: { type: 'string', description: 'A concrete, realistic example showing the structure and depth of the primary output, including key sections and representative fields. Empty string if not applicable.' },
           rationale: { type: 'string', description: 'Why this proposal fits THIS workspace, referencing the observed usage.' },
           targetType: {
             type: 'string',
@@ -305,7 +306,7 @@ export function normalizeProposal(raw: RawProposal, ctx: NormalizeContext): Prop
   const configuration: Record<string, unknown> = {
     name: title,
     category: typeof raw.category === 'string' ? raw.category : '',
-    instructions: typeof raw.instructions === 'string' ? raw.instructions : '',
+    instructions: enhanceAutomationInstructions(typeof raw.instructions === 'string' ? raw.instructions : ''),
     integrations,
     exampleOutput: typeof raw.exampleOutput === 'string' ? raw.exampleOutput : '',
     model: DEFAULT_AGENT_MODEL,
@@ -414,7 +415,9 @@ export function buildGenerationUser(
 const GENERATION_SYSTEM = [
   'You propose REVIEWABLE automation templates for a team workspace, grounded strictly in its observed integration usage.',
   'Return between 0 and 8 proposals. Fewer, well-justified proposals are better than many speculative ones. Never invent usage that is not in the evidence.',
-  'Two families: (1) NEW templates — kind agent_template (a single autonomous agent) or flow_template (a multi-step workflow) that automates a recurring, cross-integration pattern you see; include full second-person instructions, only the integrations the task needs, an example output, and a cadence when the pattern is periodic. (2) process_improvement — an upgrade to an EXISTING flow or agent from the provided list; set targetType and the exact targetId, leave instructions empty, and put the improvement in configJson as a JSON object string like {"notes":"...","diff":"..."}.',
+  'Two families: (1) NEW templates — kind agent_template (a single autonomous agent) or flow_template (a multi-step workflow) that automates a recurring, cross-integration pattern you see. Write implementation-grade second-person instructions with: objective and success criteria; required inputs and defaults; exact ordered tool/step plan; joins and field mappings; decision rules and thresholds; pagination/batching; retries, idempotency, deduplication, and partial-failure handling; approval gates for writes; data-quality and no-fabrication rules; output sections; delivery behavior; monitoring; and concrete test cases. Include only the integrations the task needs, a detailed example output, and a cadence when periodic. (2) process_improvement — an upgrade to an EXISTING flow or agent from the provided list; set targetType and the exact targetId, leave instructions empty, and put a specific implementation plan in configJson as a JSON object string with notes, diff, acceptanceCriteria, risks, and testPlan.',
+  'For flow_template, describe a deterministic graph with stable step names, dependencies, branch conditions, inputs, outputs, and failure paths. For agent_template, define tool-selection boundaries and when to ask for clarification. Never use vague instructions such as “analyze the data” without naming the analysis and required output.',
+  'The server appends a standard asset contract for polished HTML, canonical workflow JSON, cross-platform mappings, and an operations README. Focus your instructions on the automation’s domain-specific logic and make them detailed enough for that contract to produce a deployable package.',
   'Do NOT duplicate an existing template title or its intent. Prefer proposals that combine providers you see used together.',
   'For sourceEvidenceJson, return a JSON object string naming the specific signals (providers, co-occurrences, themes) that justify the proposal.',
 ].join('\n')

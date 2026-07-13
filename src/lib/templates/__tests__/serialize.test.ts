@@ -19,7 +19,8 @@ test('serializeTemplate exposes source, visibility, and mine', () => {
   assert.equal(out.visibility, 'org')
   assert.equal(out.mine, true)
   assert.equal(out.category, 'Sales')
-  assert.equal(out.instructions, 'do it')
+  assert.ok(out.instructions.startsWith('do it'))
+  assert.match(out.instructions, /Automation asset quality contract/)
 })
 
 test('serializeTemplate marks mine=false for another org and defaults missing provenance', () => {
@@ -27,4 +28,9 @@ test('serializeTemplate marks mine=false for another org and defaults missing pr
   assert.equal(out.mine, false)
   assert.equal(out.source, 'user')      // defaults when absent
   assert.equal(out.visibility, 'org')
+})
+
+test('serializeTemplate leaves user-authored instructions unchanged', () => {
+  const out = serializeTemplate({ ...row, source: 'user', configuration: { instructions: 'Keep this exact.' } }, 'orgA')
+  assert.equal(out.instructions, 'Keep this exact.')
 })

@@ -1,5 +1,6 @@
 import type { AgentTemplate } from '@prisma/client'
 import { prisma, systemPrisma } from '@/lib/prisma'
+import { enhanceAutomationInstructions } from '@/lib/templates/automation-assets'
 
 /** The subset of an AgentTemplate row the serializer reads (row from DB or a test fixture). */
 export type AgentTemplateRow = Pick<AgentTemplate, 'id' | 'name' | 'type' | 'organizationId'> & {
@@ -37,7 +38,9 @@ export function serializeTemplate(template: AgentTemplateRow, viewerOrgId?: stri
     name: template.name,
     description: (template.description as string) || '',
     category: template.type,
-    instructions: (config.instructions as string) || (template.description as string) || '',
+    instructions: (template.source ?? 'user') === 'ai_generated'
+      ? enhanceAutomationInstructions((config.instructions as string) || (template.description as string) || '')
+      : (config.instructions as string) || (template.description as string) || '',
     integrations: (config.integrations as string[]) || [],
     skills: (config.skills as string[]) || [],
     tags: (config.tags as string[]) || [],

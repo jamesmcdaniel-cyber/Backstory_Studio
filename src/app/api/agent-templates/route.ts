@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { serializeTemplate, listStoredCatalogue } from '@/lib/templates/catalogue'
 import { createTemplate } from '@/lib/templates/create-template'
+import { enhanceAutomationInstructions } from '@/lib/templates/automation-assets'
 
 const templateSchema = z.object({
   name: z.string().min(1),
@@ -721,7 +722,12 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
   const stored = await listStoredCatalogue(auth.organizationId)
   const templates = [
     ...stored,
-    ...builtInTemplates.map((t) => ({ ...t, custom: false, mine: false })),
+    ...builtInTemplates.map((t) => ({
+      ...t,
+      instructions: enhanceAutomationInstructions(t.instructions),
+      custom: false,
+      mine: false,
+    })),
   ]
   const limit = Number(request.nextUrl.searchParams.get('limit'))
   return { success: true, templates: limit > 0 ? templates.slice(0, limit) : templates }

@@ -118,6 +118,8 @@ test('generation: schema-valid proposals are written as rows', async () => {
   const config = rows[0].configuration as Record<string, unknown>
   assert.deepEqual(config.integrations, ['slack', 'salesforce'])
   assert.equal(config.schedule, 'daily')
+  assert.match(config.instructions as string, /Automation asset quality contract/)
+  assert.match(config.instructions as string, /Canonical workflow JSON/)
 })
 
 // --- sourceEvidence carries the usage signals --------------------------------
