@@ -11,6 +11,7 @@ export function serializeFlow(flow: {
   publishedGraph?: unknown
   version?: number
   visibility: string
+  folder?: string
   createdAt: Date
   updatedAt: Date
 }) {
@@ -25,6 +26,7 @@ export function serializeFlow(flow: {
     trigger: flow.trigger ?? { type: 'manual' },
     graph,
     visibility: flow.visibility,
+    folder: flow.folder ?? '',
     stepCount,
     version: flow.version ?? 1,
     published,

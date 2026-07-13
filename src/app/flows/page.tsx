@@ -23,6 +23,7 @@ type FlowItem = {
   description: string
   status: string
   stepCount: number
+  folder?: string
   updatedAt: string
 }
 
@@ -38,6 +39,27 @@ export default function FlowsPage() {
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
   const [creating, setCreating] = useState(false)
+  const [folderFilter, setFolderFilter] = useState<string | null>(null)
+
+  const folders = Array.from(new Set(flows.map((flow) => flow.folder?.trim() || ''))).filter(Boolean).sort()
+  const visibleFlows = folderFilter === null ? flows : flows.filter((flow) => (flow.folder?.trim() || '') === folderFilter)
+
+  const moveToFolder = async (flow: FlowItem) => {
+    const next = window.prompt(`Folder for "${flow.name}" (leave empty for none):`, flow.folder ?? '')
+    if (next === null) return
+    const folder = next.trim().slice(0, 60)
+    const response = await fetch('/api/flows', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: flow.id, folder }),
+    })
+    if (!response.ok) {
+      toast.error('Could not move the flow.')
+      return
+    }
+    setFlows((prev) => prev.map((entry) => (entry.id === flow.id ? { ...entry, folder } : entry)))
+    toast.success(folder ? `Moved to "${folder}".` : 'Removed from its folder.')
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -71,7 +93,7 @@ export default function FlowsPage() {
     }
   }
 
-  const { pageItems, pageCount, page: current } = paginate(flows, page, PAGE_SIZE)
+  const { pageItems, pageCount, page: current } = paginate(visibleFlows, page, PAGE_SIZE)
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -101,6 +123,34 @@ export default function FlowsPage() {
         />
       ) : (
         <>
+          {folders.length > 0 && (
+            <div className="mb-4 flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => { setFolderFilter(null); setPage(1) }}
+                className={cn('rounded-full border px-3 py-1 text-xs font-medium transition-colors', folderFilter === null ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300' : 'border-border text-muted-foreground hover:bg-muted')}
+              >
+                All flows
+              </button>
+              {folders.map((folder) => (
+                <button
+                  key={folder}
+                  type="button"
+                  onClick={() => { setFolderFilter(folder); setPage(1) }}
+                  className={cn('rounded-full border px-3 py-1 text-xs font-medium transition-colors', folderFilter === folder ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300' : 'border-border text-muted-foreground hover:bg-muted')}
+                >
+                  {folder}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => { setFolderFilter(''); setPage(1) }}
+                className={cn('rounded-full border px-3 py-1 text-xs font-medium transition-colors', folderFilter === '' ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300' : 'border-border text-muted-foreground hover:bg-muted')}
+              >
+                No folder
+              </button>
+            </div>
+          )}
           <div className="stagger-children grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
             {pageItems.map((flow) => (
               <Link key={flow.id} href={`/flows/${flow.id}`} className="block">
@@ -111,7 +161,17 @@ export default function FlowsPage() {
                       <Badge variant="outline" className={cn('text-[11px] font-medium capitalize', STATUS_STYLE[flow.status] || STATUS_STYLE.draft)}>
                         {flow.status}
                       </Badge>
-                      <span className="text-xs text-muted-foreground">{flow.stepCount} step{flow.stepCount === 1 ? '' : 's'}</span>
+                      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                        {flow.stepCount} step{flow.stepCount === 1 ? '' : 's'}
+                        <button
+                          type="button"
+                          onClick={(event) => { event.preventDefault(); event.stopPropagation(); void moveToFolder(flow) }}
+                          className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted"
+                          title="Move to a folder"
+                        >
+                          {flow.folder?.trim() || 'Folder…'}
+                        </button>
+                      </span>
                     </div>
                     <div className="flex items-start gap-2.5">
                       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 transition-transform group-hover:scale-105 dark:bg-indigo-500/15 dark:text-indigo-300">

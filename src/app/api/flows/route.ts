@@ -20,6 +20,7 @@ const flowSchema = z.object({
   visibility: z.enum(['shared', 'private']).default('shared'),
   trigger: triggerSchema.optional(),
   graph: flowGraphSchema.optional(),
+  folder: z.string().max(60).optional(),
 })
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
@@ -41,6 +42,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       description: data.description,
       status: data.status,
       visibility: data.visibility,
+      folder: data.folder ?? '',
       trigger: jsonValue(trigger),
       graph: jsonValue(graph),
       organizationId: auth.organizationId,
@@ -69,6 +71,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       ...(body.description !== undefined && { description: body.description }),
       ...(body.status !== undefined && { status: body.status }),
       ...(body.visibility !== undefined && { visibility: body.visibility }),
+      ...(body.folder !== undefined && { folder: body.folder }),
       // Preserve the webhook secret hash across trigger edits — the client
       // never sees it, so a plain PUT would silently wipe it.
       ...(nextTrigger !== undefined && { trigger: jsonValue(preserveWebhookSecretHash(nextTrigger, existing.trigger)) }),

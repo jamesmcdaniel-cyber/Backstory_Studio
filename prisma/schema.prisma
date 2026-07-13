@@ -658,6 +658,7 @@ model Flow {
   publishedGraph Json? // the live version scheduled/triggered runs execute
   version        Int      @default(1) // bumped on each publish
   visibility     String   @default("shared")
+  folder         String   @default("") // workbook-style grouping ('' = ungrouped)
   organizationId String   @db.Uuid
   userId         String?
   createdAt      DateTime @default(now())
