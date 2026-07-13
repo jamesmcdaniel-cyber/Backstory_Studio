@@ -199,3 +199,39 @@ test('select without fields fails plainly', () => {
 test('select fails plainly on a non-list input', () => {
   assert.match(err(runDataOp('select', { input: 'nope', fields: [{ name: 'x', value: '{{item}}' }] })), /Select needs a list/)
 })
+
+test('split turns text into a trimmed list, defaulting to comma', () => {
+  assert.deepEqual(runDataOp('split', { input: 'a, b , ,c' }), { output: ['a', 'b', 'c'] })
+  assert.deepEqual(runDataOp('split', { input: 'one|two', separator: '|' }), { output: ['one', 'two'] })
+})
+
+test('replace swaps every occurrence and requires the find text', () => {
+  assert.deepEqual(runDataOp('replace', { input: 'a-b-a', find: 'a', replaceWith: 'x' }), { output: 'x-b-x' })
+  assert.deepEqual(runDataOp('replace', { input: 'a-b', find: '-' }), { output: 'ab' })
+  const missing = runDataOp('replace', { input: 'abc' })
+  assert.ok('error' in missing && /find/i.test(missing.error))
+})
+
+test('getItem takes by position with negatives from the end and clear range errors', () => {
+  assert.deepEqual(runDataOp('getItem', { input: ['a', 'b', 'c'], index: '1' }), { output: 'b' })
+  assert.deepEqual(runDataOp('getItem', { input: ['a', 'b', 'c'], index: '-1' }), { output: 'c' })
+  assert.deepEqual(runDataOp('getItem', { input: ['a'] }), { output: 'a' })
+  const outOfRange = runDataOp('getItem', { input: ['a'], index: '4' })
+  assert.ok('error' in outOfRange && /1 item/.test(outOfRange.error))
+  const notInt = runDataOp('getItem', { input: ['a'], index: 'first' })
+  assert.ok('error' in notInt)
+  const notList = runDataOp('getItem', { input: 'nope', index: '0' })
+  assert.ok('error' in notList)
+})
+
+test('flatten unnests deeply', () => {
+  assert.deepEqual(runDataOp('flatten', { input: [1, [2, [3, 4]], [5]] }), { output: [1, 2, 3, 4, 5] })
+})
+
+test('trim removes from the chosen end, defaulting to one from the start', () => {
+  assert.deepEqual(runDataOp('trim', { input: ['a', 'b', 'c'] }), { output: ['b', 'c'] })
+  assert.deepEqual(runDataOp('trim', { input: ['a', 'b', 'c'], count: '2', fromEnd: true }), { output: ['a'] })
+  assert.deepEqual(runDataOp('trim', { input: ['a'], count: '5' }), { output: [] })
+  const bad = runDataOp('trim', { input: ['a'], count: '-1' })
+  assert.ok('error' in bad)
+})

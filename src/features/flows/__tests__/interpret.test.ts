@@ -1914,3 +1914,28 @@ test('subflow adapter error honors onError route down the error edge', async () 
   assert.equal(result.status, 'succeeded')
   assert.equal(result.output, 'Error was: child failed hard')
 })
+
+test('knowledge step resolves the query and threads the hit list', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'k1', type: 'knowledge', data: { query: 'About {{trigger.input}}', topK: 3 } },
+      { id: 'd1', type: 'data', data: { op: 'getItem', input: '{{step.k1.output}}', index: '0' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'k1' },
+      { id: 'e1', source: 'k1', target: 'd1' },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push({ kind: node.kind, ...node.config })
+    return { output: [{ content: 'passage', filename: 'deck.pdf', score: 0.9 }] }
+  }
+  const result = await interpretFlow(graph, 'Acme', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(calls[0].kind, 'knowledge')
+  assert.equal(calls[0].query, 'About Acme')
+  assert.equal(calls[0].topK, 3)
+  assert.deepEqual(result.output, { content: 'passage', filename: 'deck.pdf', score: 0.9 })
+})

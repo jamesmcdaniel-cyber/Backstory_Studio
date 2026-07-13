@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Bot,
+  BookOpen,
   Braces,
   ChevronLeft,
   ChevronRight,
@@ -56,6 +57,7 @@ const ALL_LEAVES: PickerLeaf[] = [...AI_CAPABILITY_LEAVES, ...BUILTIN_GROUPS.fla
 const STEP_ICON: Partial<Record<StepType, LucideIcon>> = {
   ai: Sparkles,
   subflow: Workflow,
+  knowledge: BookOpen,
   http: Globe,
   transform: SlidersHorizontal,
   condition: GitBranch,
@@ -76,6 +78,7 @@ const STEP_ICON: Partial<Record<StepType, LucideIcon>> = {
 const STEP_TONE: Partial<Record<StepType, string>> = {
   ai: 'bg-indigo-500 text-white',
   subflow: 'bg-teal-500 text-white',
+  knowledge: 'bg-rose-500 text-white',
   http: 'bg-emerald-600 text-white',
   transform: 'bg-violet-500 text-white',
   condition: 'bg-amber-500 text-white',

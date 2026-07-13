@@ -351,8 +351,23 @@ const subflowNode = z.object({
   }),
 })
 
+// Search the workspace's uploaded knowledge (pgvector over KnowledgeChunk):
+// `query` is templated; output is a list of hits {content, filename, score}
+// for downstream loops/AI steps. Read-only and best-effort — no reliability
+// envelope needed (retrieval never throws; no results = an empty list).
+const knowledgeNode = z.object({
+  id: z.string(),
+  type: z.literal('knowledge'),
+  data: z.object({
+    query: z.string().optional(),
+    topK: z.number().int().min(1).max(20).optional(),
+    label: z.string().optional(),
+    note: z.string().optional(),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode, subflowNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode, subflowNode, knowledgeNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

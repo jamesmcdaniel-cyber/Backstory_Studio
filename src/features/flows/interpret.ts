@@ -26,7 +26,7 @@ export type RunAgentFn = (node: { id: string; agentId: string; input: string; re
 // passes through unresolved, same as tool/http's retries/timeoutMs.
 // `resume` marks the node a paused run is re-entering (e.g. after an approval
 // decision) so the adapter can consume the decision instead of re-executing.
-export type RunActionFn = (node: { id: string; kind: 'tool' | 'http' | 'ai' | 'subflow'; config: Record<string, unknown>; resume?: boolean }) => Promise<RunAgentResult>
+export type RunActionFn = (node: { id: string; kind: 'tool' | 'http' | 'ai' | 'subflow' | 'knowledge'; config: Record<string, unknown>; resume?: boolean }) => Promise<RunAgentResult>
 export type InterpretResult = {
   status: 'succeeded' | 'failed' | 'waiting'
   steps: StepOutcome[]
@@ -643,6 +643,25 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         const mode = node.data.onError ?? 'stop'
         emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: config } } : {}) })
         return onFailure(mode, res.error, config)
+      }
+      const output = asStructured(res.output)
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
+    }
+
+    if (node.type === 'knowledge') {
+      // Read-only retrieval: resolve the query, dispatch once, thread the hit
+      // list. No onError/retries — the adapter never throws (empty list on
+      // any failure), matching retrieveKnowledge's best-effort contract.
+      const query = resolveTemplate(node.data.query ?? '', ctx)
+      const config: Record<string, unknown> = { ...node.data, query }
+      const res: RunAgentResult = opts.runAction
+        ? await opts.runAction({ id: stepKey, kind: 'knowledge', config, resume: opts.resumeNodeId === stepKey })
+        : { error: 'knowledge steps are not supported in this runtime.' }
+      if (res.error) {
+        emit({ nodeId: node.id, status: 'failed', error: res.error })
+        return { kind: 'fail', error: res.error }
       }
       const output = asStructured(res.output)
       ctx.step[node.id] = { output }

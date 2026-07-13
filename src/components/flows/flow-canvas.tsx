@@ -235,6 +235,8 @@ export function FlowCanvas({
         return node.data.label || AI_OP_LABELS[node.data.aiOp]
       case 'subflow':
         return node.data.label || 'Run a flow'
+      case 'knowledge':
+        return node.data.label || 'Search knowledge'
     }
   }
 
@@ -306,6 +308,8 @@ export function FlowCanvas({
       }
       case 'subflow':
         return node.data.note || (node.data.flowId ? 'Runs another flow and passes back its result' : 'Choose the flow to run')
+      case 'knowledge':
+        return node.data.note || (node.data.query?.trim() ? undefined : 'Write what to look for')
       default:
         return (node.data as { note?: string }).note || undefined
     }

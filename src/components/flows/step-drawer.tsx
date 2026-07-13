@@ -19,11 +19,12 @@ import { useWorkspaceFlows } from './use-workspace-flows'
 
 export type { TriggerData }
 
-type EditableType = Extract<FlowNode['type'], 'agent' | 'ai' | 'subflow' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
+type EditableType = Extract<FlowNode['type'], 'agent' | 'ai' | 'subflow' | 'knowledge' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'agent', label: 'Run agent' },
   { value: 'ai', label: 'AI operation' },
   { value: 'subflow', label: 'Run a flow' },
+  { value: 'knowledge', label: 'Search knowledge' },
   { value: 'tool', label: 'Tool call' },
   { value: 'http', label: 'HTTP request' },
   { value: 'transform', label: 'Set fields' },
@@ -610,6 +611,41 @@ export function StepDrawer({
               </div>
             )}
             <AdvancedParamsSection node={node} onChange={onChange} />
+          </>
+        )}
+
+        {node.type === 'knowledge' && (
+          <>
+            <div>
+              <label className={labelClass}>What to look for</label>
+              <TokenTextEditor
+                ref={registerEditor('knowledge.query')}
+                multiline
+                rows={3}
+                value={node.data.query ?? ''}
+                labelCtx={labelCtx}
+                placeholder="Describe what you need — add flow data from below."
+                onFocus={focusEditor('knowledge.query')}
+                onChange={(query) => onChange({ ...node, data: { ...node.data, query } })}
+                ariaLabel="Knowledge search query"
+              />
+              <div className="mt-2">
+                <DataTree fields={dataFields} onInsert={insertToken} />
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>How many passages</label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                className={fieldClass}
+                value={node.data.topK ?? 5}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, topK: Number(e.target.value) || undefined } })}
+                aria-label="How many passages"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">Searches the documents uploaded to your workspace and outputs the best-matching passages as a list.</p>
           </>
         )}
 
@@ -1275,9 +1311,9 @@ function DataEditor({
           ariaLabel="Input"
         />
       </div>
-      {op === 'join' && (
+      {(op === 'join' || op === 'split') && (
         <div>
-          <label className={labelClass}>Join with (optional)</label>
+          <label className={labelClass}>{op === 'join' ? 'Join with (optional)' : 'Split at (optional)'}</label>
           <input
             className={fieldClass}
             value={node.data.separator ?? ''}
@@ -1285,8 +1321,78 @@ function DataEditor({
             onFocus={blockActive}
             onBlur={unblockActive}
             onChange={(e) => onChange({ ...node, data: { ...node.data, separator: e.target.value || undefined } })}
-            aria-label="Join with"
+            aria-label={op === 'join' ? 'Join with' : 'Split at'}
           />
+        </div>
+      )}
+      {op === 'replace' && (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className={labelClass}>Find</label>
+            <input
+              className={fieldClass}
+              value={node.data.find ?? ''}
+              placeholder="Text to find"
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              onChange={(e) => onChange({ ...node, data: { ...node.data, find: e.target.value || undefined } })}
+              aria-label="Find"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Replace with</label>
+            <input
+              className={fieldClass}
+              value={node.data.replaceWith ?? ''}
+              placeholder="Leave empty to remove it"
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              onChange={(e) => onChange({ ...node, data: { ...node.data, replaceWith: e.target.value || undefined } })}
+              aria-label="Replace with"
+            />
+          </div>
+        </div>
+      )}
+      {op === 'getItem' && (
+        <div>
+          <label className={labelClass}>Position</label>
+          <input
+            className={fieldClass}
+            value={node.data.index ?? ''}
+            placeholder="0 is the first item; -1 is the last"
+            onFocus={blockActive}
+            onBlur={unblockActive}
+            onChange={(e) => onChange({ ...node, data: { ...node.data, index: e.target.value || undefined } })}
+            aria-label="Position"
+          />
+        </div>
+      )}
+      {op === 'trim' && (
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className={labelClass}>Items to remove</label>
+            <input
+              className={fieldClass}
+              value={node.data.count ?? ''}
+              placeholder="Defaults to 1"
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              onChange={(e) => onChange({ ...node, data: { ...node.data, count: e.target.value || undefined } })}
+              aria-label="Items to remove"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>From</label>
+            <select
+              className={fieldClass}
+              value={node.data.fromEnd ? 'end' : 'start'}
+              onChange={(e) => onChange({ ...node, data: { ...node.data, fromEnd: e.target.value === 'end' ? true : undefined } })}
+              aria-label="Trim from"
+            >
+              <option value="start">The start</option>
+              <option value="end">The end</option>
+            </select>
+          </div>
         </div>
       )}
       {op === 'parseJson' && (

@@ -11,6 +11,7 @@ import {
   CircleStop,
   ClipboardCopy,
   Code2,
+  BookOpen,
   Copy,
   FileText,
   Filter,
@@ -92,6 +93,7 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   join: GitMerge,
   ai: Sparkles,
   subflow: Workflow,
+  knowledge: BookOpen,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -114,6 +116,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   join: 'bg-indigo-600 text-white',
   ai: 'bg-indigo-500 text-white',
   subflow: 'bg-teal-500 text-white',
+  knowledge: 'bg-rose-500 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {
@@ -767,6 +770,8 @@ function renderNodeBody({
       return <AiBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'subflow':
       return <SubflowBody node={node} update={update} tokenWiring={tokenWiring} flowId={flowId} showErrors={showErrors} />
+    case 'knowledge':
+      return <KnowledgeBody node={node} update={update} tokenWiring={tokenWiring} />
     case 'http':
       return <HttpBody node={node} toolCatalog={toolCatalog} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'tool':
@@ -937,6 +942,52 @@ function TriggerBody({
           <Plus className="h-5 w-5" /> Add an input
         </button>
       )}
+    </div>
+  )
+}
+
+function KnowledgeBody({
+  node,
+  update,
+  tokenWiring,
+}: {
+  node: Extract<FlowNode, { type: 'knowledge' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+}) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2">
+        <label className={labelClass}>What to look for</label>
+        <TokenTextEditor
+          ref={registerEditor('knowledge.query')}
+          multiline
+          rows={2}
+          value={node.data.query ?? ''}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('knowledge.query')}
+          onChange={(query) => update({ ...node, data: { ...node.data, query } })}
+          className={tokenControlClass}
+          placeholder="Describe what you need — add flow data from the picker."
+          ariaLabel="Knowledge search query"
+        />
+      </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>How many passages</label>
+        <input
+          type="number"
+          min={1}
+          max={20}
+          value={node.data.topK ?? 5}
+          onChange={(event) => update({ ...node, data: { ...node.data, topK: Number(event.target.value) || undefined } })}
+          onFocus={blockActive}
+          onBlur={unblockActive}
+          className={controlClass}
+          aria-label="How many passages"
+        />
+      </div>
+      <p className="text-xs text-slate-500">Searches the documents uploaded to your workspace and outputs the best-matching passages as a list.</p>
     </div>
   )
 }
@@ -1987,9 +2038,9 @@ function DataBody({
           ariaLabel="Input"
         />
       </div>
-      {op === 'join' && (
+      {(op === 'join' || op === 'split') && (
         <div className="grid gap-2">
-          <label className={labelClass}>Join with <span className="font-normal normal-case text-slate-400">(optional)</span></label>
+          <label className={labelClass}>{op === 'join' ? 'Join with' : 'Split at'} <span className="font-normal normal-case text-slate-400">(optional)</span></label>
           <input
             value={node.data.separator ?? ''}
             onChange={(event) => update({ ...node, data: { ...node.data, separator: event.target.value || undefined } })}
@@ -1997,8 +2048,78 @@ function DataBody({
             onBlur={unblockActive}
             className={controlClass}
             placeholder="Defaults to a comma"
-            aria-label="Join with"
+            aria-label={op === 'join' ? 'Join with' : 'Split at'}
           />
+        </div>
+      )}
+      {op === 'replace' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <label className={labelClass}>Find <span className="text-red-500">*</span></label>
+            <input
+              value={node.data.find ?? ''}
+              onChange={(event) => update({ ...node, data: { ...node.data, find: event.target.value || undefined } })}
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              className={cn(controlClass, showErrors && !node.data.find && 'border-red-400 focus:border-red-500')}
+              placeholder="Text to find"
+              aria-label="Find"
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className={labelClass}>Replace with</label>
+            <input
+              value={node.data.replaceWith ?? ''}
+              onChange={(event) => update({ ...node, data: { ...node.data, replaceWith: event.target.value || undefined } })}
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              className={controlClass}
+              placeholder="Leave empty to remove it"
+              aria-label="Replace with"
+            />
+          </div>
+        </div>
+      )}
+      {op === 'getItem' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Position</label>
+          <input
+            value={node.data.index ?? ''}
+            onChange={(event) => update({ ...node, data: { ...node.data, index: event.target.value || undefined } })}
+            onFocus={blockActive}
+            onBlur={unblockActive}
+            className={controlClass}
+            placeholder="0 is the first item; -1 is the last"
+            aria-label="Position"
+          />
+        </div>
+      )}
+      {op === 'trim' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <label className={labelClass}>Items to remove</label>
+            <input
+              value={node.data.count ?? ''}
+              onChange={(event) => update({ ...node, data: { ...node.data, count: event.target.value || undefined } })}
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              className={controlClass}
+              placeholder="Defaults to 1"
+              aria-label="Items to remove"
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className={labelClass}>From</label>
+            <select
+              value={node.data.fromEnd ? 'end' : 'start'}
+              onChange={(event) => update({ ...node, data: { ...node.data, fromEnd: event.target.value === 'end' ? true : undefined } })}
+              className={controlClass}
+              aria-label="Trim from"
+            >
+              <option value="start">The start</option>
+              <option value="end">The end</option>
+            </select>
+          </div>
         </div>
       )}
       {op === 'parseJson' && (

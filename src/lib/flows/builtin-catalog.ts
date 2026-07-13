@@ -109,6 +109,7 @@ export const AI_CAPABILITY_LEAVES: PickerLeaf[] = [
   { id: 'ai-categorize', label: 'Categorize', description: 'Sort input into one of the categories you define.', mode: 'action', stepType: 'ai', seed: { aiOp: 'categorize' } },
   { id: 'ai-summarize', label: 'Summarize', description: 'Condense long input into a short summary.', mode: 'action', stepType: 'ai', seed: { aiOp: 'summarize' } },
   { id: 'ai-score', label: 'Score', description: 'Rate input on a numeric scale with a reason.', mode: 'action', stepType: 'ai', seed: { aiOp: 'score' } },
+  { id: 'ai-knowledge', label: 'Search knowledge', description: 'Find the most relevant passages from your uploaded documents.', mode: 'action', stepType: 'knowledge' },
   { id: 'ai-run-agent', label: 'Run an agent', description: 'Run one of your agents and pass its response to the next step.', mode: 'action', stepType: 'agent' },
 ]
 

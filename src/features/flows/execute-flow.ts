@@ -29,6 +29,7 @@ import { structuredResponseInstruction, parseStructuredAgentOutput } from './age
 import { buildAiPrompt, type AiPromptInput } from '@/lib/flows/ai-prompts'
 import { createModelRunner, DEFAULT_AGENT_MODEL, DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
 import { subflowChildInput, subflowGuard } from '@/lib/flows/subflow'
+import { retrieveKnowledge } from '@/lib/knowledge/retrieve'
 import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 
 export type FlowExecutionJob = {
@@ -621,6 +622,23 @@ export async function runFlowExecution(
         await finish({ status: 'succeeded', output: result.output })
         return { output: result.output }
       }
+      if (node.kind === 'knowledge') {
+        // Org-shared knowledge only: agentId '' matches no agent-owned chunks,
+        // so the `agentId IS NULL` branch (workspace documents) is what's
+        // searched. Best-effort by contract — empty query or no hits is a
+        // successful empty list, never a failure.
+        const query = typeof node.config.query === 'string' ? node.config.query.trim() : ''
+        if (!query) {
+          await finish({ status: 'succeeded', output: [] })
+          return { output: [] }
+        }
+        const k = typeof node.config.topK === 'number' && Number.isFinite(node.config.topK)
+          ? Math.max(1, Math.min(20, Math.round(node.config.topK)))
+          : undefined
+        const hits = await retrieveKnowledge({ organizationId: job.organizationId, agentId: '', query, k })
+        await finish({ status: 'succeeded', output: hits })
+        return { output: hits }
+      }
       if (node.kind === 'http') {
         const request = prepareHttpRequest(node.config)
         // Optional connection auth: resolve a fresh token server-side and inject
@@ -660,7 +678,7 @@ export async function runFlowExecution(
         await finish({ status: 'succeeded', output })
         return { output }
       }
-      // Exhaustive over RunActionFn's node.kind ('tool' | 'http' | 'ai' | 'subflow') — this
+      // Exhaustive over RunActionFn's node.kind ('tool' | 'http' | 'ai' | 'subflow' | 'knowledge') — this
       // only fires if a future kind is added here without a matching branch
       // above, so it fails loudly instead of silently misrouting into http
       // (the bug this restructure closed for 'ai').

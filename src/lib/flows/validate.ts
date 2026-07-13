@@ -1,4 +1,5 @@
-import { FIELD_TYPES, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { AI_OP_LABELS, FIELD_TYPES, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 import { FLOW_TRIGGER_TYPES } from '@/lib/flows/trigger'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 
@@ -52,37 +53,14 @@ function nodeLabel(node: FlowNode | undefined) {
     case 'stop':
       return 'Stop'
     case 'data':
-      switch (node.data.op) {
-        case 'compose':
-          return 'Compose'
-        case 'parseJson':
-          return 'Parse JSON'
-        case 'join':
-          return 'Join'
-        case 'csvTable':
-          return 'Create CSV table'
-        case 'htmlTable':
-          return 'Create HTML table'
-        case 'filterArray':
-          return 'Filter array'
-        case 'select':
-          return 'Select'
-      }
-      break
+      // Single source of truth — a new op added to DATA_OP_LABELS is covered here automatically.
+      return DATA_OP_LABELS[node.data.op]
     case 'ai':
-      switch (node.data.aiOp) {
-        case 'ask':
-          return 'Ask AI'
-        case 'extract':
-          return 'Extract data'
-        case 'categorize':
-          return 'Categorize'
-        case 'summarize':
-          return 'Summarize'
-        case 'score':
-          return 'Score'
-      }
-      break
+      return AI_OP_LABELS[node.data.aiOp]
+    case 'subflow':
+      return 'Run a flow'
+    case 'knowledge':
+      return 'Search knowledge'
     case 'humanReview':
       return 'Request information'
     case 'output':
@@ -558,6 +536,12 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         node.data.scoreMin >= node.data.scoreMax
       ) {
         add(issues, 'error', 'AI_SCORE_BAD_RANGE', `${nodeLabel(node)} needs a minimum score lower than the maximum.`, node.id)
+      }
+    }
+
+    if (node.type === 'knowledge') {
+      if (!node.data.query?.trim()) {
+        add(issues, 'warning', 'KNOWLEDGE_EMPTY_QUERY', `${nodeLabel(node)} has an empty search — it will return nothing.`, node.id)
       }
     }
 
