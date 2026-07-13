@@ -5,6 +5,7 @@ import { agentVisibilityScope } from '@/lib/server/visibility'
 import { flowGraphSchema, emptyGraph } from '@/lib/flows/graph'
 import { serializeFlow } from '@/lib/flows/serialize'
 import { normalizeFlowTrigger, preserveWebhookSecretHash, triggerFromGraph } from '@/lib/flows/trigger'
+import { assertFlowEditable } from '@/lib/flows/access'
 
 // Strip undefined + narrow to plain JSON so Prisma's InputJsonValue accepts the
 // zod-inferred shapes (passthrough trigger / discriminated-union graph).
@@ -17,7 +18,7 @@ const flowSchema = z.object({
   name: z.string().min(1),
   description: z.string().default(''),
   status: z.enum(['DRAFT', 'ACTIVE', 'DISABLED']).default('DRAFT'),
-  visibility: z.enum(['shared', 'private']).default('shared'),
+  visibility: z.enum(['shared', 'private', 'view']).default('shared'),
   trigger: triggerSchema.optional(),
   graph: flowGraphSchema.optional(),
   folder: z.string().max(60).optional(),
@@ -29,7 +30,7 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
     orderBy: { updatedAt: 'desc' },
     take: 200,
   })
-  return { success: true, flows: flows.map(serializeFlow) }
+  return { success: true, flows: flows.map((flow) => serializeFlow(flow, auth.dbUser.id)) }
 })
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
@@ -58,6 +59,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
     where: { id: body.id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
   if (!existing) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  assertFlowEditable(existing, auth.dbUser.id)
   const nextTrigger =
     body.trigger !== undefined
       ? normalizeFlowTrigger(body.trigger)
@@ -83,9 +85,11 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
 
 export const DELETE = withAuthenticatedApi(async (request, auth) => {
   const { id } = z.object({ id: z.string().min(1) }).parse(await request.json())
-  const result = await prisma.flow.deleteMany({
+  const existing = await prisma.flow.findFirst({
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
-  if (!result.count) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  if (!existing) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  assertFlowEditable(existing, auth.dbUser.id)
+  await prisma.flow.deleteMany({ where: { id, organizationId: auth.organizationId } })
   return { success: true }
 })

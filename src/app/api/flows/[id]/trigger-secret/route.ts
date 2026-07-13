@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
+import { assertFlowEditable } from '@/lib/flows/access'
 import { hashToken } from '@/lib/crypto/secrets'
 
 // Read-only status for the builder: does a secret exist, and what is the URL.
@@ -35,6 +36,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  assertFlowEditable(flow, auth.dbUser.id)
 
   const trigger = (flow.trigger && typeof flow.trigger === 'object' && !Array.isArray(flow.trigger) ? flow.trigger : {}) as Record<string, unknown>
   const hasSecret = typeof trigger.webhookSecretHash === 'string'

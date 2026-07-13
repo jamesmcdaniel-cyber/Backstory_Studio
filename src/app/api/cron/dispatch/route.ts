@@ -17,7 +17,7 @@ import { timingSafeEqual } from 'crypto'
 import { prisma, systemPrisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { runAgentExecution } from '@/features/agents/execute-agent'
-import { runFlowExecution } from '@/features/flows/execute-flow'
+import { dispatchFlowExecution } from '@/features/flows/execute-flow'
 import { parseFlowInput } from '@/lib/flows/input'
 import { triggerConditionPasses } from '@/lib/flows/trigger-condition'
 import { isDue, type AgentSchedule } from '@/lib/scheduling/due'
@@ -266,7 +266,10 @@ export async function GET(request: Request) {
           ? await prisma.user.findFirst({ where: { id: flow.userId, organizationId: flow.organizationId, isActive: true } })
           : await prisma.user.findFirst({ where: { organizationId: flow.organizationId, isActive: true }, orderBy: { createdAt: 'asc' } })
         if (!owner) continue
-        await runFlowExecution({
+        // Queue-durable in production (EXECUTION_MODE=queue): a burst of due
+        // schedules enqueues instead of executing serially inside this
+        // request; inline in dev/CI — behavior there is unchanged.
+        await dispatchFlowExecution({
           flowId: flow.id,
           organizationId: flow.organizationId,
           userId: owner.id,

@@ -34,21 +34,36 @@ export function inputForField({
       <div className="space-y-1">
         <input
           type="file"
-          accept=".txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.yaml,.yml,.xml,.html,.htm,.log,text/*,application/json"
+          accept=".txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.yaml,.yml,.xml,.html,.htm,.log,.pdf,text/*,application/json,application/pdf"
           className={`${fieldClass} cursor-pointer file:mr-3 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium`}
           onChange={(event) => {
             const file = event.target.files?.[0]
             if (!file) return
-            if (file.size > FILE_INPUT_MAX_BYTES) {
-              onChange(JSON.stringify({ filename: file.name, content: '', error: 'File is larger than 1 MB — paste the relevant text instead.' }))
+            const textLike = /^text\//.test(file.type) || /\.(txt|md|markdown|csv|tsv|json|jsonl|ya?ml|xml|html?|log)$/i.test(file.name)
+            if (textLike && file.size <= FILE_INPUT_MAX_BYTES) {
+              const reader = new FileReader()
+              reader.onload = () => {
+                const content = typeof reader.result === 'string' ? reader.result : ''
+                onChange(JSON.stringify({ filename: file.name, content }))
+              }
+              reader.readAsText(file)
               return
             }
-            const reader = new FileReader()
-            reader.onload = () => {
-              const content = typeof reader.result === 'string' ? reader.result : ''
-              onChange(JSON.stringify({ filename: file.name, content }))
-            }
-            reader.readAsText(file)
+            // Binary or large files (PDFs included) upload to org storage; the
+            // server extracts text when the format supports it.
+            const form = new FormData()
+            form.append('file', file)
+            onChange(JSON.stringify({ filename: file.name, uploading: true }))
+            fetch('/api/files', { method: 'POST', body: form })
+              .then((response) => response.json())
+              .then((data) => {
+                if (!data?.success) throw new Error(data?.error || 'upload failed')
+                const { id, filename, content, url } = data.file
+                onChange(JSON.stringify({ fileId: id, filename, url, ...(content ? { content } : {}) }))
+              })
+              .catch(() => {
+                onChange(JSON.stringify({ filename: file.name, content: '', error: 'The upload failed — try again or paste the text instead.' }))
+              })
           }}
         />
         {current?.filename && <p className="text-xs text-muted-foreground">Attached: {current.filename}</p>}

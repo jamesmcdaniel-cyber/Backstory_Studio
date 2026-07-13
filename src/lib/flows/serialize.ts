@@ -1,4 +1,5 @@
 import type { FlowGraph } from '@/lib/flows/graph'
+import { canEditFlow } from '@/lib/flows/access'
 
 /** Wire shape for a flow, shared by the list page and the builder. */
 export function serializeFlow(flow: {
@@ -12,9 +13,10 @@ export function serializeFlow(flow: {
   version?: number
   visibility: string
   folder?: string
+  userId?: string | null
   createdAt: Date
   updatedAt: Date
-}) {
+}, viewerId?: string) {
   const graph = (flow.graph && typeof flow.graph === 'object' ? flow.graph : { nodes: [], edges: [] }) as FlowGraph
   const stepCount = (graph.nodes || []).filter((node) => node.type === 'agent').length
   const published = flow.publishedGraph != null
@@ -26,6 +28,8 @@ export function serializeFlow(flow: {
     trigger: flow.trigger ?? { type: 'manual' },
     graph,
     visibility: flow.visibility,
+    // Whether THIS viewer may edit ('view' flows are owner-editable only).
+    canEdit: viewerId === undefined ? true : canEditFlow({ visibility: flow.visibility, userId: flow.userId ?? null }, viewerId),
     folder: flow.folder ?? '',
     stepCount,
     version: flow.version ?? 1,

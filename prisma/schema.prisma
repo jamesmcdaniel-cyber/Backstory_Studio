@@ -52,6 +52,7 @@ model Organization {
   agentMemories       AgentMemory[]
   flowVersions        FlowVersion[]
   flows               Flow[]
+  storedFiles         StoredFile[]
   customSignals       CustomSignal[]
   pushSubscriptions   PushSubscription[]
   knowledgeDocuments  KnowledgeDocument[]
@@ -670,6 +671,27 @@ model Flow {
 
   @@index([organizationId, updatedAt])
   @@map("flows")
+}
+
+// Binary/original file uploads (run-form file inputs, future step outputs).
+// Bytes live in Supabase Storage when configured (backend 'supabase',
+// storagePath set) else inline in the row (backend 'db', data set).
+model StoredFile {
+  id             String   @id @default(cuid())
+  organizationId String   @db.Uuid
+  userId         String?
+  filename       String
+  mimeType       String   @default("application/octet-stream")
+  size           Int
+  backend        String   @default("db")
+  storagePath    String?
+  data           Bytes?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@map("stored_files")
 }
 
 model FlowVersion {

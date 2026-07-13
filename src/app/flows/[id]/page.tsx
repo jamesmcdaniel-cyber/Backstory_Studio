@@ -185,6 +185,9 @@ function FlowBuilder() {
   // undefined = not yet loaded: webhook arming copy stays neutral instead of
   // flashing "publish to arm" on already-published flows before the fetch lands.
   const [published, setPublished] = useState<boolean | undefined>(undefined)
+  // Share role: 'view' flows are runnable by the org but editable only by the owner.
+  const [canEdit, setCanEdit] = useState(true)
+  const [visibility, setVisibility] = useState('shared')
   const [publishing, setPublishing] = useState(false)
   const [agents, setAgents] = useState<Agent[]>([])
   // Workspace roster for the humanReview "Assign to" select — fetched once per
@@ -248,6 +251,8 @@ function FlowBuilder() {
           setStatus(flow.status)
           setVersion(flow.version ?? 1)
           setPublished(Boolean(flow.published))
+          setCanEdit(flow.canEdit !== false)
+          setVisibility(flow.visibility ?? 'shared')
           setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g, status: flow.status }))
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
@@ -558,6 +563,10 @@ function FlowBuilder() {
   }, [validation])
 
   const save = useCallback(async (): Promise<boolean> => {
+    if (!canEdit) {
+      toast.error('This flow is view-only — ask its owner to make changes.')
+      return false
+    }
     setSaving(true)
     try {
       const response = await fetch('/api/flows', {
@@ -575,7 +584,7 @@ function FlowBuilder() {
     } finally {
       setSaving(false)
     }
-  }, [id, name, description, graph, status])
+  }, [id, name, description, graph, status, canEdit])
 
   const publish = useCallback(
     async (revert = false) => {
@@ -633,6 +642,20 @@ function FlowBuilder() {
     if (pollRef.current) clearInterval(pollRef.current)
     pollRef.current = setInterval(tick, 2000)
     tick()
+  }, [id])
+
+  const updateSharing = useCallback(async (next: 'shared' | 'view' | 'private') => {
+    const response = await fetch('/api/flows', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, visibility: next }),
+    })
+    if (!response.ok) {
+      toast.error('Could not change sharing.')
+      return
+    }
+    setVisibility(next)
+    toast.success(next === 'shared' ? 'Everyone in your workspace can edit this flow.' : next === 'view' ? 'Everyone can view and run it — only you can edit.' : 'Only you can see this flow now.')
   }, [id])
 
   const rerunFromStep = useCallback(async (runId: string, nodeId: string) => {
@@ -1002,6 +1025,25 @@ function FlowBuilder() {
             <DropdownMenuItem onSelect={downloadFlow}>
               <Download className="h-4 w-4" /> Download JSON
             </DropdownMenuItem>
+            {canEdit && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Sharing</DropdownMenuLabel>
+                {([
+                  { value: 'shared', label: 'Everyone can edit' },
+                  { value: 'view', label: 'Everyone can view, only I edit' },
+                  { value: 'private', label: 'Only me' },
+                ] as const).map((option) => (
+                  <DropdownMenuItem
+                    key={option.value}
+                    onSelect={() => void updateSharing(option.value)}
+                    className={visibility === option.value ? 'font-semibold text-indigo-700' : undefined}
+                  >
+                    {visibility === option.value ? '✓ ' : ''}{option.label}
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={deleteFlow} className="text-red-600 focus:text-red-700">
               <Trash2 className="h-4 w-4" /> Delete flow
@@ -1060,6 +1102,12 @@ function FlowBuilder() {
               Close
             </Button>
           </div>
+        </div>
+      )}
+
+      {!canEdit && (
+        <div className="flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs font-medium text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          View only — you can run this flow, but only its owner can edit it.
         </div>
       )}
 

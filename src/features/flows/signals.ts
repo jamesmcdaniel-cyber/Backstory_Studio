@@ -2,7 +2,7 @@ import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { KNOWN_SIGNALS } from '@/lib/flows/trigger'
 import { triggerConditionPasses } from '@/lib/flows/trigger-condition'
-import { runFlowExecution } from './execute-flow'
+import { dispatchFlowExecution } from './execute-flow'
 
 // Re-exported so callers (including the client-safe builder UI) can import the
 // known signal catalog from either module; the canonical list lives in
@@ -101,7 +101,7 @@ export async function emitFlowSignal(params: {
         })
         continue
       }
-      await runFlowExecution({
+      await dispatchFlowExecution({
         flowId: flow.id,
         organizationId: params.organizationId,
         userId: owner.id,

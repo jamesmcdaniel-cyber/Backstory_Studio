@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
+import { assertFlowEditable } from '@/lib/flows/access'
 import { serializeFlow } from '@/lib/flows/serialize'
 
 function jsonValue(value: unknown) {
@@ -49,9 +50,10 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
   const flow = await prisma.flow.findFirst({
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
-    select: { id: true },
+    select: { id: true, visibility: true, userId: true },
   })
   if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  assertFlowEditable(flow, auth.dbUser.id)
 
   const { version } = restoreSchema.parse(await request.json())
   const row = await prisma.flowVersion.findFirst({
