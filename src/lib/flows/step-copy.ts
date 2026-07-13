@@ -20,6 +20,7 @@ export const DATA_OP_INPUT_PLACEHOLDER: Record<DataOp, string> = {
   getItem: 'The list to take an item from',
   flatten: 'The nested list to flatten',
   trim: 'The list to trim items from',
+  parseCsv: 'The CSV text to parse',
 }
 
 /** One-line helper under each data operation's fields. */
@@ -36,6 +37,7 @@ export const DATA_OP_HELPER: Record<DataOp, string> = {
   getItem: 'Takes one item from the list by position — negatives count from the end.',
   flatten: 'Unnests lists inside lists into one flat list.',
   trim: 'Removes a number of items from the start (or end) of the list.',
+  parseCsv: 'Turns CSV text into a list of records — the first row names the fields.',
 }
 
 /** Placeholder for a variable step's value field, per operation. */

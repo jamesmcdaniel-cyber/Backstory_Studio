@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ChevronRight, X } from 'lucide-react'
+import { ChevronRight, Download, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
@@ -64,6 +64,27 @@ function preview(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+/** Save a step's output as a local file: objects as .json, text as .txt/.csv/.html by shape. */
+function downloadOutput(value: unknown, baseName: string) {
+  const isString = typeof value === 'string'
+  const body = isString ? (value as string) : JSON.stringify(value, null, 2)
+  const trimmed = isString ? (value as string).trim() : ''
+  const ext = !isString
+    ? 'json'
+    : trimmed.startsWith('<table') || trimmed.startsWith('<!doctype') || trimmed.startsWith('<html')
+      ? 'html'
+      : /^[^,\n]+(,[^,\n]*)+\n/.test(trimmed)
+        ? 'csv'
+        : 'txt'
+  const mime = ext === 'json' ? 'application/json' : ext === 'html' ? 'text/html' : ext === 'csv' ? 'text/csv' : 'text/plain'
+  const url = URL.createObjectURL(new Blob([body], { type: `${mime};charset=utf-8` }))
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `${baseName.replace(/[^a-z0-9-_ ]/gi, '').trim() || 'step-output'}.${ext}`
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 /** Prose step outputs render as Markdown; structured data stays monospaced. */
@@ -162,7 +183,19 @@ function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; w
               banner above already explains the pause in plain english. */}
           {step.status !== 'waiting' && (
             <div>
-              <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Output</p>
+              <div className="mb-0.5 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Output</p>
+                {step.output != null && (
+                  <button
+                    type="button"
+                    onClick={() => downloadOutput(step.output, step.nodeId)}
+                    className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700"
+                    title="Save this output as a file"
+                  >
+                    <Download className="h-3 w-3" /> Download
+                  </button>
+                )}
+              </div>
               <OutputView value={step.output} />
             </div>
           )}

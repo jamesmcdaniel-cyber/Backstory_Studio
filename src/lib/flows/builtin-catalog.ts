@@ -74,6 +74,7 @@ export const BUILTIN_GROUPS: PickerGroup[] = [
       { id: 'data-get-item', label: 'Get item', description: 'Take one item from a list by its position.', mode: 'action', stepType: 'data', seed: { dataOp: 'getItem' } },
       { id: 'data-flatten', label: 'Flatten list', description: 'Turn nested lists into one flat list.', mode: 'action', stepType: 'data', seed: { dataOp: 'flatten' } },
       { id: 'data-trim', label: 'Trim list', description: 'Remove items from the start or end of a list.', mode: 'action', stepType: 'data', seed: { dataOp: 'trim' } },
+      { id: 'data-parse-csv', label: 'Parse CSV', description: 'Turn CSV text into a list of records for later steps.', mode: 'action', stepType: 'data', seed: { dataOp: 'parseCsv' } },
     ],
   },
   {

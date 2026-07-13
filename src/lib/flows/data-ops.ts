@@ -54,6 +54,50 @@ export const DATA_OP_LABELS: Record<DataOp, string> = {
   getItem: 'Get item',
   flatten: 'Flatten list',
   trim: 'Trim list',
+  parseCsv: 'Parse CSV',
+}
+
+/** RFC 4180 CSV: quoted fields may hold commas, newlines, and doubled quotes. */
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let cell = ''
+  let quoted = false
+  const source = text.replace(/\r\n/g, '\n')
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i]
+    if (quoted) {
+      if (ch === '"') {
+        if (source[i + 1] === '"') {
+          cell += '"'
+          i++
+        } else {
+          quoted = false
+        }
+      } else {
+        cell += ch
+      }
+      continue
+    }
+    if (ch === '"') {
+      quoted = true
+    } else if (ch === ',') {
+      row.push(cell)
+      cell = ''
+    } else if (ch === '\n') {
+      row.push(cell)
+      rows.push(row)
+      row = []
+      cell = ''
+    } else {
+      cell += ch
+    }
+  }
+  if (cell !== '' || row.length) {
+    row.push(cell)
+    rows.push(row)
+  }
+  return rows
 }
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
@@ -161,6 +205,22 @@ export function runDataOp(op: DataOp, config: DataOpConfig): DataOpResult {
       const ctx = itemContext(item, config.ctx)
       return clauses.every((clause) => evalClause(clause, ctx))
     })
+    return { output }
+  }
+
+  if (op === 'parseCsv') {
+    // CSV text -> list of records keyed by the header row. Quoted fields
+    // (embedded commas/newlines/doubled quotes) parse per RFC 4180 — this
+    // reads back exactly what the csvTable op writes.
+    const text = typeof config.input === 'string' ? config.input : itemText(config.input)
+    const rows = parseCsvRows(text)
+    if (!rows.length || !rows[0].some((cell) => cell.trim() !== '')) {
+      return { error: `${label} needs CSV text with a header row.` }
+    }
+    const [headers, ...body] = rows
+    const output = body
+      .filter((row) => row.some((cell) => cell.trim() !== ''))
+      .map((row) => Object.fromEntries(headers.map((header, i) => [header, row[i] ?? ''])))
     return { output }
   }
 

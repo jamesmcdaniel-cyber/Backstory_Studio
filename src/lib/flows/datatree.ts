@@ -51,7 +51,7 @@ export type DataTreeSource = {
   /** Include the trigger input root (default true). */
   trigger?: boolean
   /** User-declared fields expected on trigger.input. */
-  inputFields?: OutputField[]
+  inputFields?: (OutputField & { format?: string })[]
   /** Sample trigger input from test input or the latest run, used to expose fields. */
   triggerInput?: unknown
   /** Inside a loop body: expose {{item}} and {{loop.index}}. */
@@ -107,6 +107,14 @@ export function buildDataTree(source: DataTreeSource): DataField[] {
         token: `{{trigger.input.${field.name}}}`,
         type: field.type,
         description: field.description || 'Expected field on the run input.',
+        ...(field.format === 'file'
+          ? {
+              children: [
+                { label: 'File name', token: `{{trigger.input.${field.name}.filename}}`, type: 'string', description: 'The uploaded file\'s name.' },
+                { label: 'File text', token: `{{trigger.input.${field.name}.content}}`, type: 'string', description: 'The uploaded file\'s text content.' },
+              ],
+            }
+          : {}),
       })
     }
     for (const inferred of inferFields(source.triggerInput, 'trigger.input')) {

@@ -25,7 +25,7 @@ export type OutputField = z.infer<typeof outputFieldSchema>
 
 /** A trigger input field: an OutputField plus whether the run must supply it
  * and a `default` used at run start when the caller omits/blanks the value. */
-export const triggerInputFieldSchema = outputFieldSchema.extend({ required: z.boolean().optional(), default: z.string().optional() })
+export const triggerInputFieldSchema = outputFieldSchema.extend({ required: z.boolean().optional(), default: z.string().optional(), format: z.enum(['file']).optional() })
 export type TriggerInputField = z.infer<typeof triggerInputFieldSchema>
 
 const triggerNode = z.object({
@@ -218,7 +218,7 @@ const variableNode = z.object({
 })
 
 /** Pure transforms a data operation step can perform (MS Data Operation parity). */
-export const DATA_OPS = ['compose', 'parseJson', 'join', 'csvTable', 'htmlTable', 'filterArray', 'select', 'split', 'replace', 'getItem', 'flatten', 'trim'] as const
+export const DATA_OPS = ['compose', 'parseJson', 'join', 'csvTable', 'htmlTable', 'filterArray', 'select', 'split', 'replace', 'getItem', 'flatten', 'trim', 'parseCsv'] as const
 export type DataOp = (typeof DATA_OPS)[number]
 // Deterministic data-shaping step between other steps: no LLM, no I/O. `input`
 // is templated (usually an exact {{step.x.output}} token so structure survives);

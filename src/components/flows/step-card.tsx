@@ -136,12 +136,13 @@ const INPUT_TYPES: {
   description: string
   name: string
   fieldType: OutputField['type']
+  format?: 'file'
   icon: typeof Type
   tone: string
 }[] = [
   { id: 'text', label: 'Text', description: 'Please enter your input', name: 'text', fieldType: 'string', icon: Type, tone: 'bg-purple-500 text-white' },
   { id: 'yesno', label: 'Yes / No', description: 'Choose yes or no.', name: 'yesNo', fieldType: 'boolean', icon: ToggleLeft, tone: 'bg-indigo-500 text-white' },
-  { id: 'file', label: 'File', description: 'Upload or provide file data.', name: 'file', fieldType: 'object', icon: FileText, tone: 'bg-slate-700 text-white' },
+  { id: 'file', label: 'File', description: 'Upload a file to use its text.', name: 'file', fieldType: 'object', format: 'file' as const, icon: FileText, tone: 'bg-slate-700 text-white' },
   { id: 'email', label: 'Email', description: 'Enter an email address.', name: 'email', fieldType: 'string', icon: Mail, tone: 'bg-green-600 text-white' },
   { id: 'number', label: 'Number', description: 'Enter a number.', name: 'number', fieldType: 'number', icon: Hash, tone: 'bg-orange-500 text-white' },
   { id: 'date', label: 'Date', description: 'Enter a date.', name: 'date', fieldType: 'string', icon: CalendarDays, tone: 'bg-rose-500 text-white' },
@@ -165,7 +166,8 @@ function triggerData(node: Extract<FlowNode, { type: 'trigger' }>): TriggerData 
   return isRecord(node.data.trigger) ? (node.data.trigger as TriggerData) : { type: 'manual' }
 }
 
-function inputTypeForField(field: OutputField) {
+function inputTypeForField(field: OutputField & { format?: string }) {
+  if (field.format === 'file') return INPUT_TYPES.find((type) => type.id === 'file')!
   const text = `${field.name} ${field.description ?? ''}`.toLowerCase()
   if (field.type === 'boolean') return INPUT_TYPES.find((type) => type.id === 'yesno')!
   if (field.type === 'number') return INPUT_TYPES.find((type) => type.id === 'number')!
@@ -828,6 +830,7 @@ function TriggerBody({
           name: uniqueFieldName(option.name, fields),
           type: option.fieldType,
           description: option.description,
+          ...(option.format ? { format: option.format } : {}),
         },
       ],
     })

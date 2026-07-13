@@ -7,6 +7,18 @@ export const fieldClass =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-300'
 export const labelClass = 'mb-1 flex items-center gap-1.5 text-xs font-medium text-foreground'
 
+// Browser-side file cap — the content travels inside the run input JSON.
+const FILE_INPUT_MAX_BYTES = 1_000_000
+
+function parsedFileValue(value: string): { filename?: string } | null {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && typeof parsed.filename === 'string' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
 export function inputForField({
   field,
   value,
@@ -16,6 +28,33 @@ export function inputForField({
   value: string
   onChange: (value: string) => void
 }) {
+  if (field.format === 'file') {
+    const current = parsedFileValue(value)
+    return (
+      <div className="space-y-1">
+        <input
+          type="file"
+          accept=".txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.yaml,.yml,.xml,.html,.htm,.log,text/*,application/json"
+          className={`${fieldClass} cursor-pointer file:mr-3 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs file:font-medium`}
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (!file) return
+            if (file.size > FILE_INPUT_MAX_BYTES) {
+              onChange(JSON.stringify({ filename: file.name, content: '', error: 'File is larger than 1 MB — paste the relevant text instead.' }))
+              return
+            }
+            const reader = new FileReader()
+            reader.onload = () => {
+              const content = typeof reader.result === 'string' ? reader.result : ''
+              onChange(JSON.stringify({ filename: file.name, content }))
+            }
+            reader.readAsText(file)
+          }}
+        />
+        {current?.filename && <p className="text-xs text-muted-foreground">Attached: {current.filename}</p>}
+      </div>
+    )
+  }
   if (field.type === 'boolean') {
     return (
       <select className={fieldClass} value={value} onChange={(event) => onChange(event.target.value)}>

@@ -235,3 +235,28 @@ test('trim removes from the chosen end, defaulting to one from the start', () =>
   const bad = runDataOp('trim', { input: ['a'], count: '-1' })
   assert.ok('error' in bad)
 })
+
+test('parseCsv reads records keyed by the header row, quotes and all', () => {
+  const csv = 'name,note\n"Acme, Inc","said ""hi""\nsecond line"\nBeta,plain'
+  assert.deepEqual(runDataOp('parseCsv', { input: csv }), {
+    output: [
+      { name: 'Acme, Inc', note: 'said "hi"\nsecond line' },
+      { name: 'Beta', note: 'plain' },
+    ],
+  })
+})
+
+test('parseCsv round-trips what csvTable writes', () => {
+  const records = [
+    { account: 'Acme, Inc', owner: 'Jo "JJ" Ray' },
+    { account: 'Beta', owner: 'Sam' },
+  ]
+  const csv = runDataOp('csvTable', { input: records })
+  assert.ok('output' in csv)
+  assert.deepEqual(runDataOp('parseCsv', { input: csv.output }), { output: records })
+})
+
+test('parseCsv rejects headerless input', () => {
+  const res = runDataOp('parseCsv', { input: '   \n' })
+  assert.ok('error' in res)
+})
