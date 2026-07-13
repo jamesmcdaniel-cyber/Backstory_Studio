@@ -20,9 +20,8 @@ import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { decryptSecret, encryptSecret } from '@/lib/crypto/secrets'
-import { exchangeCode, safeReturnToPath } from '@/lib/mcp/oauth-authcode'
+import { OAUTH_COOKIE, exchangeCode, safeReturnToPath } from '@/lib/mcp/oauth-authcode'
 import { bustBackstoryReadyCache } from '@/lib/mcp/backstory-connection'
-import { OAUTH_COOKIE } from '../start/route'
 
 interface OAuthCookiePayload {
   state: string

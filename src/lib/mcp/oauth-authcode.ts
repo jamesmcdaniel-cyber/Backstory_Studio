@@ -16,6 +16,13 @@
 
 import crypto from 'crypto'
 
+/**
+ * Cookie carrying the in-flight OAuth state between /oauth/start and
+ * /oauth/callback. Lives here (not in a route file) because Next.js route
+ * modules may only export HTTP handlers and route config fields.
+ */
+export const OAUTH_COOKIE = 'bmcp_oauth'
+
 // ---------------------------------------------------------------------------
 // Redirect safety
 // ---------------------------------------------------------------------------

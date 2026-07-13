@@ -81,7 +81,7 @@ if (TEST_DB) {
         model: 'claude-sonnet-5',
       })
 
-      const got = await prisma.templateProposal.findUnique({ where: { id: p.id } })
+      const got = await prisma.templateProposal.findFirst({ where: { id: p.id, organizationId: s.organizationId } })
       assert.equal(got.status, 'accepted')
       assert.equal(got.createdTemplateId, body.templateId)
     } finally {
@@ -106,7 +106,7 @@ if (TEST_DB) {
       const after = await prisma.agentTemplate.count({ where: { organizationId: s.organizationId } })
       assert.equal(after, before, 'no template created for a process_improvement')
 
-      const got = await prisma.templateProposal.findUnique({ where: { id: p.id } })
+      const got = await prisma.templateProposal.findFirst({ where: { id: p.id, organizationId: s.organizationId } })
       assert.equal(got.status, 'accepted')
       assert.equal(got.createdTemplateId, null)
     } finally {
@@ -138,7 +138,7 @@ if (TEST_DB) {
       const res = await dismiss(p.id)
       const body = await res.json()
       assert.equal(body.status, 'dismissed')
-      assert.equal((await prisma.templateProposal.findUnique({ where: { id: p.id } })).status, 'dismissed')
+      assert.equal((await prisma.templateProposal.findFirst({ where: { id: p.id, organizationId: s.organizationId } })).status, 'dismissed')
       // Idempotent: a second dismiss stays dismissed.
       assert.equal((await (await dismiss(p.id)).json()).status, 'dismissed')
       // Dismissed proposals drop out of the open list.
@@ -158,7 +158,7 @@ if (TEST_DB) {
       installTestAuth(other.auth)
       assert.equal((await accept(p.id)).status, 404)
       assert.equal((await dismiss(p.id)).status, 404)
-      const untouched = await prisma.templateProposal.findUnique({ where: { id: p.id } })
+      const untouched = await prisma.templateProposal.findFirst({ where: { id: p.id, organizationId: owner.organizationId } })
       assert.equal(untouched.status, 'open')
       assert.equal(untouched.createdTemplateId, null)
     } finally {

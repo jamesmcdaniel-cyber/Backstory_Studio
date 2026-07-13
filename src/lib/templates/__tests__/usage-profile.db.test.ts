@@ -157,7 +157,7 @@ if (TEST_DB) {
 
       // Revoke the connection → a disconnected People.ai must not leak themes,
       // matching the canonical "connected" (status==='active') predicate.
-      await prisma.peopleAiConnection.update({ where: { id: conn.id }, data: { status: 'revoked' } })
+      await prisma.peopleAiConnection.updateMany({ where: { id: conn.id, organizationId: org.id }, data: { status: 'revoked' } })
       const revoked = await buildUsageProfile(org.id)
       assert.deepEqual(revoked.themes, [], 'no themes once the People.ai connection is revoked')
     } finally {
