@@ -222,6 +222,13 @@ export async function runFlowExecution(
   if (resuming) {
     const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
     for (const step of priorSteps) {
+      // Only succeeded/skipped steps replay from their stored output. A FAILED
+      // step whose node has onError 'continue'/'route' re-executes on resume:
+      // replaying it would also need to replay WHICH edge the walk took (the
+      // error branch), which the completed map can't express today. So route
+      // steps are not resume-idempotent — a transient failure that clears
+      // before a downstream pause resumes will re-run the step and may take
+      // the normal path instead of the error path it took the first time.
       if (step.status === 'succeeded' || step.status === 'skipped') completed[step.nodeId] = step.output
       if (step.status === 'waiting') {
         // A loop/parallel container persists its OWN `waiting` row for display,
