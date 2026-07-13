@@ -170,7 +170,9 @@ function FlowBuilder() {
   const [graph, setGraph] = useState<FlowGraph>(emptyGraph())
   const [status, setStatus] = useState('draft')
   const [version, setVersion] = useState(1)
-  const [published, setPublished] = useState(false)
+  // undefined = not yet loaded: webhook arming copy stays neutral instead of
+  // flashing "publish to arm" on already-published flows before the fetch lands.
+  const [published, setPublished] = useState<boolean | undefined>(undefined)
   const [publishing, setPublishing] = useState(false)
   const [agents, setAgents] = useState<Agent[]>([])
   // Workspace roster for the humanReview "Assign to" select — fetched once per

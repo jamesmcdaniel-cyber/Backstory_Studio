@@ -90,7 +90,9 @@ export function TriggerEditor({
     fetch(`/api/flows/${flowId}/trigger-secret`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (alive && d?.success) setWebhook({ url: d.url, secret: null, hasSecret: d.hasSecret })
+        // Never clobber a mint that finished while this GET was in flight —
+        // the plaintext secret is shown exactly once and is unrecoverable.
+        if (alive && d?.success) setWebhook((prev) => (prev?.secret ? prev : { url: d.url, secret: null, hasSecret: d.hasSecret }))
       })
       .catch(() => {})
     return () => {
