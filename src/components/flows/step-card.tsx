@@ -308,6 +308,7 @@ export function StepCard({
   onClick,
   onRefreshAgents,
   onDuplicate,
+  onMakeSubflow,
   onDelete,
   draggable,
   onDragStartNode,
@@ -333,6 +334,7 @@ export function StepCard({
   onClick?: () => void
   onRefreshAgents?: () => void
   onDuplicate?: () => void
+  onMakeSubflow?: () => void
   onDelete?: () => void
   draggable?: boolean
   onDragStartNode?: (id: string) => void
@@ -642,6 +644,11 @@ export function StepCard({
             {!isTrigger && onDuplicate && (
               <DropdownMenuItem onSelect={onDuplicate}>
                 <Copy className="h-4 w-4" /> Duplicate
+              </DropdownMenuItem>
+            )}
+            {!isTrigger && onMakeSubflow && (
+              <DropdownMenuItem onSelect={onMakeSubflow}>
+                <Workflow className="h-4 w-4" /> Make a subflow…
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />

@@ -135,6 +135,7 @@ export function FlowCanvas({
   onAppendBranch,
   onRefreshAgents,
   onDuplicateNode,
+  onMakeSubflow,
   onDeleteNode,
   onBackgroundClick,
   onPickTrigger,
@@ -161,6 +162,7 @@ export function FlowCanvas({
   onAppendBranch: (conditionId: string, branch: string, type: StepType, seed?: FlowInsertSeed) => void
   onRefreshAgents?: () => void
   onDuplicateNode?: (id: string) => void
+  onMakeSubflow?: (startId: string) => void
   onDeleteNode?: (id: string) => void
   onBackgroundClick?: () => void
   onPickTrigger?: (triggerType: 'manual' | 'schedule' | 'webhook' | 'signal') => void
@@ -338,6 +340,7 @@ export function FlowCanvas({
         onClick={() => onSelect(node.id)}
         onRefreshAgents={onRefreshAgents}
         onDuplicate={node.type === 'trigger' ? undefined : onDuplicateNode ? () => onDuplicateNode(node.id) : undefined}
+        onMakeSubflow={node.type === 'trigger' || contained.has(node.id) || !onMakeSubflow ? undefined : () => onMakeSubflow(node.id)}
         onDelete={node.type === 'trigger' ? undefined : onDeleteNode ? () => onDeleteNode(node.id) : undefined}
         draggable={node.type !== 'trigger' && node.type !== 'condition' && node.type !== 'switch'}
         onDragStartNode={setDragId}

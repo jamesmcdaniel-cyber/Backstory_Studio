@@ -18,6 +18,7 @@ import { httpOutputFields, outputFieldsFromJsonSchema } from '@/lib/flows/schema
 import { validateFlowGraph } from '@/lib/flows/validate'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { defaultStepLabel, stepLabelsOf } from '@/lib/flows/token-text'
+import { planSubflowExtraction, replaceRangeWithSubflow } from '@/lib/flows/subflow-extract'
 import { missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { storedRunInput, prefillTextFromRunInput } from '@/lib/flows/reuse-input'
 import { FlowCanvas, type FlowInsertSeed } from '@/components/flows/flow-canvas'
@@ -345,6 +346,7 @@ function FlowBuilder() {
     },
     [graph],
   )
+
   const undo = useCallback(() => {
     const prev = undoStack.current.pop()
     if (!prev) return
@@ -376,6 +378,48 @@ function FlowBuilder() {
     },
     [graph, agentsById],
   )
+
+  // "Make a subflow": the picked start step + pending end/name choices.
+  const [subflowDraft, setSubflowDraft] = useState<{ startId: string; endId: string; name: string } | null>(null)
+  const [makingSubflow, setMakingSubflow] = useState(false)
+  const makeSubflow = useCallback(async () => {
+    if (!subflowDraft) return
+    const plan = planSubflowExtraction(graph, subflowDraft.startId, subflowDraft.endId)
+    if ('error' in plan) {
+      toast.error(plan.error)
+      return
+    }
+    const fallback = `${name || 'Flow'}: ${labelForNode(subflowDraft.startId)}`
+    const childName = subflowDraft.name.trim() || fallback
+    setMakingSubflow(true)
+    try {
+      const createRes = await fetch('/api/flows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: childName, status: 'ACTIVE', graph: plan.childGraph }),
+      })
+      const created = await createRes.json().catch(() => ({}))
+      if (!createRes.ok || !created?.flow?.id) {
+        toast.error(created?.error || 'Could not create the subflow.')
+        return
+      }
+      const publishRes = await fetch(`/api/flows/${created.flow.id}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      if (!publishRes.ok) {
+        toast.error('The subflow was created but could not be published — publish it manually, then wire it up.')
+        return
+      }
+      const { graph: nextGraph } = replaceRangeWithSubflow(graph, plan, created.flow.id, childName)
+      commitGraph(nextGraph)
+      setSubflowDraft(null)
+      toast.success(`Made "${childName}" — these steps now run as their own flow.`)
+    } finally {
+      setMakingSubflow(false)
+    }
+  }, [subflowDraft, graph, commitGraph, name, labelForNode])
   const jumpToNode = useCallback((nodeId: string) => {
     if (viewingVersion) return
     setSelectedId(nodeId)
@@ -1034,6 +1078,7 @@ function FlowBuilder() {
               selectedId={selectedId}
               onSelect={viewingVersion ? () => {} : setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}
+              onMakeSubflow={viewingVersion ? undefined : (startId) => setSubflowDraft({ startId, endId: startId, name: '' })}
               onChangeNode={viewingVersion ? () => {} : (node) => setGraph((g) => updateNode(g, node))}
               onInsertAfter={
                 viewingVersion
@@ -1220,6 +1265,68 @@ function FlowBuilder() {
           </ResizablePanel>
         )}
       </div>
+
+      {subflowDraft && (() => {
+        // Every main-chain step from the picked start downward is a legal end.
+        const candidates: string[] = []
+        const guard = new Set<string>()
+        let cursor: string | null = subflowDraft.startId
+        while (cursor && !guard.has(cursor)) {
+          guard.add(cursor)
+          candidates.push(cursor)
+          const edge = graph.edges.find((e) => e.source === cursor && !e.branch)
+          cursor = edge ? edge.target : null
+        }
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={() => setSubflowDraft(null)}>
+            <div className="w-full max-w-md rounded-2xl border border-border bg-background p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <p className="text-sm font-semibold">Make a subflow</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Moves the selected steps into their own flow and runs it here as one step.
+              </p>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium">From</label>
+                  <p className="rounded-md border border-border bg-muted/40 px-2.5 py-2 text-sm">{labelForNode(subflowDraft.startId)}</p>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium" htmlFor="subflow-end">Through</label>
+                  <select
+                    id="subflow-end"
+                    className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm"
+                    value={subflowDraft.endId}
+                    onChange={(event) => setSubflowDraft({ ...subflowDraft, endId: event.target.value })}
+                  >
+                    {candidates.map((candidate) => (
+                      <option key={candidate} value={candidate}>
+                        {labelForNode(candidate)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium" htmlFor="subflow-name">Name the new flow</label>
+                  <input
+                    id="subflow-name"
+                    className="w-full rounded-md border border-border bg-background px-2.5 py-2 text-sm"
+                    value={subflowDraft.name}
+                    placeholder={`${name || 'Flow'}: ${labelForNode(subflowDraft.startId)}`}
+                    onChange={(event) => setSubflowDraft({ ...subflowDraft, name: event.target.value })}
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="ghost" size="sm" onClick={() => setSubflowDraft(null)}>
+                    Cancel
+                  </Button>
+                  <Button size="sm" loading={makingSubflow} onClick={() => void makeSubflow()}>
+                    Create subflow
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
