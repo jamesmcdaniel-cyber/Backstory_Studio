@@ -2,12 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isSupported, extractText, chunkText } from '../extract'
 
-test('isSupported accepts text formats and rejects binaries', () => {
+test('isSupported accepts text formats and PDFs, rejects other binaries', () => {
   assert.equal(isSupported('text/plain', 'notes.txt'), true)
   assert.equal(isSupported('application/json', 'data.json'), true)
   assert.equal(isSupported('', 'README.md'), true)
-  assert.equal(isSupported('application/pdf', 'doc.pdf'), false)
+  assert.equal(isSupported('application/pdf', 'doc.pdf'), true)
+  assert.equal(isSupported('', 'report.PDF'), true)
   assert.equal(isSupported('image/png', 'logo.png'), false)
+  assert.equal(isSupported('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'doc.docx'), false)
 })
 
 test('extractText decodes text and strips HTML markup', () => {
