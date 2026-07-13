@@ -29,9 +29,10 @@ test('withTimeout surfaces the timeout message', async () => {
   )
 })
 
-test('only http steps may retry after a timeout — agent/tool executions stay live when abandoned', () => {
+test('only http steps may retry after a timeout — agent/tool/ai executions stay live when abandoned', () => {
   assert.equal(shouldRetryAfterTimeout('agent'), false)
   assert.equal(shouldRetryAfterTimeout('tool'), false)
+  assert.equal(shouldRetryAfterTimeout('ai'), false)
   assert.equal(shouldRetryAfterTimeout('http'), true)
 })
 

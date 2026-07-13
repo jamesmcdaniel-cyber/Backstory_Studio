@@ -9,13 +9,15 @@ export class FlowTimeoutError extends Error {}
 
 /**
  * Retry-after-TIMEOUT policy per step kind (hard errors always retry up to
- * `retries`). Agent and tool timeouts merely ABANDON the in-flight call —
+ * `retries`). Agent, tool, and ai timeouts merely ABANDON the in-flight call —
  * Promise.race / withTimeout cannot cancel it — so the first execution may
  * still be running; retrying would spawn a second concurrent execution
- * (double token spend, duplicate side effects). HTTP timeouts abort the
- * request itself (AbortController), so retrying them cannot stack live work.
+ * (double token spend, duplicate side effects — same reasoning as tool: a
+ * single-turn model call has no cancellation hook either). HTTP timeouts
+ * abort the request itself (AbortController), so retrying them cannot stack
+ * live work.
  */
-export function shouldRetryAfterTimeout(kind: 'agent' | 'tool' | 'http'): boolean {
+export function shouldRetryAfterTimeout(kind: 'agent' | 'tool' | 'http' | 'ai'): boolean {
   return kind === 'http'
 }
 

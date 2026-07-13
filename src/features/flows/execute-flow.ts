@@ -25,6 +25,9 @@ import { resolveHttpConnectionToken } from './http-auth'
 import { shouldPersistInterpreterStep } from './run-step-persistence'
 import { prepareToolArgs } from './tool-args'
 import { flowToolOutput } from './tool-output'
+import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
+import { buildAiPrompt, type AiPromptInput } from '@/lib/flows/ai-prompts'
+import { createModelRunner, DEFAULT_AGENT_MODEL, DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
 
 export type FlowExecutionJob = {
   flowId: string
@@ -487,44 +490,105 @@ export async function runFlowExecution(
         await finish({ status: 'succeeded', output })
         return { output }
       }
-      // http
-      const request = prepareHttpRequest(node.config)
-      // Optional connection auth: resolve a fresh token server-side and inject
-      // it as the Authorization header — unless the user set their own, which
-      // wins. The token lives only in the outbound request, never in the
-      // persisted step input/output or logs.
-      const httpConnectionId = typeof node.config.connectionId === 'string' ? node.config.connectionId.trim() : ''
-      if (httpConnectionId) {
-        const token = await resolveHttpConnectionToken({
-          connectionId: httpConnectionId,
-          organizationId: job.organizationId,
-          userId: job.userId,
-        })
-        request.init.headers = withBearerAuthorization(request.init.headers as Record<string, string>, token)
-      }
-      const retries = flowActionRetries(node.config.retries)
-      const output = await runWithRetries(async () => {
-        await assertPublicUrl(request.url) // SSRF guard: re-check before every attempt
-        const controller = new AbortController()
-        let timedOut = false
-        const timer = setTimeout(() => {
-          timedOut = true
-          controller.abort()
-        }, request.timeoutMs)
-        try {
-          const response = await fetch(request.url, { ...request.init, signal: controller.signal })
-          const nextOutput = await responseOutput(response, request.responseType, HTTP_MAX_RESPONSE_CHARS)
-          if (request.failOnHttpError && !nextOutput.ok) throw new Error(`HTTP ${nextOutput.status}: ${nextOutput.bodyText.slice(0, 200)}`)
-          return nextOutput
-        } catch (error) {
-          if (timedOut) throw new Error(`HTTP request timed out after ${request.timeoutMs}ms`)
-          throw error
-        } finally {
-          clearTimeout(timer)
+      if (node.kind === 'ai') {
+        // Single-turn model call (WS14): the interpreter already resolved
+        // input/instructions against the flow context (see interpret.ts's
+        // 'ai' branch); every other field here (aiOp, model, categories,
+        // outputFields, score bounds) is a static read as-is off the config,
+        // same as tool/http's retries/timeoutMs.
+        const aiData = node.config as AiPromptInput
+        const prompt = buildAiPrompt(aiData)
+        const model = aiData.model === 'smart' ? DEFAULT_AGENT_MODEL : DEFAULT_SUMMARY_MODEL
+        const runner = createModelRunner(model)
+        // Structured ops (extract/categorize/score) get the JSON-contract
+        // instruction appended to the user message before the call — same
+        // idiom as the 'agent' node's structured branch in interpret.ts.
+        const user = prompt.structuredFields
+          ? `${prompt.user}\n\n${structuredResponseInstruction(prompt.structuredFields)}`
+          : prompt.user
+
+        const retries = flowActionRetries(node.config.retries)
+        const timeoutMs = flowActionTimeoutMs(node.config.timeoutMs)
+        // retryOnTimeout=false: same reasoning as the tool path above — a
+        // timed-out model call is only abandoned, not cancelled, so retrying
+        // could run it a second time concurrently (double token spend). Hard
+        // errors keep the retry budget.
+        const turn = await runWithRetries(
+          async () => runner.next(runner.start(user), prompt.system, []),
+          {
+            retries,
+            timeoutMs,
+            retryOnTimeout: shouldRetryAfterTimeout('ai'),
+            timeoutMessage: timeoutMs
+              ? `AI step timed out after ${Math.round(timeoutMs / 1000)}s — the call may still be finishing in the background.`
+              : undefined,
+          },
+        )
+
+        if (!prompt.structuredFields) {
+          await finish({ status: 'succeeded', output: turn.text })
+          return { output: turn.text }
         }
-      }, { retries })
-      await finish({ status: 'succeeded', output })
-      return { output }
+        // Structured ops never throw on a malformed/invalid reply — parse and
+        // postValidate failures resolve the step as a normal failed output,
+        // exactly like a rejected approval above.
+        const parsed = parseStructuredAgentOutput(turn.text, prompt.structuredFields)
+        if (parsed.error) {
+          await finish({ status: 'failed', error: parsed.error })
+          return { error: parsed.error }
+        }
+        const validationError = prompt.postValidate(parsed.output ?? {})
+        if (validationError) {
+          await finish({ status: 'failed', error: validationError })
+          return { error: validationError }
+        }
+        await finish({ status: 'succeeded', output: parsed.output })
+        return { output: parsed.output }
+      }
+      if (node.kind === 'http') {
+        const request = prepareHttpRequest(node.config)
+        // Optional connection auth: resolve a fresh token server-side and inject
+        // it as the Authorization header — unless the user set their own, which
+        // wins. The token lives only in the outbound request, never in the
+        // persisted step input/output or logs.
+        const httpConnectionId = typeof node.config.connectionId === 'string' ? node.config.connectionId.trim() : ''
+        if (httpConnectionId) {
+          const token = await resolveHttpConnectionToken({
+            connectionId: httpConnectionId,
+            organizationId: job.organizationId,
+            userId: job.userId,
+          })
+          request.init.headers = withBearerAuthorization(request.init.headers as Record<string, string>, token)
+        }
+        const retries = flowActionRetries(node.config.retries)
+        const output = await runWithRetries(async () => {
+          await assertPublicUrl(request.url) // SSRF guard: re-check before every attempt
+          const controller = new AbortController()
+          let timedOut = false
+          const timer = setTimeout(() => {
+            timedOut = true
+            controller.abort()
+          }, request.timeoutMs)
+          try {
+            const response = await fetch(request.url, { ...request.init, signal: controller.signal })
+            const nextOutput = await responseOutput(response, request.responseType, HTTP_MAX_RESPONSE_CHARS)
+            if (request.failOnHttpError && !nextOutput.ok) throw new Error(`HTTP ${nextOutput.status}: ${nextOutput.bodyText.slice(0, 200)}`)
+            return nextOutput
+          } catch (error) {
+            if (timedOut) throw new Error(`HTTP request timed out after ${request.timeoutMs}ms`)
+            throw error
+          } finally {
+            clearTimeout(timer)
+          }
+        }, { retries })
+        await finish({ status: 'succeeded', output })
+        return { output }
+      }
+      // Exhaustive over RunActionFn's node.kind ('tool' | 'http' | 'ai') — this
+      // only fires if a future kind is added here without a matching branch
+      // above, so it fails loudly instead of silently misrouting into http
+      // (the bug this restructure closed for 'ai').
+      throw new Error('Unsupported flow action kind')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await finish({ status: 'failed', error: message })
