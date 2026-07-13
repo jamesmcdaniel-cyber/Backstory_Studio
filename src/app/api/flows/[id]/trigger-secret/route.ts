@@ -5,6 +5,24 @@ import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { hashToken } from '@/lib/crypto/secrets'
 
+// Read-only status for the builder: does a secret exist, and what is the URL.
+// NEVER returns the secret — plaintext exists only in the POST mint/rotate response.
+export const GET = withAuthenticatedApi(async (request, auth) => {
+  const id = request.nextUrl.pathname.split('/').at(-2)
+  if (!id) throw new ApiError('Flow id is required')
+  const flow = await prisma.flow.findFirst({
+    where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
+  })
+  if (!flow) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  const trigger = (flow.trigger && typeof flow.trigger === 'object' && !Array.isArray(flow.trigger) ? flow.trigger : {}) as Record<string, unknown>
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || ''
+  return {
+    success: true,
+    hasSecret: typeof trigger.webhookSecretHash === 'string',
+    url: `${baseUrl}/api/flows/${flow.id}/trigger`,
+  }
+})
+
 // Mint (or rotate) the flow's webhook trigger secret. Mirrors the agent
 // trigger-secret: only a SHA-256 hash is stored (inside flow.trigger), so the
 // plaintext is returned exactly once at mint/rotate time.
@@ -28,10 +46,6 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   }
 
   if (hasSecret && !rotate) {
-    await prisma.flow.update({
-      where: { id: flow.id, organizationId: auth.organizationId },
-      data: { trigger: { ...trigger, type: 'webhook' } },
-    }).catch(() => undefined)
     return { ...base, hasSecret: true, secret: null }
   }
 
