@@ -48,6 +48,7 @@ import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { orgMemberLabel, type OrgMember, type ToolCatalog } from './step-drawer'
+import { TriggerEditor, type TriggerData } from './trigger-editor'
 import { AdvancedParamsSection } from './advanced-params'
 import { DataTree } from './data-tree'
 import { TokenTextEditor, type TokenTextEditorHandle } from './token-text-editor'
@@ -64,7 +65,6 @@ import {
 export type StepStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'waiting' | 'skipped' | 'stopped' | 'resumed'
 
 type Agent = { id: string; title: string }
-type TriggerData = { type?: 'manual' | 'schedule' | 'webhook' | 'signal'; inputFields?: TriggerInputField[]; input?: string }
 type KeyValueRow = { key: string; value: string }
 type InputKind = 'text' | 'yesno' | 'file' | 'email' | 'number' | 'date'
 
@@ -290,6 +290,8 @@ export function StepCard({
   dataFields,
   labelCtx,
   variableNames,
+  flowId,
+  published,
   onChange,
   onClick,
   onRefreshAgents,
@@ -313,6 +315,8 @@ export function StepCard({
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
   variableNames?: string[]
+  flowId?: string
+  published?: boolean
   onChange?: (node: FlowNode) => void
   onClick?: () => void
   onRefreshAgents?: () => void
@@ -649,7 +653,7 @@ export function StepCard({
             className="overflow-hidden"
           >
             <div onClick={stopEvent} onFocus={stopEvent} className="border-t border-slate-200 px-5 py-4">
-              {renderNodeBody({ node, agents, members, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors, variableNames })}
+              {renderNodeBody({ node, agents, members, toolCatalog, update, onRefreshAgents, tokenWiring, showErrors, variableNames, flowId, published })}
             </div>
           </motion.div>
         ) : (
@@ -732,6 +736,8 @@ function renderNodeBody({
   tokenWiring,
   showErrors,
   variableNames,
+  flowId,
+  published,
 }: {
   node: FlowNode
   agents: Agent[]
@@ -742,10 +748,12 @@ function renderNodeBody({
   tokenWiring: TokenEditorWiring
   showErrors?: boolean
   variableNames?: string[]
+  flowId?: string
+  published?: boolean
 }) {
   switch (node.type) {
     case 'trigger':
-      return <TriggerBody node={node} update={update} />
+      return <TriggerBody node={node} update={update} flowId={flowId} published={published} />
     case 'agent':
       return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'http':
@@ -779,7 +787,17 @@ function renderNodeBody({
   }
 }
 
-function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigger' }>; update: (node: FlowNode) => void }) {
+function TriggerBody({
+  node,
+  update,
+  flowId,
+  published,
+}: {
+  node: Extract<FlowNode, { type: 'trigger' }>
+  update: (node: FlowNode) => void
+  flowId?: string
+  published?: boolean
+}) {
   const [choosingInput, setChoosingInput] = useState(false)
   const trigger = triggerData(node)
   const fields = triggerInputFieldsFromTrigger(trigger)
@@ -788,7 +806,6 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
     const option = INPUT_TYPES.find((type) => type.id === kind) ?? INPUT_TYPES[0]
     setTrigger({
       ...trigger,
-      type: 'manual',
       inputFields: [
         ...fields,
         {
@@ -803,16 +820,22 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
   const updateField = (index: number, patch: Partial<TriggerInputField>) => {
     setTrigger({
       ...trigger,
-      type: 'manual',
       inputFields: fields.map((field, fieldIndex) => (fieldIndex === index ? { ...field, ...patch } : field)),
     })
   }
   const removeField = (index: number) => {
-    setTrigger({ ...trigger, type: 'manual', inputFields: fields.filter((_, fieldIndex) => fieldIndex !== index) })
+    setTrigger({ ...trigger, inputFields: fields.filter((_, fieldIndex) => fieldIndex !== index) })
   }
 
   return (
     <div className="space-y-4">
+      <TriggerEditor
+        flowId={flowId ?? ''}
+        trigger={trigger}
+        onChange={setTrigger}
+        published={published}
+        classes={{ field: controlClass, label: labelClass }}
+      />
       {fields.length > 0 && (
         <div className="space-y-3">
           {fields.map((field, fieldIndex) => {

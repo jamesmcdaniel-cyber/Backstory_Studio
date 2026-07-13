@@ -122,6 +122,8 @@ export function FlowCanvas({
   dataFields,
   labelCtx,
   variableNames,
+  flowId,
+  published,
   statusByNode,
   issuesByNode,
   highlightIds,
@@ -146,6 +148,8 @@ export function FlowCanvas({
   dataFields?: DataField[]
   labelCtx?: TokenLabelContext
   variableNames?: string[]
+  flowId?: string
+  published?: boolean
   statusByNode: Record<string, StepStatus>
   issuesByNode?: Record<string, { errors: number; warnings: number; items: { level: 'error' | 'warning'; message: string }[] }>
   highlightIds?: string[]
@@ -243,7 +247,8 @@ export function FlowCanvas({
           return `Runs ${schedule.type ?? 'daily'}${schedule.time ? ` at ${schedule.time}` : ''} (${schedule.timezone || 'UTC'})`
         }
         if (type === 'signal') return `Listens for "${trigger.signal || 'unnamed signal'}"`
-        // webhook and manual keep the original input-count line.
+        if (type === 'webhook') return published === false ? `${inputLine} · publish to arm` : inputLine
+        // manual keeps the original input-count line.
         return inputLine
       }
       case 'agent':
@@ -311,6 +316,8 @@ export function FlowCanvas({
         dataFields={selectedId === node.id ? dataFields : undefined}
         labelCtx={labelCtx}
         variableNames={selectedId === node.id ? variableNames : undefined}
+        flowId={flowId}
+        published={published}
         onChange={onChangeNode}
         onClick={() => onSelect(node.id)}
         onRefreshAgents={onRefreshAgents}

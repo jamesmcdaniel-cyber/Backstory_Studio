@@ -84,6 +84,7 @@ export function TriggerEditor({
   // instead of requiring a manual mint click just to see it — GET never
   // returns the secret itself, only hasSecret.
   useEffect(() => {
+    if (!flowId) return
     if (type !== 'webhook') return
     let alive = true
     fetch(`/api/flows/${flowId}/trigger-secret`)

@@ -997,6 +997,8 @@ function FlowBuilder() {
               dataFields={dataFields}
               labelCtx={labelCtx}
               variableNames={upstreamVariables.map((variable) => variable.name)}
+              flowId={id}
+              published={published}
               statusByNode={viewingVersion ? {} : statusByNode}
               issuesByNode={viewingVersion ? undefined : issuesByNode}
               highlightIds={viewingVersion ? [] : highlightIds}
