@@ -29,7 +29,7 @@ test('subflow node parses and validates: missing flow errors, self-reference err
   const empty = validateFlowGraph(graph)
   assert.ok(empty.errors.some((issue) => issue.code === 'SUBFLOW_NO_FLOW'))
 
-  graph = { ...graph, nodes: graph.nodes.map((n) => (n.id === subflowNode.id ? { ...n, data: { ...n.data, flowId: 'me' } } : n)) }
+  graph = { ...graph, nodes: graph.nodes.map((n) => (n.id === subflowNode.id && n.type === 'subflow' ? { ...n, data: { ...n.data, flowId: 'me' } } : n)) }
   const self = validateFlowGraph(graph, { flowId: 'me' })
   assert.ok(self.errors.some((issue) => issue.code === 'SUBFLOW_SELF'))
   const other = validateFlowGraph(graph, { flowId: 'someone-else' })
