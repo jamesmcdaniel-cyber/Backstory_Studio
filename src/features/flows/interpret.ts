@@ -514,6 +514,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         clauses: node.data.clauses,
         fields: node.data.fields,
         ctx,
+        // Find/replace text and positions may reference flow data too.
+        find: node.data.find === undefined ? undefined : resolveTemplate(node.data.find, ctx),
+        replaceWith: node.data.replaceWith === undefined ? undefined : resolveTemplate(node.data.replaceWith, ctx),
+        index: node.data.index === undefined ? undefined : resolveTemplate(node.data.index, ctx),
+        count: node.data.count === undefined ? undefined : resolveTemplate(node.data.count, ctx),
+        fromEnd: node.data.fromEnd,
       })
       if ('error' in res) {
         emit({ nodeId: node.id, status: 'failed', error: res.error })

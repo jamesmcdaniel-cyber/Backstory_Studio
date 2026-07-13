@@ -69,6 +69,11 @@ export const BUILTIN_GROUPS: PickerGroup[] = [
       { id: 'data-html-table', label: 'Create HTML table', description: 'Turn a list of records into an HTML table.', mode: 'action', stepType: 'data', seed: { dataOp: 'htmlTable' } },
       { id: 'data-filter-array', label: 'Filter array', description: 'Keep only the list items that match your conditions.', mode: 'action', stepType: 'data', seed: { dataOp: 'filterArray' } },
       { id: 'data-select', label: 'Select', description: 'Map each list item to a new shape with the fields you choose.', mode: 'action', stepType: 'data', seed: { dataOp: 'select' } },
+      { id: 'data-split', label: 'Split text', description: 'Split text at a separator into a list.', mode: 'action', stepType: 'data', seed: { dataOp: 'split' } },
+      { id: 'data-replace', label: 'Find & replace', description: 'Replace every occurrence of some text with other text.', mode: 'action', stepType: 'data', seed: { dataOp: 'replace' } },
+      { id: 'data-get-item', label: 'Get item', description: 'Take one item from a list by its position.', mode: 'action', stepType: 'data', seed: { dataOp: 'getItem' } },
+      { id: 'data-flatten', label: 'Flatten list', description: 'Turn nested lists into one flat list.', mode: 'action', stepType: 'data', seed: { dataOp: 'flatten' } },
+      { id: 'data-trim', label: 'Trim list', description: 'Remove items from the start or end of a list.', mode: 'action', stepType: 'data', seed: { dataOp: 'trim' } },
     ],
   },
   {

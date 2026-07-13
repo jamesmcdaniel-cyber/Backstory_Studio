@@ -218,7 +218,7 @@ const variableNode = z.object({
 })
 
 /** Pure transforms a data operation step can perform (MS Data Operation parity). */
-export const DATA_OPS = ['compose', 'parseJson', 'join', 'csvTable', 'htmlTable', 'filterArray', 'select'] as const
+export const DATA_OPS = ['compose', 'parseJson', 'join', 'csvTable', 'htmlTable', 'filterArray', 'select', 'split', 'replace', 'getItem', 'flatten', 'trim'] as const
 export type DataOp = (typeof DATA_OPS)[number]
 // Deterministic data-shaping step between other steps: no LLM, no I/O. `input`
 // is templated (usually an exact {{step.x.output}} token so structure survives);
@@ -239,6 +239,14 @@ const dataNode = z.object({
     schema: z.string().optional(),
     clauses: z.array(conditionClauseSchema).optional(),
     fields: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
+    /** replace: the text to find (required) and its replacement (default ''). */
+    find: z.string().optional(),
+    replaceWith: z.string().optional(),
+    /** getItem: which item to take — 0-based; negatives count from the end. */
+    index: z.string().optional(),
+    /** trim: how many items to remove (default 1) and from which end. */
+    count: z.string().optional(),
+    fromEnd: z.boolean().optional(),
   }),
 })
 

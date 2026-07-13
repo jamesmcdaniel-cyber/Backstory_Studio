@@ -15,6 +15,11 @@ export const DATA_OP_INPUT_PLACEHOLDER: Record<DataOp, string> = {
   htmlTable: 'The list of records to turn into a table',
   filterArray: 'The list to filter',
   select: 'The list to map',
+  split: 'The text to split into a list',
+  replace: 'The text to search through',
+  getItem: 'The list to take an item from',
+  flatten: 'The nested list to flatten',
+  trim: 'The list to trim items from',
 }
 
 /** One-line helper under each data operation's fields. */
@@ -26,6 +31,11 @@ export const DATA_OP_HELPER: Record<DataOp, string> = {
   htmlTable: 'Builds an HTML table from the list — columns come from the record fields.',
   filterArray: 'Keeps only the items where every condition passes. Conditions check each item.',
   select: 'Maps every item to a new shape — values can reference fields of the current item.',
+  split: 'Splits the text at every separator into a list of trimmed pieces.',
+  replace: 'Replaces every occurrence of the search text with the replacement.',
+  getItem: 'Takes one item from the list by position — negatives count from the end.',
+  flatten: 'Unnests lists inside lists into one flat list.',
+  trim: 'Removes a number of items from the start (or end) of the list.',
 }
 
 /** Placeholder for a variable step's value field, per operation. */

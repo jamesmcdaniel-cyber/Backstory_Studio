@@ -28,6 +28,14 @@ export type DataOpConfig = {
    * values can also reference trigger/step/var data alongside `{{item.*}}`.
    */
   ctx?: FlowContext
+  /** replace: the text to find and its replacement (default ''). */
+  find?: string
+  replaceWith?: string
+  /** getItem: 0-based position; negatives count from the end. Default 0. */
+  index?: string
+  /** trim: items to remove (default 1) and which end to remove from. */
+  count?: string
+  fromEnd?: boolean
 }
 
 export type DataOpResult = { output: unknown } | { error: string }
@@ -41,6 +49,11 @@ export const DATA_OP_LABELS: Record<DataOp, string> = {
   htmlTable: 'Create HTML table',
   filterArray: 'Filter array',
   select: 'Select',
+  split: 'Split text',
+  replace: 'Find & replace',
+  getItem: 'Get item',
+  flatten: 'Flatten list',
+  trim: 'Trim list',
 }
 
 const isBlank = (value: unknown): boolean => value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
@@ -149,6 +162,48 @@ export function runDataOp(op: DataOp, config: DataOpConfig): DataOpResult {
       return clauses.every((clause) => evalClause(clause, ctx))
     })
     return { output }
+  }
+
+  if (op === 'split') {
+    // Text → list. Structured input is stringified first (itemText), so a
+    // list accidentally wired here degrades predictably instead of failing.
+    const text = typeof config.input === 'string' ? config.input : itemText(config.input)
+    const separator = config.separator ?? ','
+    return { output: text.split(separator).map((piece) => piece.trim()).filter((piece) => piece !== '') }
+  }
+
+  if (op === 'replace') {
+    if (!config.find) return { error: `${label} needs the text to find.` }
+    const text = typeof config.input === 'string' ? config.input : itemText(config.input)
+    return { output: text.split(config.find).join(config.replaceWith ?? '') }
+  }
+
+  if (op === 'getItem') {
+    const list = asList(config.input)
+    if (!list) return { error: `${label} needs a list to take an item from — the input wasn't a list.` }
+    const raw = (config.index ?? '').trim()
+    const index = raw === '' ? 0 : Number(raw)
+    if (!Number.isInteger(index)) return { error: `${label} needs a whole-number position — got "${raw}".` }
+    const resolved = index < 0 ? list.length + index : index
+    if (resolved < 0 || resolved >= list.length) {
+      return { error: `${label} asked for item ${index} but the list has ${list.length} item${list.length === 1 ? '' : 's'}.` }
+    }
+    return { output: list[resolved] }
+  }
+
+  if (op === 'flatten') {
+    const list = asList(config.input)
+    if (!list) return { error: `${label} needs a list to flatten — the input wasn't a list.` }
+    return { output: list.flat(Infinity) }
+  }
+
+  if (op === 'trim') {
+    const list = asList(config.input)
+    if (!list) return { error: `${label} needs a list to trim — the input wasn't a list.` }
+    const raw = (config.count ?? '').trim()
+    const count = raw === '' ? 1 : Number(raw)
+    if (!Number.isInteger(count) || count < 0) return { error: `${label} needs a whole number of items to remove — got "${raw}".` }
+    return { output: config.fromEnd ? list.slice(0, Math.max(0, list.length - count)) : list.slice(count) }
   }
 
   // select
