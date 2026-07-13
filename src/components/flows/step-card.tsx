@@ -854,6 +854,15 @@ function TriggerBody({ node, update }: { node: Extract<FlowNode, { type: 'trigge
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
+                <div className="min-w-0 sm:col-start-2 sm:col-end-4">
+                  <input
+                    value={field.default ?? ''}
+                    onChange={(event) => updateField(fieldIndex, { default: event.target.value || undefined })}
+                    className={cn(controlClass, 'w-full min-w-0')}
+                    placeholder="Default value if none is provided"
+                    aria-label="Default value"
+                  />
+                </div>
               </div>
             )
           })}
