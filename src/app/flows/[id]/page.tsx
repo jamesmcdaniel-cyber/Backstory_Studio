@@ -1084,6 +1084,7 @@ function FlowBuilder() {
               members={members}
               toolCatalog={toolCatalog}
               dataFields={dataFields}
+              published={published}
               labelCtx={labelCtx}
               variableNames={upstreamVariables.map((variable) => variable.name)}
               onChange={(node) => setGraph((g) => updateNode(g, node))}
