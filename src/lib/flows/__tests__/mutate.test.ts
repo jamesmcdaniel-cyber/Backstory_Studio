@@ -47,6 +47,13 @@ test('insertNodeAfter creates typed steps (http, tool, stop)', () => {
   assert.equal(b.graph.nodes.find((n) => n.id === b.nodeId)?.type, 'tool')
 })
 
+test('insertNodeAfter creates an ai step defaulted to the ask op', () => {
+  const { graph, nodeId } = insertNodeAfter(emptyGraph(), 'trigger', 'ai')
+  const node = graph.nodes.find((n) => n.id === nodeId)
+  assert.equal(node?.type, 'ai')
+  assert.deepEqual(node?.type === 'ai' ? node.data : null, { aiOp: 'ask', input: '', instructions: '' })
+})
+
 test('appendToBranch wires the first node of an empty false branch', () => {
   let g = insertNodeAfter(emptyGraph(), 'trigger', 'condition').graph
   const condId = g.nodes.find((n) => n.type === 'condition')!.id

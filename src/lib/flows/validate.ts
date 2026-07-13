@@ -67,6 +67,20 @@ function nodeLabel(node: FlowNode | undefined) {
           return 'Select'
       }
       break
+    case 'ai':
+      switch (node.data.aiOp) {
+        case 'ask':
+          return 'Ask AI'
+        case 'extract':
+          return 'Extract data'
+        case 'categorize':
+          return 'Categorize'
+        case 'summarize':
+          return 'Summarize'
+        case 'score':
+          return 'Score'
+      }
+      break
     case 'humanReview':
       return 'Request information'
     case 'output':
@@ -518,6 +532,30 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         fields.forEach((field, index) => {
           if (!field.name.trim()) add(issues, 'error', 'MISSING_DATA_FIELD_NAME', `${nodeLabel(node)} field ${index + 1} needs a name.`, node.id)
         })
+      }
+    }
+
+    if (node.type === 'ai') {
+      // A blank input is a nudge, not a blocker (mirrors EMPTY_AGENT_INPUT) —
+      // it's commonly wired from a default token the user hasn't replaced yet.
+      if (!node.data.input?.trim()) {
+        add(issues, 'warning', 'AI_EMPTY_INPUT', `${nodeLabel(node)} has an empty input.`, node.id)
+      }
+      if (node.data.aiOp === 'extract' && !(node.data.outputFields ?? []).some((field) => field.name.trim())) {
+        add(issues, 'error', 'AI_EXTRACT_NO_FIELDS', `${nodeLabel(node)} needs at least one field to extract.`, node.id)
+      }
+      if (node.data.aiOp === 'categorize' && (node.data.categories ?? []).filter((category) => category.trim()).length < 2) {
+        add(issues, 'error', 'AI_CATEGORIZE_TOO_FEW', `${nodeLabel(node)} needs at least two categories.`, node.id)
+      }
+      // Only a fully-specified range can be judged — a lone bound has nothing
+      // to compare against yet, so it's left alone rather than flagged.
+      if (
+        node.data.aiOp === 'score' &&
+        node.data.scoreMin !== undefined &&
+        node.data.scoreMax !== undefined &&
+        node.data.scoreMin >= node.data.scoreMax
+      ) {
+        add(issues, 'error', 'AI_SCORE_BAD_RANGE', `${nodeLabel(node)} needs a minimum score lower than the maximum.`, node.id)
       }
     }
   }

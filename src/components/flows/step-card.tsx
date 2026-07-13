@@ -87,6 +87,8 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   output: FileOutput,
   // NEUTRAL placeholder for Task 6 (builder UX) — icon/tone finalized with the join editor.
   join: GitMerge,
+  // NEUTRAL placeholder for Task 4 (AI step editor) — icon/tone finalized there.
+  ai: Bot,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -107,6 +109,8 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   output: 'bg-teal-600 text-white',
   // NEUTRAL placeholder for Task 6 (builder UX) — finalized with the join editor.
   join: 'bg-indigo-600 text-white',
+  // NEUTRAL placeholder for Task 4 (AI step editor) — finalized there.
+  ai: 'bg-slate-900 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {

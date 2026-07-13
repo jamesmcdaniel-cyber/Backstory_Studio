@@ -42,6 +42,8 @@ function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?
       return { op: 'initialize', name: '', varType: 'string', value: '' }
     case 'data':
       return { op: 'compose', input: '' }
+    case 'ai':
+      return { aiOp: 'ask', input: '', instructions: '' }
     case 'humanReview':
       return { message: '' }
     case 'output':

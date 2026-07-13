@@ -286,8 +286,45 @@ const joinNode = z.object({
   data: z.object({ label: z.string().optional(), note: z.string().optional() }),
 })
 
+/** Operations a first-class `ai` step can perform against the org's model. */
+export const AI_OPS = ['ask', 'extract', 'categorize', 'summarize', 'score'] as const
+export type AiOp = (typeof AI_OPS)[number]
+/** Display names for ai ops — the ONLY strings surfaces may show for them. */
+export const AI_OP_LABELS: Record<AiOp, string> = {
+  ask: 'Ask AI',
+  extract: 'Extract data',
+  categorize: 'Categorize',
+  summarize: 'Summarize',
+  score: 'Score',
+}
+// A single LLM call shaped by `aiOp` (WS14): `input` is the templated content
+// the model reads; `instructions` steers the op (freeform guidance for
+// ask/summarize, the extraction/categorization/scoring brief for the others).
+// `outputFields` names what an extract step pulls; `categories` lists a
+// categorize step's buckets; `scoreMin`/`scoreMax` bound a score step's range.
+// `model` picks a speed/quality tier — unset defers to the org default.
+const aiNode = z.object({
+  id: z.string(),
+  type: z.literal('ai'),
+  data: z.object({
+    aiOp: z.enum(AI_OPS),
+    input: z.string().optional(),
+    instructions: z.string().optional(),
+    model: z.enum(['fast', 'smart']).optional(),
+    outputFields: z.array(outputFieldSchema).optional(),
+    categories: z.array(z.string()).optional(),
+    scoreMin: z.number().optional(),
+    scoreMax: z.number().optional(),
+    label: z.string().optional(),
+    note: z.string().optional(),
+    onError: z.enum(['stop', 'continue', 'route']).optional(),
+    retries: z.number().int().min(0).max(5).optional(),
+    timeoutMs: z.number().int().min(1000).max(AGENT_RUN_TIMEOUT_MS).optional(),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

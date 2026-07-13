@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { flowGraphSchema, emptyGraph, triggerInputFieldSchema } from '../graph'
+import { flowGraphSchema, emptyGraph, triggerInputFieldSchema, AI_OPS } from '../graph'
 
 test('emptyGraph has a single manual trigger node and no edges', () => {
   const g = emptyGraph()
@@ -85,4 +85,88 @@ test('agent nodes accept responseFormat and humanAssistance', () => {
     assert.equal(agent.data.responseFormat, 'structured')
     assert.equal(agent.data.humanAssistance, false)
   }
+})
+
+test('ai node schema accepts every op', () => {
+  for (const aiOp of AI_OPS) {
+    const graph = flowGraphSchema.parse({
+      nodes: [
+        { id: 'trigger', type: 'trigger', data: {} },
+        { id: 'n1', type: 'ai', data: { aiOp, input: '{{trigger.input}}' } },
+      ],
+      edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+    })
+    const ai = graph.nodes.find((node) => node.id === 'n1')
+    assert.equal(ai?.type, 'ai')
+    if (ai?.type === 'ai') assert.equal(ai.data.aiOp, aiOp)
+  }
+})
+
+test('ai node schema rejects an unknown op', () => {
+  assert.throws(() =>
+    flowGraphSchema.parse({
+      nodes: [
+        { id: 'trigger', type: 'trigger', data: {} },
+        { id: 'n1', type: 'ai', data: { aiOp: 'translate', input: 'x' } },
+      ],
+      edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+    }),
+  )
+})
+
+test('ai node schema round-trips the full op-specific field set', () => {
+  const graph = flowGraphSchema.parse({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'n1',
+        type: 'ai',
+        data: {
+          aiOp: 'extract',
+          input: '{{trigger.input}}',
+          instructions: 'Pull the named fields from the text.',
+          model: 'smart',
+          outputFields: [{ name: 'amount', type: 'number' }],
+          categories: ['Urgent', 'Later'],
+          scoreMin: 1,
+          scoreMax: 10,
+          onError: 'continue',
+          retries: 2,
+          timeoutMs: 30000,
+        },
+      },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  })
+  const ai = graph.nodes[1]
+  assert.equal(ai.type, 'ai')
+  if (ai.type === 'ai') {
+    assert.equal(ai.data.model, 'smart')
+    assert.deepEqual(ai.data.outputFields, [{ name: 'amount', type: 'number' }])
+    assert.deepEqual(ai.data.categories, ['Urgent', 'Later'])
+    assert.equal(ai.data.scoreMin, 1)
+    assert.equal(ai.data.scoreMax, 10)
+    assert.equal(ai.data.onError, 'continue')
+    assert.equal(ai.data.retries, 2)
+  }
+})
+
+test('ai node schema allows timeouts up to 20 minutes but no further', () => {
+  const graph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'ai', data: { aiOp: 'ask', timeoutMs: 1_200_000 } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'n1' }],
+  }
+  assert.equal(flowGraphSchema.parse(graph).nodes[1].type, 'ai')
+  assert.throws(() =>
+    flowGraphSchema.parse({
+      ...graph,
+      nodes: [
+        { id: 'trigger', type: 'trigger', data: {} },
+        { id: 'n1', type: 'ai', data: { aiOp: 'ask', timeoutMs: 1_200_001 } },
+      ],
+    }),
+  )
 })

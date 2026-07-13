@@ -230,6 +230,9 @@ export function FlowCanvas({
         return node.data.label || 'Output'
       case 'join':
         return node.data.label || 'Join paths'
+      // NEUTRAL placeholder for Task 4 (AI step editor) — real per-op titles land there.
+      case 'ai':
+        return node.data.label || 'AI'
     }
   }
 

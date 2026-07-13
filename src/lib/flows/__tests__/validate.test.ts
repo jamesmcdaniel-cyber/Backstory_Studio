@@ -672,3 +672,113 @@ test('two empty output names read distinctly (indexed message)', () => {
   assert.equal(missing.length, 2)
   assert.notEqual(missing[0].message, missing[1].message) // indexed — the two reads differ
 })
+
+test('validateFlowGraph accepts a well-formed ask step with no findings', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'ai1', type: 'ai', data: { aiOp: 'ask', input: 'What is the sentiment of {{trigger.input}}?' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'ai1' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.errors, [])
+  assert.deepEqual(result.warnings, [])
+})
+
+test('validateFlowGraph warns (not errors) on a blank ai input', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'ai1', type: 'ai', data: { aiOp: 'ask', input: '   ' } },
+    ],
+    edges: [{ id: 'e1', source: 'trigger', target: 'ai1' }],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, true) // a nudge, not a blocker — mirrors EMPTY_AGENT_INPUT
+  assert.ok(result.warnings.some((issue) => issue.code === 'AI_EMPTY_INPUT' && issue.nodeId === 'ai1'))
+  assert.match(result.warnings.find((issue) => issue.code === 'AI_EMPTY_INPUT')?.message ?? '', /Ask AI has an empty input\./)
+})
+
+test('validateFlowGraph requires a named output field on an extract step', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'ai1', type: 'ai', data: { aiOp: 'extract', input: '{{trigger.input}}', label: 'Pull fields' } },
+      { id: 'ai2', type: 'ai', data: { aiOp: 'extract', input: '{{trigger.input}}', outputFields: [{ name: '  ', type: 'any' }] } },
+      { id: 'ai3', type: 'ai', data: { aiOp: 'extract', input: '{{trigger.input}}', outputFields: [{ name: 'amount', type: 'number' }] } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'ai1' },
+      { id: 'e2', source: 'ai1', target: 'ai2' },
+      { id: 'e3', source: 'ai2', target: 'ai3' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  const issue = result.errors.find((entry) => entry.code === 'AI_EXTRACT_NO_FIELDS' && entry.nodeId === 'ai1')
+  assert.ok(issue, 'expected AI_EXTRACT_NO_FIELDS for a node with no output fields at all')
+  assert.equal(issue?.message, 'Pull fields needs at least one field to extract.')
+  assert.ok(
+    result.errors.some((entry) => entry.code === 'AI_EXTRACT_NO_FIELDS' && entry.nodeId === 'ai2'),
+    'expected AI_EXTRACT_NO_FIELDS for a node whose only field has a blank name',
+  )
+  assert.equal(result.errors.some((entry) => entry.code === 'AI_EXTRACT_NO_FIELDS' && entry.nodeId === 'ai3'), false)
+})
+
+test('validateFlowGraph requires at least two non-blank categories on a categorize step', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'ai1', type: 'ai', data: { aiOp: 'categorize', input: '{{trigger.input}}' } },
+      { id: 'ai2', type: 'ai', data: { aiOp: 'categorize', input: '{{trigger.input}}', categories: ['Urgent', '  '] } },
+      { id: 'ai3', type: 'ai', data: { aiOp: 'categorize', input: '{{trigger.input}}', categories: ['Urgent', 'Later'] } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'ai1' },
+      { id: 'e2', source: 'ai1', target: 'ai2' },
+      { id: 'e3', source: 'ai2', target: 'ai3' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.equal(result.ok, false)
+  const issue = result.errors.find((entry) => entry.code === 'AI_CATEGORIZE_TOO_FEW' && entry.nodeId === 'ai1')
+  assert.ok(issue, 'expected AI_CATEGORIZE_TOO_FEW when categories is unset')
+  assert.equal(issue?.message, 'Categorize needs at least two categories.')
+  assert.ok(
+    result.errors.some((entry) => entry.code === 'AI_CATEGORIZE_TOO_FEW' && entry.nodeId === 'ai2'),
+    'expected AI_CATEGORIZE_TOO_FEW when only one category is non-blank',
+  )
+  assert.equal(result.errors.some((entry) => entry.code === 'AI_CATEGORIZE_TOO_FEW' && entry.nodeId === 'ai3'), false)
+})
+
+test('validateFlowGraph rejects a score step whose minimum is not below its maximum', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'ai1', type: 'ai', data: { aiOp: 'score', input: '{{trigger.input}}', scoreMin: 10, scoreMax: 1 } },
+      { id: 'ai2', type: 'ai', data: { aiOp: 'score', input: '{{trigger.input}}', scoreMin: 5, scoreMax: 5 } },
+      { id: 'ai3', type: 'ai', data: { aiOp: 'score', input: '{{trigger.input}}', scoreMin: 1, scoreMax: 10 } },
+      { id: 'ai4', type: 'ai', data: { aiOp: 'score', input: '{{trigger.input}}', scoreMin: 1 } },
+    ],
+    edges: [
+      { id: 'e1', source: 'trigger', target: 'ai1' },
+      { id: 'e2', source: 'ai1', target: 'ai2' },
+      { id: 'e3', source: 'ai2', target: 'ai3' },
+      { id: 'e4', source: 'ai3', target: 'ai4' },
+    ],
+  }
+  const result = validateFlowGraph(graph)
+  assert.ok(result.errors.some((entry) => entry.code === 'AI_SCORE_BAD_RANGE' && entry.nodeId === 'ai1'))
+  assert.ok(
+    result.errors.some((entry) => entry.code === 'AI_SCORE_BAD_RANGE' && entry.nodeId === 'ai2'),
+    'equal bounds are also an invalid range',
+  )
+  assert.equal(result.errors.some((entry) => entry.code === 'AI_SCORE_BAD_RANGE' && entry.nodeId === 'ai3'), false)
+  assert.equal(
+    result.errors.some((entry) => entry.code === 'AI_SCORE_BAD_RANGE' && entry.nodeId === 'ai4'),
+    false,
+    'a lone bound with nothing to compare against is not yet a bad range',
+  )
+})
