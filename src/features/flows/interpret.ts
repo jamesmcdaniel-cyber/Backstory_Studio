@@ -51,6 +51,10 @@ type Opts = {
   // their output (they are skipped, not re-run); `resumeNodeId` is the node that
   // was paused and should re-run with the user's reply injected.
   completed?: Record<string, unknown>
+  // Step keys in `completed` that FAILED with onError:'route' on the prior
+  // attempt: replay must follow the node's error edge again (the completed
+  // map alone can't express which edge the walk took).
+  completedRoutes?: Set<string>
   resumeNodeId?: string
   // The user's reply for the resuming node. Agent steps receive the reply
   // inside their adapter (execute-flow re-enters the paused execution with
@@ -402,6 +406,9 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const output = opts.completed[stepKey]
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'skipped', output })
+      // A route-failed step re-takes its error edge on replay — returning ok
+      // here would silently divert the resumed run down the normal path.
+      if (opts.completedRoutes?.has(stepKey)) return { kind: 'route', output }
       return { kind: 'ok', output }
     }
 

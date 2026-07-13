@@ -635,6 +635,21 @@ function FlowBuilder() {
     tick()
   }, [id])
 
+  const rerunFromStep = useCallback(async (runId: string, nodeId: string) => {
+    const response = await fetch(`/api/flows/${id}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fromRunId: runId, fromNodeId: nodeId }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      toast.error(data.error || 'Could not re-run from that step.')
+      return
+    }
+    toast.success('Re-running from that step — earlier steps replay their recorded results.')
+    pollRuns()
+  }, [id, pollRuns])
+
   const selectRun = useCallback(
     async (runId: string) => {
       pinnedRunId.current = runId
@@ -1237,6 +1252,7 @@ function FlowBuilder() {
               onClose={() => setShowRuns(false)}
               labelForNode={labelForNode}
               onReply={replyToRun}
+              onRerunFrom={(runId, nodeId) => void rerunFromStep(runId, nodeId)}
             />
           </ResizablePanel>
         )}

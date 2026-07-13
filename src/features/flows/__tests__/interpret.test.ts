@@ -1939,3 +1939,34 @@ test('knowledge step resolves the query and threads the hit list', async () => {
   assert.equal(calls[0].topK, 3)
   assert.deepEqual(result.output, { content: 'passage', filename: 'deck.pdf', score: 0.9 })
 })
+
+test('resume replay re-takes the error edge for a route-failed step (completedRoutes)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't1', type: 'ai', data: { aiOp: 'ask', input: 'x', onError: 'route' } },
+      { id: 'ok1', type: 'data', data: { op: 'compose', input: 'normal path' } },
+      { id: 'err1', type: 'data', data: { op: 'compose', input: 'handled: {{step.t1.output.error}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 't1' },
+      { id: 'e1', source: 't1', target: 'ok1' },
+      { id: 'e2', source: 't1', target: 'err1', branch: 'error' },
+    ],
+  }
+  let adapterCalls = 0
+  const runAction: RunActionFn = async () => {
+    adapterCalls++
+    return { output: 'would succeed now' }
+  }
+  const result = await interpretFlow(graph, '', {
+    runAgent: async () => ({ output: 'unused' }),
+    runAction,
+    completed: { t1: { error: 'boom', input: { aiOp: 'ask' } } },
+    completedRoutes: new Set(['t1']),
+    resumeNodeId: 'err1',
+  })
+  assert.equal(adapterCalls, 0, 'route-failed step must not re-execute')
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'handled: boom', 'walk re-took the error edge')
+})

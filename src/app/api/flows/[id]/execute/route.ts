@@ -28,6 +28,10 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       input: z.unknown().optional(),
       flowRunId: z.string().optional(),
       reply: z.string().refine((value) => value.trim().length > 0, 'Reply cannot be empty.').optional(),
+      // Re-run from a step: replay fromRunId's outputs up to fromNodeId, then
+      // execute from that step onward on the SAME pinned graph.
+      fromRunId: z.string().optional(),
+      fromNodeId: z.string().optional(),
     })
     .parse(body)
   // flowRunId only resumes a paused run when paired with the user's reply —
@@ -35,6 +39,12 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   // fresh run instead would strand the caller's expectation of continuity.
   if (parsed.flowRunId && parsed.reply === undefined) {
     throw new ApiError('flowRunId requires a reply — to start a new run, omit flowRunId.', 400, 'FLOW_RESUME_REQUIRES_REPLY')
+  }
+  if ((parsed.fromRunId === undefined) !== (parsed.fromNodeId === undefined)) {
+    throw new ApiError('Re-running from a step needs both fromRunId and fromNodeId.', 400, 'FLOW_REPLAY_ARGS')
+  }
+  if (parsed.fromRunId && parsed.flowRunId) {
+    throw new ApiError('Pick one: resume a paused run (flowRunId + reply) or re-run from a step (fromRunId + fromNodeId).', 400, 'FLOW_REPLAY_ARGS')
   }
   // Resume hardening: the run being resumed must belong to THIS flow and org —
   // otherwise a crafted flowRunId could re-interpret another flow's run
@@ -67,6 +77,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     input: parseFlowInput(parsed.input),
     flowRunId: parsed.flowRunId,
     reply: parsed.reply,
+    replayFrom: parsed.fromRunId && parsed.fromNodeId ? { runId: parsed.fromRunId, nodeId: parsed.fromNodeId } : undefined,
   })
   return { success: true, run }
 })

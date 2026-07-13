@@ -48,6 +48,10 @@ export type FlowExecutionJob = {
   // How many subflow hops deep this run already is (0/omitted = top-level).
   // Each subflow step dispatch passes depth + 1; the guard caps nesting.
   subflowDepth?: number
+  // Re-run from a step: replay `runId`'s recorded outputs for every step that
+  // ran BEFORE `nodeId` (on that run's pinned graph), then execute from
+  // `nodeId` onward as a NEW run. Route-failed steps re-take their error edge.
+  replayFrom?: { runId: string; nodeId: string }
 }
 
 // Bound HTTP responses so downstream prompts/logs stay manageable.
@@ -60,6 +64,19 @@ function jsonValue(value: unknown) {
 // Write planes are the consequential audit entries — the same set the agent
 // loop uses for its tool.write / tool.call distinction.
 const WRITE_PLANES = /^(nango|slack|email|backstory)/i
+
+/** What a paused child flow is asking, for the parent's waiting banner. */
+async function subflowChildQuestion(childRunId: string, childName: string): Promise<string> {
+  // FlowRunStep is transitively org-scoped (no organizationId column); the
+  // child run id comes from this run's own org-scoped write, so a bare
+  // flowRunId read cannot cross tenants.
+  const waitingStep = await prisma.flowRunStep.findFirst({
+    where: { flowRunId: childRunId, status: 'waiting' },
+    orderBy: { order: 'desc' },
+  }).catch(() => null)
+  const question = (waitingStep?.output as { waiting?: { question?: string } } | null)?.waiting?.question
+  return question ? `${childName}: ${question}` : `"${childName}" paused to ask for input.`
+}
 
 /**
  * Run a flow to completion. Each agent node delegates to the real agent runtime
@@ -82,6 +99,7 @@ export async function runFlowExecution(
   // does not mark the run failed the moment it is legitimately resumed after
   // a long approval pause.
   let existingRun: Awaited<ReturnType<typeof prisma.flowRun.findFirst>> = null
+  let replaySource: Awaited<ReturnType<typeof prisma.flowRun.findFirst>> = null
   if (resuming) {
     const claimed = await prisma.flowRun.updateMany({
       where: { id: job.flowRunId, organizationId: job.organizationId, status: 'waiting' },
@@ -112,10 +130,25 @@ export async function runFlowExecution(
       existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId, organizationId: job.organizationId } })
       if (!existingRun) throw new Error('Flow run not found after claim')
     }
+    if (job.replayFrom && !resuming) {
+      replaySource = await prisma.flowRun.findFirst({
+        where: { id: job.replayFrom.runId, flowId: job.flowId, organizationId: job.organizationId },
+      })
+      if (!replaySource) throw new ApiError('The run to replay from no longer exists.', 404, 'NOT_FOUND')
+      if (replaySource.status === 'running' || replaySource.status === 'waiting') {
+        throw new ApiError('That run is still in progress — wait for it to finish before re-running from a step.', 409, 'FLOW_REPLAY_ACTIVE')
+      }
+    }
     // Legacy fallback: a pre-snapshot waiting run (graphSnapshot null) resumes
     // against the flow's current graph — the same source a fresh run would use.
     const currentGraph = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
-    const source = existingRun ? existingRun.graphSnapshot ?? currentGraph : currentGraph
+    // A replay pins the source run's snapshot the same way a resume does — the
+    // point is to re-run THAT run from a step, not today's edited graph.
+    const source = existingRun
+      ? existingRun.graphSnapshot ?? currentGraph
+      : replaySource
+        ? replaySource.graphSnapshot ?? currentGraph
+        : currentGraph
     graph = flowGraphSchema.parse(source)
     const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
       node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
@@ -150,6 +183,9 @@ export async function runFlowExecution(
     throw error
   }
   let input: unknown = job.input ?? ''
+  // A replay re-runs the SOURCE run's input by default — that's the run being
+  // repeated. Explicit job.input still wins.
+  if (replaySource && job.input === undefined) input = storedRunInput(replaySource.input)
 
   // Required trigger inputs (declared on the trigger node) must be present.
   // Skipped when resuming: the original input was validated on the first run.
@@ -198,7 +234,7 @@ export async function runFlowExecution(
       input: jsonValue({ prompt: input }),
       // reusedInput marks the run as replaying the last successful input —
       // the run panel surfaces it so replayed payloads are never silent.
-      trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}) }),
+      trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}), ...(job.replayFrom ? { replayOf: job.replayFrom.runId, fromNodeId: job.replayFrom.nodeId } : {}) }),
       graphSnapshot: jsonValue(graph),
       organizationId: job.organizationId,
       userId: job.userId,
@@ -214,6 +250,8 @@ export async function runFlowExecution(
   }
 
   const nodeTypeById = new Map(graph.nodes.map((node) => [node.id, node.type]))
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]))
+  const completedRoutes = new Set<string>()
   // Resume state: nodes that already succeeded are skipped (reusing their
   // stored output); the paused step is re-run with the reply injected. Step
   // rows inside a loop are keyed per iteration (`${nodeId}#${index}`), so
@@ -228,18 +266,29 @@ export async function runFlowExecution(
   // decision for iteration i is never misattributed to iteration 0 when the
   // loop re-enters, and each approval id is unique so it is consumed once.
   const pausedApprovalByNode = new Map<string, string>()
+  // Paused CHILD flow runs per subflow step — a parent resume forwards the
+  // reply into the child run instead of re-executing it from scratch.
+  const pausedSubflowRunByNode = new Map<string, string>()
   let order = 0
   if (resuming) {
     const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: run.id }, orderBy: { order: 'asc' } })
     for (const step of priorSteps) {
-      // Only succeeded/skipped steps replay from their stored output. A FAILED
-      // step whose node has onError 'continue'/'route' re-executes on resume:
-      // replaying it would also need to replay WHICH edge the walk took (the
-      // error branch), which the completed map can't express today. So route
-      // steps are not resume-idempotent — a transient failure that clears
-      // before a downstream pause resumes will re-run the step and may take
-      // the normal path instead of the error path it took the first time.
+      // Succeeded/skipped steps replay from their stored output. A FAILED step
+      // whose node has onError 'continue'/'route' ALSO replays (its stored
+      // output is the {error, input} pass-through object) — and route
+      // failures are tracked in `completedRoutes` so the interpreter re-takes
+      // the error edge instead of diverting down the normal path. This makes
+      // resumed runs deterministic even when the transient failure has
+      // cleared: the run repeats the path it actually took.
       if (step.status === 'succeeded' || step.status === 'skipped') completed[step.nodeId] = step.output
+      if (step.status === 'failed') {
+        const baseNode = nodeById.get(step.nodeId.split('#')[0])
+        const onError = baseNode && 'onError' in baseNode.data ? (baseNode.data as { onError?: string }).onError : undefined
+        if ((onError === 'route' || onError === 'continue') && step.output !== null && step.output !== undefined) {
+          completed[step.nodeId] = step.output
+          if (onError === 'route') completedRoutes.add(step.nodeId)
+        }
+      }
       if (step.status === 'waiting') {
         // A loop/parallel container persists its OWN `waiting` row for display,
         // but only the leaf node inside it actually resumes. Skip container rows
@@ -251,6 +300,8 @@ export async function runFlowExecution(
         resumeExecutionId = step.agentExecutionId ?? undefined
         const approvalId = (step.output as { waiting?: { approvalId?: string } } | null)?.waiting?.approvalId
         if (typeof approvalId === 'string' && approvalId) pausedApprovalByNode.set(step.nodeId, approvalId)
+        const childRunId = (step.output as { waiting?: { childRunId?: string } } | null)?.waiting?.childRunId
+        if (typeof childRunId === 'string' && childRunId) pausedSubflowRunByNode.set(step.nodeId, childRunId)
       }
     }
     // Resuming creates NEW step rows for the re-run node — resolve every stale
@@ -271,6 +322,29 @@ export async function runFlowExecution(
       data: { status: 'superseded' },
     })
     if (priorSteps.length) order = Math.max(...priorSteps.map((step) => step.order)) + 1
+  }
+
+  // Re-run from a step: replay every outcome recorded BEFORE the chosen step,
+  // then let the walk execute it (and everything after) fresh. The cutoff is
+  // the chosen node's first recorded row order; container iterations carry
+  // their own `node#i` rows, so the whole loop replays or re-runs coherently.
+  if (replaySource && job.replayFrom) {
+    const priorSteps = await prisma.flowRunStep.findMany({ where: { flowRunId: replaySource.id }, orderBy: { order: 'asc' } })
+    const target = job.replayFrom.nodeId
+    const firstTargetRow = priorSteps.find((step) => step.nodeId === target || step.nodeId.startsWith(`${target}#`))
+    const cutoff = firstTargetRow ? firstTargetRow.order : Number.POSITIVE_INFINITY
+    for (const step of priorSteps) {
+      if (step.order >= cutoff) continue
+      if (step.status === 'succeeded' || step.status === 'skipped') completed[step.nodeId] = step.output
+      if (step.status === 'failed') {
+        const baseNode = nodeById.get(step.nodeId.split('#')[0])
+        const onError = baseNode && 'onError' in baseNode.data ? (baseNode.data as { onError?: string }).onError : undefined
+        if ((onError === 'route' || onError === 'continue') && step.output !== null && step.output !== undefined) {
+          completed[step.nodeId] = step.output
+          if (onError === 'route') completedRoutes.add(step.nodeId)
+        }
+      }
+    }
   }
 
   // Container (condition/loop/parallel/stop) outcomes are reported via onStep;
@@ -575,6 +649,41 @@ export async function runFlowExecution(
           await finish({ status: 'failed', error })
           return { error }
         }
+        // Parent resume: the user's reply answers the CHILD's pause — forward
+        // it into the paused child run (no retries: a lost race with the
+        // child's own resume machinery must surface, not re-run the child).
+        const pausedChildRunId = node.resume ? pausedSubflowRunByNode.get(node.id) : undefined
+        if (pausedChildRunId) {
+          try {
+            const resumed = await runFlowExecution({
+              flowId: child.id,
+              organizationId: job.organizationId,
+              userId: job.userId,
+              flowRunId: pausedChildRunId,
+              reply: job.reply ?? '',
+              usePublished: true,
+              subflowDepth: (job.subflowDepth ?? 0) + 1,
+            })
+            if (resumed.status === 'waiting') {
+              const question = await subflowChildQuestion(pausedChildRunId, child.name)
+              await finish({ status: 'waiting', output: { waiting: { kind: 'input', question, childRunId: pausedChildRunId, childFlowId: child.id } } })
+              return { waiting: { status: 'waiting_for_input', question } }
+            }
+            if (resumed.status !== 'succeeded') {
+              const error = `"${child.name}" failed after your reply — open its run in Activity to see why.`
+              await finish({ status: 'failed', error })
+              return { error }
+            }
+            await finish({ status: 'succeeded', output: resumed.output })
+            return { output: resumed.output }
+          } catch (error) {
+            const message = error instanceof ApiError && error.code === 'FLOW_RUN_NOT_WAITING'
+              ? `"${child.name}" is no longer waiting — it may have been answered from its own activity page.`
+              : error instanceof Error ? error.message : String(error)
+            await finish({ status: 'failed', error: message })
+            return { error: message }
+          }
+        }
         const childInput = subflowChildInput(
           node.config.inputs as Record<string, string> | undefined,
           typeof node.config.input === 'string' ? node.config.input : undefined,
@@ -608,11 +717,11 @@ export async function runFlowExecution(
           },
         )
         if (result.status === 'waiting') {
-          // v1: a child pause cannot suspend the parent (no cross-run resume
-          // correlation yet) — surface it as a routable failure instead.
-          const error = `"${child.name}" paused to ask for input — answer it from that flow's activity, then re-run this flow.`
-          await finish({ status: 'failed', error })
-          return { error }
+          // The child paused — suspend the PARENT too. The waiting row carries
+          // the child run id so a reply to the parent resumes the child.
+          const question = await subflowChildQuestion(result.flowRunId, child.name)
+          await finish({ status: 'waiting', output: { waiting: { kind: 'input', question, childRunId: result.flowRunId, childFlowId: child.id } } })
+          return { waiting: { status: 'waiting_for_input', question } }
         }
         if (result.status !== 'succeeded') {
           const error = `"${child.name}" failed — open its latest run in Activity to see why.`
@@ -734,7 +843,8 @@ export async function runFlowExecution(
     onStep,
     now,
     run: runMeta,
-    ...(resuming ? { completed, resumeNodeId, resumeReply: job.reply } : {}),
+    ...(resuming || replaySource ? { completed, completedRoutes } : {}),
+    ...(resuming ? { resumeNodeId, resumeReply: job.reply } : {}),
   })
   await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'

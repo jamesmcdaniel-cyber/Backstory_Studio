@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ChevronRight, Download, X } from 'lucide-react'
+import { ChevronRight, Download, RotateCcw, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
@@ -140,7 +140,7 @@ function useAgentProcessFeed(executionId: string | null | undefined, active: boo
   return rows
 }
 
-function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; waitingKind?: 'input' | 'approval' }) {
+function StepRow({ step, label, waitingKind, onRerunFrom }: { step: RunStep; label: string; waitingKind?: 'input' | 'approval'; onRerunFrom?: () => void }) {
   const [open, setOpen] = useState(false)
   // An in-flight agent step with a linked execution shows the agent's REAL
   // process (below) instead of the decorative typewriter word. Steps without
@@ -185,6 +185,16 @@ function StepRow({ step, label, waitingKind }: { step: RunStep; label: string; w
             <div>
               <div className="mb-0.5 flex items-center justify-between gap-2">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Output</p>
+                {onRerunFrom && (
+                  <button
+                    type="button"
+                    onClick={onRerunFrom}
+                    className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-700"
+                    title="Start a new run that replays everything before this step, then runs from here"
+                  >
+                    <RotateCcw className="h-3 w-3" /> Re-run from here
+                  </button>
+                )}
                 {step.output != null && (
                   <button
                     type="button"
@@ -270,6 +280,7 @@ export function RunPanel({
   onClose,
   labelForNode,
   onReply,
+  onRerunFrom,
 }: {
   runs: { id: string; status: string; startedAt?: string }[]
   selected: FlowRunDetail | null
@@ -277,6 +288,7 @@ export function RunPanel({
   onClose: () => void
   labelForNode: (nodeId: string) => string
   onReply?: (flowRunId: string, reply: string) => Promise<void>
+  onRerunFrom?: (runId: string, nodeId: string) => void
 }) {
   return (
     <div className="flex h-full w-full flex-col border-l border-border bg-card">
@@ -323,6 +335,11 @@ export function RunPanel({
                   key={`${step.nodeId}-${i}`}
                   step={step}
                   label={labelForNode(step.nodeId)}
+                  onRerunFrom={
+                    onRerunFrom && (selected.status === 'succeeded' || selected.status === 'failed')
+                      ? () => onRerunFrom(selected.id, step.nodeId.split('#')[0])
+                      : undefined
+                  }
                   waitingKind={step.status === 'waiting' && selected.waiting?.nodeId === step.nodeId ? selected.waiting.kind : undefined}
                 />
               ))
