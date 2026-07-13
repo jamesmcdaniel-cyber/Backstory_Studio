@@ -4,7 +4,7 @@ import { Fragment, useState } from 'react'
 import { Plus, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
-import { CONDITION_OP_LABELS, VARIABLE_OP_LABELS, VARIABLE_TYPE_LABELS, type DataOp, type FlowGraph, type FlowNode, type VariableOp } from '@/lib/flows/graph'
+import { AI_OP_LABELS, CONDITION_OP_LABELS, VARIABLE_OP_LABELS, VARIABLE_TYPE_LABELS, type AiOp, type DataOp, type FlowGraph, type FlowNode, type VariableOp } from '@/lib/flows/graph'
 import type { StepType } from '@/lib/flows/mutate'
 import type { DataField } from '@/lib/flows/datatree'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
@@ -21,6 +21,7 @@ export type FlowInsertSeed = {
   label?: string
   variableOp?: VariableOp
   dataOp?: DataOp
+  aiOp?: AiOp
 }
 
 function InsertMenu({
@@ -230,9 +231,8 @@ export function FlowCanvas({
         return node.data.label || 'Output'
       case 'join':
         return node.data.label || 'Join paths'
-      // NEUTRAL placeholder for Task 4 (AI step editor) — real per-op titles land there.
       case 'ai':
-        return node.data.label || 'AI'
+        return node.data.label || AI_OP_LABELS[node.data.aiOp]
     }
   }
 
@@ -297,6 +297,11 @@ export function FlowCanvas({
       }
       case 'join':
         return node.data.note || 'Merge branches back into one path'
+      case 'ai': {
+        if (node.data.note) return node.data.note
+        const gist = (node.data.instructions ?? '').trim().split('\n')[0] || (node.data.input ?? '').trim().split('\n')[0]
+        return gist || 'Tell AI what to do with the input'
+      }
       default:
         return (node.data as { note?: string }).note || undefined
     }

@@ -120,3 +120,14 @@ test('copilotOpSchema strips unknown keys from every op kind, keeping free-form 
   assert.equal('junk' in trig.data, false)
   assert.deepEqual(trig.data.trigger, { type: 'manual', extra: 'kept' })
 })
+
+test('copilot can add an ai step with op config', () => {
+  const g = emptyGraph()
+  const result = applyCopilotOps(g, [
+    { op: 'add', type: 'ai', afterId: 'trigger', data: { aiOp: 'categorize', input: '{{trigger.input}}', categories: ['Urgent', 'Routine'] } },
+  ] as CopilotOp[])
+  assert.equal(result.applied, 1)
+  const node = result.graph.nodes.find((n) => n.type === 'ai')!
+  assert.equal((node.data as { aiOp: string }).aiOp, 'categorize')
+  assert.deepEqual((node.data as { categories: string[] }).categories, ['Urgent', 'Routine'])
+})

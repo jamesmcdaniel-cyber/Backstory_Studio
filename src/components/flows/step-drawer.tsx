@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { X, Trash2, Plus, Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { CONDITION_OPS, CONDITION_OP_LABELS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type FlowNode, type ConditionOp, type ConditionClause, type DataOp, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
+import { AI_OPS, AI_OP_LABELS, CONDITION_OPS, CONDITION_OP_LABELS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type AiOp, type FlowNode, type ConditionOp, type ConditionClause, type DataOp, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 import { DATA_OP_HELPER, DATA_OP_INPUT_PLACEHOLDER, VARIABLE_VALUE_PLACEHOLDER, variableValueOptional } from '@/lib/flows/step-copy'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
@@ -18,9 +18,10 @@ import { TriggerEditor, type TriggerData } from './trigger-editor'
 
 export type { TriggerData }
 
-type EditableType = Extract<FlowNode['type'], 'agent' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
+type EditableType = Extract<FlowNode['type'], 'agent' | 'ai' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'agent', label: 'Run agent' },
+  { value: 'ai', label: 'AI operation' },
   { value: 'tool', label: 'Tool call' },
   { value: 'http', label: 'HTTP request' },
   { value: 'transform', label: 'Set fields' },
@@ -245,6 +246,7 @@ const NON_TOKEN_FOCUSED = 'non-token-focused'
 // step type's primary token field (mirrors the old default-accessor behavior).
 const DEFAULT_EDITOR_KEYS: Partial<Record<FlowNode['type'], string>> = {
   agent: 'agent.input',
+  ai: 'ai.instructions',
   loop: 'loop.over',
   http: 'http.body',
   transform: 'xf.0',
@@ -483,6 +485,129 @@ export function StepDrawer({
               blockActive={blockActive}
               unblockActive={unblockActive}
             />
+          </>
+        )}
+
+        {node.type === 'ai' && (
+          <>
+            <div>
+              <label className={labelClass}>Operation</label>
+              <select className={fieldClass} value={node.data.aiOp} onChange={(e) => onChange({ ...node, data: { ...node.data, aiOp: e.target.value as AiOp } })}>
+                {AI_OPS.map((op) => (
+                  <option key={op} value={op}>
+                    {AI_OP_LABELS[op]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>{node.data.aiOp === 'ask' ? 'Prompt' : 'Guidance (optional)'}</label>
+              <TokenTextEditor
+                ref={registerEditor('ai.instructions')}
+                multiline
+                rows={4}
+                value={node.data.instructions ?? ''}
+                labelCtx={labelCtx}
+                placeholder={node.data.aiOp === 'ask' ? 'Tell AI what to do with the input.' : 'Optional extra direction for this operation.'}
+                onFocus={focusEditor('ai.instructions')}
+                onChange={(instructions) => onChange({ ...node, data: { ...node.data, instructions } })}
+                ariaLabel="AI instructions"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Input</label>
+              <TokenTextEditor
+                ref={registerEditor('ai.input')}
+                multiline
+                rows={3}
+                value={node.data.input ?? ''}
+                labelCtx={labelCtx}
+                placeholder="The content to work on — pick flow data from below."
+                onFocus={focusEditor('ai.input')}
+                onChange={(input) => onChange({ ...node, data: { ...node.data, input } })}
+                ariaLabel="AI input"
+              />
+              <div className="mt-2">
+                <DataTree fields={dataFields} onInsert={insertToken} />
+              </div>
+            </div>
+            <div>
+              <label className={labelClass}>Model</label>
+              <select
+                className={fieldClass}
+                value={node.data.model ?? 'fast'}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, model: e.target.value === 'smart' ? 'smart' : undefined } })}
+              >
+                <option value="fast">Fast (default)</option>
+                <option value="smart">Smart (higher quality, slower)</option>
+              </select>
+            </div>
+            {node.data.aiOp === 'extract' && (
+              <OutputFieldsEditor
+                fields={node.data.outputFields ?? []}
+                onChange={(outputFields) => onChange({ ...node, data: { ...node.data, outputFields: outputFields.length ? outputFields : undefined } })}
+                blockActive={blockActive}
+                unblockActive={unblockActive}
+              />
+            )}
+            {node.data.aiOp === 'categorize' && (
+              <div>
+                <label className={labelClass}>Categories</label>
+                <div className="space-y-1.5">
+                  {(node.data.categories ?? []).map((category, i) => (
+                    <div key={i} className="flex gap-1.5">
+                      <input
+                        className={`${smallField} min-w-0 flex-1`}
+                        value={category}
+                        placeholder="e.g. Urgent"
+                        onChange={(e) => onChange({ ...node, data: { ...node.data, categories: (node.data.categories ?? []).map((c, j) => (j === i ? e.target.value : c)) } })}
+                        aria-label={`Category ${i + 1}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onChange({ ...node, data: { ...node.data, categories: (node.data.categories ?? []).filter((_, j) => j !== i) } })}
+                        className="px-1 text-red-500 hover:text-red-700"
+                        aria-label="Remove category"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onChange({ ...node, data: { ...node.data, categories: [...(node.data.categories ?? []), ''] } })}
+                  className="mt-1.5 flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add category
+                </button>
+              </div>
+            )}
+            {node.data.aiOp === 'score' && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelClass}>Lowest score</label>
+                  <input
+                    type="number"
+                    className={fieldClass}
+                    value={node.data.scoreMin ?? 1}
+                    onChange={(e) => onChange({ ...node, data: { ...node.data, scoreMin: Number(e.target.value) } })}
+                    aria-label="Lowest score"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Highest score</label>
+                  <input
+                    type="number"
+                    className={fieldClass}
+                    value={node.data.scoreMax ?? 10}
+                    onChange={(e) => onChange({ ...node, data: { ...node.data, scoreMax: Number(e.target.value) } })}
+                    aria-label="Highest score"
+                  />
+                </div>
+              </div>
+            )}
+            <AdvancedParamsSection node={node} onChange={onChange} />
           </>
         )}
 

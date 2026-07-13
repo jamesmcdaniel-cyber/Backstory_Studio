@@ -53,6 +53,7 @@ const FAVORITES_KEY = 'flows.pickerFavorites.v1'
 const ALL_LEAVES: PickerLeaf[] = [...AI_CAPABILITY_LEAVES, ...BUILTIN_GROUPS.flatMap((group) => group.children), ...TRIGGER_LEAVES]
 
 const STEP_ICON: Partial<Record<StepType, LucideIcon>> = {
+  ai: Sparkles,
   http: Globe,
   transform: SlidersHorizontal,
   condition: GitBranch,
@@ -71,6 +72,7 @@ const STEP_ICON: Partial<Record<StepType, LucideIcon>> = {
 }
 
 const STEP_TONE: Partial<Record<StepType, string>> = {
+  ai: 'bg-indigo-500 text-white',
   http: 'bg-emerald-600 text-white',
   transform: 'bg-violet-500 text-white',
   condition: 'bg-amber-500 text-white',

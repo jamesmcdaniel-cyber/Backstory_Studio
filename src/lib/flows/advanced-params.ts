@@ -16,6 +16,7 @@ export type AdvancedParamKey =
 
 const BY_TYPE: Partial<Record<FlowNode['type'], AdvancedParamKey[]>> = {
   agent: ['onError', 'retries', 'timeoutMs'],
+  ai: ['onError', 'retries', 'timeoutMs'],
   tool: ['onError', 'retries', 'timeoutMs'],
   http: ['bodyMode', 'responseType', 'failOnHttpError', 'onError', 'retries', 'timeoutMs'],
   loop: ['concurrency'],

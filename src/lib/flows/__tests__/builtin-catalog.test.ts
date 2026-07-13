@@ -59,9 +59,11 @@ test('every leaf id is unique across groups, AI capabilities, and triggers', () 
   assert.equal(new Set(all.map((l) => l.id)).size, all.length)
 })
 
-test('AI capabilities are action-mode agent steps', () => {
-  assert.ok(AI_CAPABILITY_LEAVES.length >= 1)
-  assert.ok(AI_CAPABILITY_LEAVES.every((l) => l.mode === 'action' && l.stepType === 'agent'))
+test('AI capabilities offer the five ai ops plus the roster-agent leaf', () => {
+  assert.ok(AI_CAPABILITY_LEAVES.every((l) => l.mode === 'action'))
+  const aiLeaves = AI_CAPABILITY_LEAVES.filter((l) => l.stepType === 'ai')
+  assert.deepEqual(aiLeaves.map((l) => l.seed?.aiOp), ['ask', 'extract', 'categorize', 'summarize', 'score'])
+  assert.ok(AI_CAPABILITY_LEAVES.some((l) => l.stepType === 'agent'), 'Run an agent stays available')
 })
 
 test('trigger leaves cover all four trigger types', () => {

@@ -1,4 +1,4 @@
-import { VARIABLE_OP_LABELS, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { AI_OP_LABELS, VARIABLE_OP_LABELS, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 
 /**
@@ -96,6 +96,7 @@ export function humanizeTokens(value: string, ctx: TokenLabelContext): string {
 export function defaultStepLabel(node: FlowNode): string {
   if (node.type === 'variable') return VARIABLE_OP_LABELS[node.data.op]
   if (node.type === 'data') return DATA_OP_LABELS[node.data.op]
+  if (node.type === 'ai') return AI_OP_LABELS[node.data.aiOp]
   if (node.type === 'humanReview') return 'Request information'
   return node.type.charAt(0).toUpperCase() + node.type.slice(1)
 }

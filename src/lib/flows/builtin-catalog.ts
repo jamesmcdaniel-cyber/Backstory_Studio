@@ -1,5 +1,5 @@
 import type { StepType } from '@/lib/flows/mutate'
-import type { DataOp, VariableOp } from '@/lib/flows/graph'
+import type { AiOp, DataOp, VariableOp } from '@/lib/flows/graph'
 
 /** One pickable item in the Add-trigger/Add-action catalog. */
 export type PickerLeaf = {
@@ -8,7 +8,7 @@ export type PickerLeaf = {
   description: string
   mode: 'action' | 'trigger' | 'both'
   stepType?: StepType
-  seed?: { agentId?: string; connectionId?: string; toolName?: string; label?: string; variableOp?: VariableOp; dataOp?: DataOp }
+  seed?: { agentId?: string; connectionId?: string; toolName?: string; label?: string; variableOp?: VariableOp; dataOp?: DataOp; aiOp?: AiOp }
   triggerType?: 'manual' | 'schedule' | 'webhook' | 'signal'
 }
 
@@ -98,6 +98,11 @@ export const BUILTIN_GROUPS: PickerGroup[] = [
 /** AI capabilities shown first in action mode. */
 // 'Run a prompt' (inline, no saved agent) returns when prompt-mode exists in the graph schema.
 export const AI_CAPABILITY_LEAVES: PickerLeaf[] = [
+  { id: 'ai-ask', label: 'Ask AI', description: 'Give AI a prompt and some input, get its answer for later steps.', mode: 'action', stepType: 'ai', seed: { aiOp: 'ask' } },
+  { id: 'ai-extract', label: 'Extract data', description: 'Pull named fields out of any text as structured data.', mode: 'action', stepType: 'ai', seed: { aiOp: 'extract' } },
+  { id: 'ai-categorize', label: 'Categorize', description: 'Sort input into one of the categories you define.', mode: 'action', stepType: 'ai', seed: { aiOp: 'categorize' } },
+  { id: 'ai-summarize', label: 'Summarize', description: 'Condense long input into a short summary.', mode: 'action', stepType: 'ai', seed: { aiOp: 'summarize' } },
+  { id: 'ai-score', label: 'Score', description: 'Rate input on a numeric scale with a reason.', mode: 'action', stepType: 'ai', seed: { aiOp: 'score' } },
   { id: 'ai-run-agent', label: 'Run an agent', description: 'Run one of your agents and pass its response to the next step.', mode: 'action', stepType: 'agent' },
 ]
 

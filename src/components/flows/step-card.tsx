@@ -29,6 +29,7 @@ import {
   Rows3,
   Settings2,
   SlidersHorizontal,
+  Sparkles,
   Split,
   ToggleLeft,
   Trash2,
@@ -41,7 +42,7 @@ import {
 import { toast } from 'sonner'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
 import { cn } from '@/lib/utils'
-import { CONDITION_OPS, CONDITION_OP_LABELS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type ConditionClause, type ConditionOp, type DataOp, type FlowNode, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
+import { AI_OPS, AI_OP_LABELS, CONDITION_OPS, CONDITION_OP_LABELS, DATA_OPS, FIELD_TYPES, VARIABLE_OPS, VARIABLE_OP_LABELS, VARIABLE_TYPES, VARIABLE_TYPE_LABELS, type AiOp, type ConditionClause, type ConditionOp, type DataOp, type FlowNode, type OutputField, type TriggerInputField, type VariableOp, type VariableType } from '@/lib/flows/graph'
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 import { DATA_OP_HELPER, DATA_OP_INPUT_PLACEHOLDER, VARIABLE_VALUE_PLACEHOLDER, variableValueOptional } from '@/lib/flows/step-copy'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
@@ -87,8 +88,7 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   output: FileOutput,
   // NEUTRAL placeholder for Task 6 (builder UX) — icon/tone finalized with the join editor.
   join: GitMerge,
-  // NEUTRAL placeholder for Task 4 (AI step editor) — icon/tone finalized there.
-  ai: Bot,
+  ai: Sparkles,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -109,8 +109,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   output: 'bg-teal-600 text-white',
   // NEUTRAL placeholder for Task 6 (builder UX) — finalized with the join editor.
   join: 'bg-indigo-600 text-white',
-  // NEUTRAL placeholder for Task 4 (AI step editor) — finalized there.
-  ai: 'bg-slate-900 text-white',
+  ai: 'bg-indigo-500 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {
@@ -760,6 +759,8 @@ function renderNodeBody({
       return <TriggerBody node={node} update={update} flowId={flowId} published={published} />
     case 'agent':
       return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} tokenWiring={tokenWiring} showErrors={showErrors} />
+    case 'ai':
+      return <AiBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'http':
       return <HttpBody node={node} toolCatalog={toolCatalog} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'tool':
@@ -930,6 +931,196 @@ function TriggerBody({
           <Plus className="h-5 w-5" /> Add an input
         </button>
       )}
+    </div>
+  )
+}
+
+function AiBody({
+  node,
+  update,
+  tokenWiring,
+  showErrors,
+}: {
+  node: Extract<FlowNode, { type: 'ai' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+  showErrors?: boolean
+}) {
+  const { labelCtx, registerEditor, focusEditor, blockActive, unblockActive } = tokenWiring
+  const aiOp = node.data.aiOp
+  const outputFields = node.data.outputFields ?? []
+  const categories = node.data.categories ?? []
+  const setOutputFields = (fields: OutputField[]) =>
+    update({ ...node, data: { ...node.data, outputFields: fields.length ? fields : undefined } })
+  const setCategories = (next: string[]) =>
+    update({ ...node, data: { ...node.data, categories: next.length ? next : undefined } })
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2">
+        <label className={labelClass}>Operation</label>
+        <select
+          value={aiOp}
+          onChange={(event) => update({ ...node, data: { ...node.data, aiOp: event.target.value as AiOp } })}
+          className={controlClass}
+        >
+          {AI_OPS.map((op) => (
+            <option key={op} value={op}>
+              {AI_OP_LABELS[op]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>{aiOp === 'ask' ? 'Prompt' : 'Guidance (optional)'}</label>
+        <TokenTextEditor
+          ref={registerEditor('ai.instructions')}
+          multiline
+          rows={3}
+          value={node.data.instructions ?? ''}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('ai.instructions')}
+          onChange={(instructions) => update({ ...node, data: { ...node.data, instructions } })}
+          className={tokenControlClass}
+          placeholder={aiOp === 'ask' ? 'Tell AI what to do with the input.' : 'Optional extra direction for this operation.'}
+          ariaLabel="AI instructions"
+        />
+      </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>Input</label>
+        <TokenTextEditor
+          ref={registerEditor('ai.input')}
+          multiline
+          rows={2}
+          value={node.data.input ?? ''}
+          labelCtx={labelCtx}
+          onFocus={focusEditor('ai.input')}
+          onChange={(input) => update({ ...node, data: { ...node.data, input } })}
+          className={tokenControlClass}
+          placeholder="The content to work on — add flow data from the picker."
+          ariaLabel="AI input"
+        />
+      </div>
+      <div className="grid gap-2">
+        <label className={labelClass}>Model</label>
+        <select
+          value={node.data.model ?? 'fast'}
+          onChange={(event) => update({ ...node, data: { ...node.data, model: event.target.value === 'smart' ? 'smart' : undefined } })}
+          className={controlClass}
+        >
+          <option value="fast">Fast (default)</option>
+          <option value="smart">Smart (higher quality, slower)</option>
+        </select>
+      </div>
+      {aiOp === 'extract' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Fields to extract</label>
+          <div className="space-y-2">
+            {outputFields.map((field, index) => (
+              <div key={index} className="grid gap-2 sm:grid-cols-[1fr_120px_36px]">
+                <input
+                  value={field.name}
+                  onChange={(event) => setOutputFields(outputFields.map((entry, j) => (j === index ? { ...entry, name: event.target.value } : entry)))}
+                  onFocus={blockActive}
+                  onBlur={unblockActive}
+                  className={cn(controlClass, showErrors && !field.name.trim() && 'border-red-400 focus:border-red-500')}
+                  placeholder="fieldName"
+                  aria-label={`Extract field ${index + 1} name`}
+                />
+                <select
+                  value={field.type}
+                  onChange={(event) => setOutputFields(outputFields.map((entry, j) => (j === index ? { ...entry, type: event.target.value as OutputField['type'] } : entry)))}
+                  className={controlClass}
+                >
+                  {FIELD_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setOutputFields(outputFields.filter((_, j) => j !== index))}
+                  className="flex h-10 w-10 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  aria-label="Remove field"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setOutputFields([...outputFields, { name: '', type: 'string' }])}
+              className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+            >
+              Add field
+            </button>
+          </div>
+        </div>
+      )}
+      {aiOp === 'categorize' && (
+        <div className="grid gap-2">
+          <label className={labelClass}>Categories</label>
+          <div className="space-y-2">
+            {categories.map((category, index) => (
+              <div key={index} className="grid gap-2 sm:grid-cols-[1fr_36px]">
+                <input
+                  value={category}
+                  onChange={(event) => setCategories(categories.map((entry, j) => (j === index ? event.target.value : entry)))}
+                  onFocus={blockActive}
+                  onBlur={unblockActive}
+                  className={cn(controlClass, showErrors && !category.trim() && 'border-red-400 focus:border-red-500')}
+                  placeholder="e.g. Urgent"
+                  aria-label={`Category ${index + 1}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setCategories(categories.filter((_, j) => j !== index))}
+                  className="flex h-10 w-10 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600"
+                  aria-label="Remove category"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => setCategories([...categories, ''])}
+              className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+            >
+              Add category
+            </button>
+          </div>
+        </div>
+      )}
+      {aiOp === 'score' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2">
+            <label className={labelClass}>Lowest score</label>
+            <input
+              type="number"
+              value={node.data.scoreMin ?? 1}
+              onChange={(event) => update({ ...node, data: { ...node.data, scoreMin: Number(event.target.value) } })}
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              className={controlClass}
+              aria-label="Lowest score"
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className={labelClass}>Highest score</label>
+            <input
+              type="number"
+              value={node.data.scoreMax ?? 10}
+              onChange={(event) => update({ ...node, data: { ...node.data, scoreMax: Number(event.target.value) } })}
+              onFocus={blockActive}
+              onBlur={unblockActive}
+              className={controlClass}
+              aria-label="Highest score"
+            />
+          </div>
+        </div>
+      )}
+      <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )
 }

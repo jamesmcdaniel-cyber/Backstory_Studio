@@ -98,6 +98,17 @@ function triggerInputFields(graph: FlowGraph) {
 function outputFieldsForNode(node: FlowNode | undefined, toolCatalog: ToolCatalog): OutputField[] | undefined {
   if (!node) return undefined
   if (node.type === 'agent') return node.data.outputFields
+  if (node.type === 'ai') {
+    if (node.data.aiOp === 'extract') return node.data.outputFields
+    if (node.data.aiOp === 'categorize') return [{ name: 'category', type: 'string', description: 'The chosen category.' }]
+    if (node.data.aiOp === 'score') {
+      return [
+        { name: 'score', type: 'number', description: 'The numeric rating.' },
+        { name: 'reason', type: 'string', description: 'Why the score was given.' },
+      ]
+    }
+    return undefined
+  }
   if (node.type === 'http') return node.data.outputFields?.length ? node.data.outputFields : httpOutputFields()
   if (node.type !== 'tool') return undefined
   if (node.data.outputFields?.length) return node.data.outputFields
@@ -846,6 +857,22 @@ function FlowBuilder() {
       return updateNode(next, {
         ...node,
         data: { ...node.data, op: seed.dataOp, ...extras, ...(seed.label ? { label: seed.label } : {}) },
+      })
+    }
+    if (node.type === 'ai' && seed.aiOp) {
+      // Ops with required config open ready to fill in (mirrors data-op seeding):
+      // extract needs a field row, categorize two category rows, score its bounds.
+      const extras =
+        seed.aiOp === 'extract'
+          ? { outputFields: [{ name: '', type: 'string' as const }] }
+          : seed.aiOp === 'categorize'
+            ? { categories: ['', ''] }
+            : seed.aiOp === 'score'
+              ? { scoreMin: 1, scoreMax: 10 }
+              : {}
+      return updateNode(next, {
+        ...node,
+        data: { ...node.data, aiOp: seed.aiOp, ...extras, ...(seed.label ? { label: seed.label } : {}) },
       })
     }
     // Every other step type only carries the label (picker leaves like
