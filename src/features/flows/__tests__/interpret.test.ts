@@ -1863,3 +1863,54 @@ test('an output node with an empty outputs array does not clobber the last-step 
   assert.equal(result.output, 'REAL') // agent's real result, not {}
   assert.equal(result.namedOutputs, undefined) // an empty map is not "named outputs"
 })
+
+test('subflow step resolves inputs map + fallback input, passes flowId through, threads structured child output', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 's1',
+        type: 'subflow',
+        data: { flowId: 'child-1', inputs: { account: '{{trigger.input}}', note: 'literal' }, input: 'ignored fallback', retries: 1, timeoutMs: 8000 },
+      },
+      { id: 'd1', type: 'data', data: { op: 'compose', input: '{{step.s1.output.summary}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 's1' },
+      { id: 'e1', source: 's1', target: 'd1' },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push({ kind: node.kind, ...node.config })
+    return { output: { summary: 'child says hi', count: 2 } }
+  }
+  const result = await interpretFlow(graph, 'Acme', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(calls[0].kind, 'subflow')
+  assert.equal(calls[0].flowId, 'child-1')
+  assert.deepEqual(calls[0].inputs, { account: 'Acme', note: 'literal' })
+  assert.equal(calls[0].retries, 1)
+  assert.equal(calls[0].timeoutMs, 8000)
+  assert.equal(result.output, 'child says hi')
+})
+
+test('subflow adapter error honors onError route down the error edge', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 's1', type: 'subflow', data: { flowId: 'child-1', onError: 'route' } },
+      { id: 'ok1', type: 'data', data: { op: 'compose', input: 'normal path' } },
+      { id: 'err1', type: 'data', data: { op: 'compose', input: 'Error was: {{step.s1.output.error}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 's1' },
+      { id: 'e1', source: 's1', target: 'ok1' },
+      { id: 'e2', source: 's1', target: 'err1', branch: 'error' },
+    ],
+  }
+  const runAction: RunActionFn = async () => ({ error: 'child failed hard' })
+  const result = await interpretFlow(graph, '', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'Error was: child failed hard')
+})

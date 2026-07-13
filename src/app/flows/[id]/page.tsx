@@ -497,8 +497,8 @@ function FlowBuilder() {
   }, [selectedNode, upstreamIds, graph, selectedRun, insideLoop, agentsById, loopContext, testInput, inputFields, toolCatalog, upstreamVariables])
 
   const validation = useMemo(
-    () => validateFlowGraph(graph, { agents, toolCatalog }),
-    [graph, agents, toolCatalog],
+    () => validateFlowGraph(graph, { agents, toolCatalog, flowId: id }),
+    [graph, agents, toolCatalog, id],
   )
 
   const issuesByNode = useMemo(() => {

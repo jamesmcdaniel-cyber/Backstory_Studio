@@ -17,7 +17,7 @@ export class FlowTimeoutError extends Error {}
  * abort the request itself (AbortController), so retrying them cannot stack
  * live work.
  */
-export function shouldRetryAfterTimeout(kind: 'agent' | 'tool' | 'http' | 'ai'): boolean {
+export function shouldRetryAfterTimeout(kind: 'agent' | 'tool' | 'http' | 'ai' | 'subflow'): boolean {
   return kind === 'http'
 }
 

@@ -28,6 +28,8 @@ import { flowToolOutput } from './tool-output'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
 import { buildAiPrompt, type AiPromptInput } from '@/lib/flows/ai-prompts'
 import { createModelRunner, DEFAULT_AGENT_MODEL, DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
+import { subflowChildInput, subflowGuard } from '@/lib/flows/subflow'
+import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
 
 export type FlowExecutionJob = {
   flowId: string
@@ -41,7 +43,10 @@ export type FlowExecutionJob = {
   // executes the working draft so you can test before publishing.
   usePublished?: boolean
   // How this run was started — persisted on the FlowRun for provenance.
-  trigger?: { type: 'manual' | 'schedule' | 'webhook' | 'signal'; [key: string]: unknown }
+  trigger?: { type: 'manual' | 'schedule' | 'webhook' | 'signal' | 'subflow'; [key: string]: unknown }
+  // How many subflow hops deep this run already is (0/omitted = top-level).
+  // Each subflow step dispatch passes depth + 1; the guard caps nesting.
+  subflowDepth?: number
 }
 
 // Bound HTTP responses so downstream prompts/logs stay manageable.
@@ -127,6 +132,7 @@ export async function runFlowExecution(
     const validation = validateFlowGraph(graph, {
       agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
       toolCatalog,
+      flowId: job.flowId,
     })
     if (!validation.ok) {
       throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
@@ -545,6 +551,76 @@ export async function runFlowExecution(
         await finish({ status: 'succeeded', output: parsed.output })
         return { output: parsed.output }
       }
+      if (node.kind === 'subflow') {
+        // Run another flow inline as this step (WS15). Guards are pure
+        // (subflowGuard); the child always executes its PUBLISHED graph — a
+        // draft-only child is a clear config error, matching the "runs the
+        // published version" contract everywhere else. Depth is carried on the
+        // job so indirect cycles (A→B→A) exhaust the cap instead of looping.
+        const childFlowId = typeof node.config.flowId === 'string' ? node.config.flowId : ''
+        const guardError = subflowGuard({ flowId: childFlowId, selfFlowId: job.flowId, depth: job.subflowDepth ?? 0 })
+        if (guardError) {
+          await finish({ status: 'failed', error: guardError })
+          return { error: guardError }
+        }
+        const child = await prisma.flow.findFirst({ where: { id: childFlowId, organizationId: job.organizationId } })
+        if (!child) {
+          const error = 'The selected flow no longer exists in this workspace.'
+          await finish({ status: 'failed', error })
+          return { error }
+        }
+        if (child.publishedGraph == null) {
+          const error = `"${child.name}" has never been published — publish it before running it from another flow.`
+          await finish({ status: 'failed', error })
+          return { error }
+        }
+        const childInput = subflowChildInput(
+          node.config.inputs as Record<string, string> | undefined,
+          typeof node.config.input === 'string' ? node.config.input : undefined,
+        )
+        const retries = flowActionRetries(node.config.retries)
+        // Child flows legitimately run long — clamp to the platform run cap,
+        // not the 120s tool/http window; unset means "no extra bound" (the
+        // child is already bounded by its own execution limits).
+        const timeoutMs =
+          typeof node.config.timeoutMs === 'number' && Number.isFinite(node.config.timeoutMs)
+            ? Math.max(1000, Math.min(AGENT_RUN_TIMEOUT_MS, Math.round(node.config.timeoutMs)))
+            : undefined
+        const result = await runWithRetries(
+          async () =>
+            runFlowExecution({
+              flowId: child.id,
+              organizationId: job.organizationId,
+              userId: job.userId,
+              input: childInput,
+              usePublished: true,
+              trigger: { type: 'subflow', parentRunId: run.id, parentFlowId: job.flowId },
+              subflowDepth: (job.subflowDepth ?? 0) + 1,
+            }),
+          {
+            retries,
+            timeoutMs,
+            retryOnTimeout: shouldRetryAfterTimeout('subflow'),
+            timeoutMessage: timeoutMs
+              ? `"${child.name}" timed out after ${Math.round(timeoutMs / 1000)}s — its run may still be finishing.`
+              : undefined,
+          },
+        )
+        if (result.status === 'waiting') {
+          // v1: a child pause cannot suspend the parent (no cross-run resume
+          // correlation yet) — surface it as a routable failure instead.
+          const error = `"${child.name}" paused to ask for input — answer it from that flow's activity, then re-run this flow.`
+          await finish({ status: 'failed', error })
+          return { error }
+        }
+        if (result.status !== 'succeeded') {
+          const error = `"${child.name}" failed — open its latest run in Activity to see why.`
+          await finish({ status: 'failed', error })
+          return { error }
+        }
+        await finish({ status: 'succeeded', output: result.output })
+        return { output: result.output }
+      }
       if (node.kind === 'http') {
         const request = prepareHttpRequest(node.config)
         // Optional connection auth: resolve a fresh token server-side and inject
@@ -584,7 +660,7 @@ export async function runFlowExecution(
         await finish({ status: 'succeeded', output })
         return { output }
       }
-      // Exhaustive over RunActionFn's node.kind ('tool' | 'http' | 'ai') — this
+      // Exhaustive over RunActionFn's node.kind ('tool' | 'http' | 'ai' | 'subflow') — this
       // only fires if a future kind is added here without a matching branch
       // above, so it fails loudly instead of silently misrouting into http
       // (the bug this restructure closed for 'ai').

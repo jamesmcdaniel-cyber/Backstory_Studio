@@ -97,6 +97,7 @@ export function defaultStepLabel(node: FlowNode): string {
   if (node.type === 'variable') return VARIABLE_OP_LABELS[node.data.op]
   if (node.type === 'data') return DATA_OP_LABELS[node.data.op]
   if (node.type === 'ai') return AI_OP_LABELS[node.data.aiOp]
+  if (node.type === 'subflow') return 'Run a flow'
   if (node.type === 'humanReview') return 'Request information'
   return node.type.charAt(0).toUpperCase() + node.type.slice(1)
 }

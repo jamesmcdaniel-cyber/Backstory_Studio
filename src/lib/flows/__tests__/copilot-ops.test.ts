@@ -131,3 +131,13 @@ test('copilot can add an ai step with op config', () => {
   assert.equal((node.data as { aiOp: string }).aiOp, 'categorize')
   assert.deepEqual((node.data as { categories: string[] }).categories, ['Urgent', 'Routine'])
 })
+
+test('copilot can add a subflow step', () => {
+  const g = emptyGraph()
+  const result = applyCopilotOps(g, [
+    { op: 'add', type: 'subflow', afterId: 'trigger', data: { flowId: 'child-1', inputs: { account: '{{trigger.input}}' } } },
+  ] as CopilotOp[])
+  assert.equal(result.applied, 1)
+  const node = result.graph.nodes.find((n) => n.type === 'subflow')!
+  assert.equal((node.data as { flowId: string }).flowId, 'child-1')
+})

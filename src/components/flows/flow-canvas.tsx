@@ -233,6 +233,8 @@ export function FlowCanvas({
         return node.data.label || 'Join paths'
       case 'ai':
         return node.data.label || AI_OP_LABELS[node.data.aiOp]
+      case 'subflow':
+        return node.data.label || 'Run a flow'
     }
   }
 
@@ -302,6 +304,8 @@ export function FlowCanvas({
         const gist = (node.data.instructions ?? '').trim().split('\n')[0] || (node.data.input ?? '').trim().split('\n')[0]
         return gist || 'Tell AI what to do with the input'
       }
+      case 'subflow':
+        return node.data.note || (node.data.flowId ? 'Runs another flow and passes back its result' : 'Choose the flow to run')
       default:
         return (node.data as { note?: string }).note || undefined
     }

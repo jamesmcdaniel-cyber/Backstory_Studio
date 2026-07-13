@@ -13,6 +13,8 @@ export type FlowValidationContext = {
   agents?: { id: string; title?: string }[]
   toolCatalog?: { id: string; name?: string; tools?: { name: string; inputSchema?: unknown }[] }[]
   requireRunnable?: boolean
+  /** The flow being validated — lets subflow steps flag direct self-reference. */
+  flowId?: string
 }
 
 export type FlowValidationResult = {
@@ -556,6 +558,14 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
         node.data.scoreMin >= node.data.scoreMax
       ) {
         add(issues, 'error', 'AI_SCORE_BAD_RANGE', `${nodeLabel(node)} needs a minimum score lower than the maximum.`, node.id)
+      }
+    }
+
+    if (node.type === 'subflow') {
+      if (!node.data.flowId.trim()) {
+        add(issues, 'error', 'SUBFLOW_NO_FLOW', `${nodeLabel(node)} needs a flow to run.`, node.id)
+      } else if (context.flowId && node.data.flowId === context.flowId) {
+        add(issues, 'error', 'SUBFLOW_SELF', `${nodeLabel(node)} points this flow at itself — pick a different flow.`, node.id)
       }
     }
   }

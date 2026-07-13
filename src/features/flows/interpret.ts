@@ -26,7 +26,7 @@ export type RunAgentFn = (node: { id: string; agentId: string; input: string; re
 // passes through unresolved, same as tool/http's retries/timeoutMs.
 // `resume` marks the node a paused run is re-entering (e.g. after an approval
 // decision) so the adapter can consume the decision instead of re-executing.
-export type RunActionFn = (node: { id: string; kind: 'tool' | 'http' | 'ai'; config: Record<string, unknown>; resume?: boolean }) => Promise<RunAgentResult>
+export type RunActionFn = (node: { id: string; kind: 'tool' | 'http' | 'ai' | 'subflow'; config: Record<string, unknown>; resume?: boolean }) => Promise<RunAgentResult>
 export type InterpretResult = {
   status: 'succeeded' | 'failed' | 'waiting'
   steps: StepOutcome[]
@@ -601,6 +601,34 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const res: RunAgentResult = opts.runAction
         ? await opts.runAction({ id: stepKey, kind: 'ai', config, resume: opts.resumeNodeId === stepKey })
         : { error: 'ai steps are not supported in this runtime.' }
+      if (res.waiting) {
+        emit({ nodeId: node.id, status: 'waiting' })
+        return { kind: 'pause', nodeId: stepKey, question: res.waiting.question }
+      }
+      if (res.error) {
+        const mode = node.data.onError ?? 'stop'
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: config } } : {}) })
+        return onFailure(mode, res.error, config)
+      }
+      const output = asStructured(res.output)
+      ctx.step[node.id] = { output }
+      emit({ nodeId: node.id, status: 'succeeded', output })
+      return { kind: 'ok', output }
+    }
+
+    if (node.type === 'subflow') {
+      // `input` and every `inputs` value carry {{tokens}}; flowId and the
+      // reliability statics ride through untouched. Like ai/tool/http, the
+      // interpreter dispatches ONCE — depth guards, retries, and timeouts are
+      // the adapter's job.
+      const resolvedInputs = node.data.inputs
+        ? Object.fromEntries(Object.entries(node.data.inputs).map(([key, value]) => [key, resolveTemplate(value, ctx)]))
+        : undefined
+      const resolvedInput = typeof node.data.input === 'string' && node.data.input.trim() ? resolveTemplate(node.data.input, ctx) : node.data.input
+      const config: Record<string, unknown> = { ...node.data, inputs: resolvedInputs, input: resolvedInput }
+      const res: RunAgentResult = opts.runAction
+        ? await opts.runAction({ id: stepKey, kind: 'subflow', config, resume: opts.resumeNodeId === stepKey })
+        : { error: 'subflow steps are not supported in this runtime.' }
       if (res.waiting) {
         emit({ nodeId: node.id, status: 'waiting' })
         return { kind: 'pause', nodeId: stepKey, question: res.waiting.question }

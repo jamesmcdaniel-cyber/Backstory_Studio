@@ -15,13 +15,15 @@ import { TokenTextEditor, type TokenTextEditorHandle } from '@/components/flows/
 import type { TokenLabelContext } from '@/lib/flows/token-text'
 import { cn } from '@/lib/utils'
 import { TriggerEditor, type TriggerData } from './trigger-editor'
+import { useWorkspaceFlows } from './use-workspace-flows'
 
 export type { TriggerData }
 
-type EditableType = Extract<FlowNode['type'], 'agent' | 'ai' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
+type EditableType = Extract<FlowNode['type'], 'agent' | 'ai' | 'subflow' | 'condition' | 'loop' | 'parallel' | 'stop' | 'tool' | 'http' | 'transform' | 'filter' | 'switch' | 'variable' | 'data' | 'humanReview' | 'output' | 'join'>
 const NODE_TYPES: { value: EditableType; label: string }[] = [
   { value: 'agent', label: 'Run agent' },
   { value: 'ai', label: 'AI operation' },
+  { value: 'subflow', label: 'Run a flow' },
   { value: 'tool', label: 'Tool call' },
   { value: 'http', label: 'HTTP request' },
   { value: 'transform', label: 'Set fields' },
@@ -609,6 +611,10 @@ export function StepDrawer({
             )}
             <AdvancedParamsSection node={node} onChange={onChange} />
           </>
+        )}
+
+        {node.type === 'subflow' && (
+          <SubflowDrawerSection node={node} onChange={onChange} flowId={flowId} labelCtx={labelCtx} registerEditor={registerEditor} focusEditor={focusEditor} dataFields={dataFields} insertToken={insertToken} />
         )}
 
         {node.type === 'condition' && (
@@ -1528,6 +1534,103 @@ function OutputFieldsEditor({
         <Plus className="h-3.5 w-3.5" /> Add field
       </button>
     </div>
+  )
+}
+
+/** The subflow step's settings: pick a workspace flow, map its declared
+ * inputs (or the free-form fallback), with a publish-state nudge. */
+function SubflowDrawerSection({
+  node,
+  onChange,
+  flowId,
+  labelCtx,
+  registerEditor,
+  focusEditor,
+  dataFields,
+  insertToken,
+}: {
+  node: Extract<FlowNode, { type: 'subflow' }>
+  onChange: (node: FlowNode) => void
+  flowId: string
+  labelCtx: TokenLabelContext
+  registerEditor: (key: string) => (handle: TokenTextEditorHandle | null) => void
+  focusEditor: (key: string) => () => void
+  dataFields: DataField[]
+  insertToken: (token: string) => void
+}) {
+  const { flows, loading } = useWorkspaceFlows()
+  const selectable = flows.filter((flow) => flow.id !== flowId)
+  const selected = flows.find((flow) => flow.id === node.data.flowId)
+  const childFields = (selected?.inputFields ?? []).filter((field) => field.name.trim())
+  const inputs = node.data.inputs ?? {}
+  const setInput = (name: string, value: string) => {
+    const next = { ...inputs, [name]: value }
+    if (!value) delete next[name]
+    onChange({ ...node, data: { ...node.data, inputs: Object.keys(next).length ? next : undefined } })
+  }
+  return (
+    <>
+      <div>
+        <label className={labelClass}>Flow to run</label>
+        <select
+          className={fieldClass}
+          value={node.data.flowId}
+          onChange={(e) => onChange({ ...node, data: { ...node.data, flowId: e.target.value, inputs: undefined } })}
+          aria-label="Flow to run"
+        >
+          <option value="">{loading ? 'Loading flows…' : 'Choose a flow'}</option>
+          {selectable.map((flow) => (
+            <option key={flow.id} value={flow.id}>
+              {flow.name}
+              {flow.published ? '' : ' (not published yet)'}
+            </option>
+          ))}
+        </select>
+        {selected && !selected.published && (
+          <p className="mt-1.5 text-xs text-amber-600">This flow has never been published — publish it before running it from here.</p>
+        )}
+      </div>
+      {childFields.length > 0 ? (
+        <div className="space-y-2">
+          <label className={labelClass}>Inputs it expects</label>
+          {childFields.map((field) => (
+            <div key={field.name}>
+              <p className="mb-1 text-[11px] font-medium text-muted-foreground">{field.name}{field.required ? ' (required)' : ''}</p>
+              <TokenTextEditor
+                ref={registerEditor(`subflow.${field.name}`)}
+                className="px-2 py-1.5"
+                value={inputs[field.name] ?? ''}
+                labelCtx={labelCtx}
+                placeholder={field.description || 'Add a value or pick flow data'}
+                onFocus={focusEditor(`subflow.${field.name}`)}
+                onChange={(value) => setInput(field.name, value)}
+                ariaLabel={`Value for ${field.name}`}
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div>
+          <label className={labelClass}>Input to send it</label>
+          <TokenTextEditor
+            ref={registerEditor('subflow.input')}
+            multiline
+            rows={3}
+            value={node.data.input ?? ''}
+            labelCtx={labelCtx}
+            placeholder="What the flow receives as its run input."
+            onFocus={focusEditor('subflow.input')}
+            onChange={(input) => onChange({ ...node, data: { ...node.data, input } })}
+            ariaLabel="Input to send the flow"
+          />
+        </div>
+      )}
+      <div className="mt-2">
+        <DataTree fields={dataFields} onInsert={insertToken} />
+      </div>
+      <p className="text-xs text-muted-foreground">Runs the flow&apos;s <strong>published</strong> version and passes its result to later steps.</p>
+      <AdvancedParamsSection node={node} onChange={onChange} />
+    </>
   )
 }
 

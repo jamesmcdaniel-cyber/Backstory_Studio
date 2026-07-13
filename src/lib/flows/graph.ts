@@ -323,8 +323,28 @@ const aiNode = z.object({
   }),
 })
 
+// Run another flow as one step (WS15): the child's PUBLISHED graph executes
+// with this run's data as its input, and its named outputs (or last-step
+// output) become this step's output. `inputs` maps the child's declared
+// trigger input fields to templated values; `input` is the free-form fallback
+// when the child declares none. Nesting is depth-capped at runtime.
+const subflowNode = z.object({
+  id: z.string(),
+  type: z.literal('subflow'),
+  data: z.object({
+    flowId: z.string(),
+    inputs: z.record(z.string(), z.string()).optional(),
+    input: z.string().optional(),
+    label: z.string().optional(),
+    note: z.string().optional(),
+    onError: z.enum(['stop', 'continue', 'route']).optional(),
+    retries: z.number().int().min(0).max(5).optional(),
+    timeoutMs: z.number().int().min(1000).max(AGENT_RUN_TIMEOUT_MS).optional(),
+  }),
+})
+
 export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode,
+  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode, subflowNode,
 ])
 export const flowEdgeSchema = z.object({
   id: z.string(),

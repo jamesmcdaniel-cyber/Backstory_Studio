@@ -32,6 +32,7 @@ import {
   Sparkles,
   Split,
   ToggleLeft,
+  Workflow,
   Trash2,
   Type,
   UserCheck,
@@ -47,6 +48,7 @@ import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 import { DATA_OP_HELPER, DATA_OP_INPUT_PLACEHOLDER, VARIABLE_VALUE_PLACEHOLDER, variableValueOptional } from '@/lib/flows/step-copy'
 import { humanizeTokens, type TokenLabelContext } from '@/lib/flows/token-text'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
+import { useWorkspaceFlows } from './use-workspace-flows'
 import { triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { orgMemberLabel, type OrgMember, type ToolCatalog } from './step-drawer'
 import { TriggerEditor, type TriggerData } from './trigger-editor'
@@ -89,6 +91,7 @@ const NODE_ICON: Record<FlowNode['type'], typeof Bot> = {
   // NEUTRAL placeholder for Task 6 (builder UX) — icon/tone finalized with the join editor.
   join: GitMerge,
   ai: Sparkles,
+  subflow: Workflow,
 }
 
 const NODE_TONE: Record<FlowNode['type'], string> = {
@@ -110,6 +113,7 @@ const NODE_TONE: Record<FlowNode['type'], string> = {
   // NEUTRAL placeholder for Task 6 (builder UX) — finalized with the join editor.
   join: 'bg-indigo-600 text-white',
   ai: 'bg-indigo-500 text-white',
+  subflow: 'bg-teal-500 text-white',
 }
 
 const STATUS_DOT: Record<StepStatus, string> = {
@@ -761,6 +765,8 @@ function renderNodeBody({
       return <AgentBody node={node} agents={agents} update={update} onRefreshAgents={onRefreshAgents} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'ai':
       return <AiBody node={node} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
+    case 'subflow':
+      return <SubflowBody node={node} update={update} tokenWiring={tokenWiring} flowId={flowId} showErrors={showErrors} />
     case 'http':
       return <HttpBody node={node} toolCatalog={toolCatalog} update={update} tokenWiring={tokenWiring} showErrors={showErrors} />
     case 'tool':
@@ -931,6 +937,94 @@ function TriggerBody({
           <Plus className="h-5 w-5" /> Add an input
         </button>
       )}
+    </div>
+  )
+}
+
+function SubflowBody({
+  node,
+  update,
+  tokenWiring,
+  flowId,
+  showErrors,
+}: {
+  node: Extract<FlowNode, { type: 'subflow' }>
+  update: (node: FlowNode) => void
+  tokenWiring: TokenEditorWiring
+  flowId?: string
+  showErrors?: boolean
+}) {
+  const { labelCtx, registerEditor, focusEditor } = tokenWiring
+  const { flows, loading } = useWorkspaceFlows()
+  const selectable = flows.filter((flow) => flow.id !== flowId)
+  const selected = flows.find((flow) => flow.id === node.data.flowId)
+  const childFields = (selected?.inputFields ?? []).filter((field) => field.name.trim())
+  const inputs = node.data.inputs ?? {}
+  const setInput = (name: string, value: string) => {
+    const next = { ...inputs, [name]: value }
+    if (!value) delete next[name]
+    update({ ...node, data: { ...node.data, inputs: Object.keys(next).length ? next : undefined } })
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2">
+        <label className={labelClass}>Flow to run <span className="text-red-500">*</span></label>
+        <select
+          value={node.data.flowId}
+          onChange={(event) => update({ ...node, data: { ...node.data, flowId: event.target.value, inputs: undefined } })}
+          className={cn(controlClass, showErrors && !node.data.flowId && 'border-red-400 focus:border-red-500')}
+          aria-label="Flow to run"
+        >
+          <option value="">{loading ? 'Loading flows…' : 'Choose a flow'}</option>
+          {selectable.map((flow) => (
+            <option key={flow.id} value={flow.id}>
+              {flow.name}
+              {flow.published ? '' : ' (not published yet)'}
+            </option>
+          ))}
+        </select>
+        {selected && !selected.published && (
+          <p className="text-xs text-amber-600">This flow has never been published — publish it before running it from here.</p>
+        )}
+      </div>
+      {childFields.length > 0 ? (
+        <div className="grid gap-2">
+          <label className={labelClass}>Inputs it expects</label>
+          {childFields.map((field) => (
+            <div key={field.name} className="grid gap-1">
+              <p className="text-xs font-medium text-slate-600">{field.name}{field.required ? ' (required)' : ''}</p>
+              <TokenTextEditor
+                ref={registerEditor(`subflow.${field.name}`)}
+                value={inputs[field.name] ?? ''}
+                labelCtx={labelCtx}
+                onFocus={focusEditor(`subflow.${field.name}`)}
+                onChange={(value) => setInput(field.name, value)}
+                className={tokenControlClass}
+                placeholder={field.description || 'Add a value or pick flow data'}
+                ariaLabel={`Value for ${field.name}`}
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          <label className={labelClass}>Input to send it</label>
+          <TokenTextEditor
+            ref={registerEditor('subflow.input')}
+            multiline
+            rows={2}
+            value={node.data.input ?? ''}
+            labelCtx={labelCtx}
+            onFocus={focusEditor('subflow.input')}
+            onChange={(input) => update({ ...node, data: { ...node.data, input } })}
+            className={tokenControlClass}
+            placeholder="What the flow receives as its run input."
+            ariaLabel="Input to send the flow"
+          />
+        </div>
+      )}
+      <p className="text-xs text-slate-500">Runs the flow&apos;s <strong>published</strong> version and passes its result to later steps.</p>
+      <AdvancedParamsSection node={node} onChange={update} />
     </div>
   )
 }
