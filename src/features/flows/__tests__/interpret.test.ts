@@ -498,6 +498,188 @@ test('onError:route on an agent step routes its failure down the error edge', as
   assert.equal(result.output, 'recover agent kaboom :: work on X')
 })
 
+// ── AI steps: routed through the action adapter (kind 'ai'), same envelope
+// as tool/http (retries/timeoutMs pass through unenforced here; onError
+// stop/continue/route dispatch identically) ─────────────────────────────────
+
+test('ai step resolves input/instructions templates and passes untouched statics through to the adapter', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      {
+        id: 'a1',
+        type: 'ai',
+        data: {
+          aiOp: 'categorize',
+          input: 'Ticket: {{trigger.input}}',
+          instructions: 'Pick the best fit for {{trigger.input}}',
+          model: 'smart',
+          categories: ['billing', 'bug', '{{trigger.input}}'],
+          outputFields: [{ name: 'category', type: 'string' }],
+          scoreMin: 1,
+          scoreMax: 5,
+          onError: 'stop',
+          retries: 2,
+          timeoutMs: 9000,
+        },
+      },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'a1' }],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push({ kind: node.kind, ...node.config })
+    return { output: 'ok' }
+  }
+  const result = await interpretFlow(graph, 'Acme', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(calls[0].kind, 'ai')
+  assert.equal(calls[0].input, 'Ticket: Acme') // {{trigger.input}} resolved
+  assert.equal(calls[0].instructions, 'Pick the best fit for Acme') // resolved
+  // Statics pass through UNresolved — categories keeps its literal {{token}} text.
+  assert.deepEqual(calls[0].categories, ['billing', 'bug', '{{trigger.input}}'])
+  assert.equal(calls[0].aiOp, 'categorize')
+  assert.equal(calls[0].model, 'smart')
+  assert.deepEqual(calls[0].outputFields, [{ name: 'category', type: 'string' }])
+  assert.equal(calls[0].scoreMin, 1)
+  assert.equal(calls[0].scoreMax, 5)
+  assert.equal(calls[0].retries, 2)
+  assert.equal(calls[0].timeoutMs, 9000)
+})
+
+test('ai step handles blank/missing input and instructions without crashing', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'ai', data: { aiOp: 'summarize' } }, // no input, no instructions configured
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'a1' }],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push(node.config)
+    return { output: 'summary text' }
+  }
+  const result = await interpretFlow(graph, 'ignored', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'summary text')
+  assert.equal(calls[0].input, undefined)
+  assert.equal(calls[0].instructions, undefined)
+})
+
+test('ai step output threads through as a structured object for downstream steps', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'ai', data: { aiOp: 'categorize', input: '{{trigger.input}}', categories: ['billing', 'bug'] } },
+      { id: 'n2', type: 'agent', data: { agentId: 'log', input: 'category={{step.a1.output.category}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a1' },
+      { id: 'e1', source: 'a1', target: 'n2' },
+    ],
+  }
+  // The adapter's reply arrives as a JSON string (mirrors a real structured
+  // model response) — asStructured must parse it before it threads onward.
+  const runAction: RunActionFn = async () => ({ output: '{"category":"billing"}' })
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, 'my invoice is wrong', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'category=billing')
+})
+
+test('a failing ai step honors onError', async () => {
+  const graph = (onError: 'stop' | 'continue'): FlowGraph => ({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'ai', data: { aiOp: 'ask', input: 'x', onError } },
+      { id: 'n2', type: 'agent', data: { agentId: 'ok', input: 'y' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a1' },
+      { id: 'e1', source: 'a1', target: 'n2' },
+    ],
+  })
+  const runAction: RunActionFn = async () => ({ error: 'model exploded' })
+  const runAgent: RunAgentFn = async () => ({ output: 'OK' })
+  assert.equal((await interpretFlow(graph('stop'), '', { runAgent, runAction })).status, 'failed')
+  assert.equal((await interpretFlow(graph('continue'), '', { runAgent, runAction })).output, 'OK')
+})
+
+test('onError:route sends a failed ai step down its labeled error edge (Error Shield)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'ai', data: { aiOp: 'ask', input: 'work on {{trigger.input}}', onError: 'route' } },
+      { id: 'handle', type: 'agent', data: { agentId: 'log', input: 'failed: {{step.a1.output.error}} for {{step.a1.output.input.input}}' } },
+      { id: 'happy', type: 'agent', data: { agentId: 'happy', input: 'should not run' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a1' },
+      { id: 'e1', source: 'a1', target: 'happy' }, // normal (success) edge
+      { id: 'e2', source: 'a1', target: 'handle', branch: 'error' }, // labeled error edge
+    ],
+  }
+  const runAction: RunActionFn = async () => ({ error: 'model exploded' })
+  const seen: string[] = []
+  const runAgent: RunAgentFn = async (n) => { seen.push(n.agentId); return { output: n.input } }
+  const result = await interpretFlow(graph, 'Acme', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  // Only the error-branch handler ran; the success branch ('happy') was skipped.
+  assert.deepEqual(seen, ['log'])
+  // The handler read the error message AND the passed-through resolved input.
+  assert.equal(result.output, 'failed: model exploded for work on Acme')
+})
+
+test('onError:route on an ai step without an error edge falls through to the normal edge (continue-like)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'ai', data: { aiOp: 'ask', input: 'x', onError: 'route' } },
+      { id: 'next', type: 'agent', data: { agentId: 'next', input: 'saw {{step.a1.output.error}}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a1' },
+      { id: 'e1', source: 'a1', target: 'next' }, // only a normal edge — no error path
+    ],
+  }
+  const runAction: RunActionFn = async () => ({ error: 'model exploded' })
+  const runAgent: RunAgentFn = async (n) => ({ output: n.input })
+  const result = await interpretFlow(graph, '', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(result.output, 'saw model exploded')
+})
+
+// Interpreter-level retry/timeout policy for 'ai' mirrors tool/http EXACTLY:
+// there is none at this seam. `retries`/`timeoutMs` ride through in `config`
+// unchanged (asserted above); the interpreter calls the adapter exactly ONCE
+// per step regardless of `retries` — enforcement (including the WS9 T5
+// TIMED_OUT-sentinel no-retry-on-timeout rule) is the adapter's job (Task 3),
+// exactly as it already is for 'tool' (see execute-flow.ts's runWithRetries +
+// shouldRetryAfterTimeout — interpret.ts itself never wraps 'tool' in a retry
+// loop either; runAgentWithReliability above is 'agent'-only).
+test('a failing ai step is NOT retried by the interpreter — retries/timeout enforcement belongs to the adapter, like tool/http', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a1', type: 'ai', data: { aiOp: 'ask', input: '{{trigger.input}}', retries: 1, timeoutMs: 9000 } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'a1' }],
+  }
+  let calls = 0
+  const configs: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls += 1
+    configs.push(node.config)
+    return { error: 'model unavailable' } // fails on the interpreter's one and only call
+  }
+  const result = await interpretFlow(graph, 'hi', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'failed')
+  assert.equal(calls, 1) // retries: 1 does NOT make the interpreter re-call the adapter
+  assert.equal(configs[0].retries, 1)
+  assert.equal(configs[0].timeoutMs, 9000)
+})
+
 test('transform builds an object from templated fields', async () => {
   const graph: FlowGraph = {
     nodes: [
