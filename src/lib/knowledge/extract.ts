@@ -1,15 +1,20 @@
 /**
- * Text extraction + chunking for uploaded knowledge files. v1 supports
- * text-based formats (plain text, markdown, csv/tsv, json, yaml, xml, html, and
- * common source code); binary formats like PDF/DOCX need a parser and are
- * rejected with a clear message.
+ * Text extraction + chunking for uploaded knowledge files: text-based formats
+ * (plain text, markdown, csv/tsv, json, yaml, xml, html, common source code)
+ * decode directly; PDFs extract via unpdf (pure-JS pdf.js build, serverless-
+ * safe). DOCX still needs a parser and is rejected with a clear message.
  */
 
 const CODE_EXT =
   /\.(md|markdown|txt|text|csv|tsv|json|jsonl|ya?ml|xml|html?|log|js|ts|tsx|jsx|py|rb|go|java|kt|c|cc|cpp|h|hpp|cs|php|rs|swift|sh|bash|sql|css|scss|less|toml|ini|env)$/i
 
-/** Whether a file can be extracted to text in v1. */
+function isPdf(mimeType: string, filename: string): boolean {
+  return /^application\/pdf/i.test(mimeType) || /\.pdf$/i.test(filename)
+}
+
+/** Whether a file can be extracted to text. */
 export function isSupported(mimeType: string, filename: string): boolean {
+  if (isPdf(mimeType, filename)) return true
   if (/^text\//i.test(mimeType)) return true
   if (/^application\/(json|xml|csv|markdown|x-yaml|yaml|xhtml\+xml|javascript|sql)/i.test(mimeType)) return true
   return CODE_EXT.test(filename)
@@ -31,6 +36,20 @@ function stripHtml(html: string): string {
 }
 
 const NULL_CHAR = String.fromCharCode(0)
+
+/**
+ * Decode a file's bytes to normalized text. PDFs go through unpdf (async);
+ * everything else is the synchronous decode below.
+ */
+export async function extractTextAuto(buffer: Buffer, mimeType: string, filename: string): Promise<string> {
+  if (isPdf(mimeType, filename)) {
+    const { extractText: extractPdfText, getDocumentProxy } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(buffer))
+    const { text } = await extractPdfText(pdf, { mergePages: true })
+    return text.split(NULL_CHAR).join('').replace(/\r\n/g, '\n').trim()
+  }
+  return extractText(buffer, mimeType, filename)
+}
 
 /** Decode a file's bytes to normalized text (stripping HTML markup when present). */
 export function extractText(buffer: Buffer, mimeType: string, filename: string): string {

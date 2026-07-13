@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { embedTexts, embeddingsConfigured, toSqlVector } from '@/lib/rag/embeddings'
-import { extractText, chunkText, isSupported } from './extract'
+import { extractTextAuto, chunkText, isSupported } from './extract'
 import { Prisma } from '@prisma/client'
 
 // Bound the work per upload: cap extracted text and chunk count so one huge file
@@ -25,10 +25,10 @@ export async function ingestKnowledgeFile(params: {
 }) {
   if (!isSupported(params.mimeType, params.filename)) {
     throw new UnsupportedFileError(
-      'Unsupported file type. Upload text, markdown, CSV, JSON, HTML, or source files (PDF/DOCX support is coming).',
+      'Unsupported file type. Upload PDF, text, markdown, CSV, JSON, HTML, or source files (DOCX support is coming).',
     )
   }
-  const raw = extractText(params.buffer, params.mimeType, params.filename)
+  const raw = await extractTextAuto(params.buffer, params.mimeType, params.filename)
   if (!raw) throw new UnsupportedFileError('No readable text was found in that file.')
   const text = raw.slice(0, MAX_CHARS)
   const chunks = chunkText(text).slice(0, MAX_CHUNKS)
