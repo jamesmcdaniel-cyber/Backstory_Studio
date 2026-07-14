@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Check, Code2, Copy, Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -44,28 +44,58 @@ function toDocument(html: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;color:#1f2937;font-size:14px;line-height:1.55;word-break:break-word}</style></head><body>${html}</body></html>`
 }
 
+// Auto-size bounds: a report shorter than the collapse limit renders at its
+// natural height with no chrome; anything taller starts collapsed at the
+// limit with an Expand toggle up to the ceiling (then scrolls internally).
+const COLLAPSE_LIMIT = 1400
+const MAX_AUTO_HEIGHT = 8000
+// Fallbacks when measurement is unavailable (iframe not yet loaded).
+const FALLBACK_COLLAPSED = 320
+const FALLBACK_EXPANDED = 1000
+
 /**
- * Renders agent-produced HTML (e.g. an email-brief body) as actual formatted
- * markup instead of raw text — without pulling in a sanitizer dependency.
+ * Renders agent-produced HTML (e.g. a report or email-brief body) as actual
+ * formatted markup instead of raw text — without pulling in a sanitizer
+ * dependency.
  *
- * Safety: the iframe uses `sandbox=""` with NEITHER `allow-scripts` NOR
- * `allow-same-origin`. That combination makes the iframe's origin opaque and
- * scripts inert, so any `<script>`, inline event handler, or `javascript:`
- * link in the agent's HTML simply does not execute, and the frame can't read
- * or write cookies/localStorage. This is what makes rendering untrusted
- * agent HTML directly safe.
+ * Safety: the iframe's sandbox has NO `allow-scripts`, so any `<script>`,
+ * inline event handler, or `javascript:` link in the agent's HTML simply does
+ * not execute. `allow-same-origin` is granted ONLY so the PARENT can reach
+ * `iframe.contentDocument` and measure the rendered height to auto-size the
+ * frame — the framed content itself can run no code to abuse that origin
+ * (no forms, no popups, no navigation either).
  *
- * A side effect of that same origin lockdown: the parent document is denied
- * access to `iframe.contentDocument` (cross-origin per the spec), so we
- * cannot measure `contentDocument.body.scrollHeight` on load to auto-size
- * the frame the way you normally would. Instead we use a fixed collapsed
- * height with internal scrolling, plus an explicit Expand/Collapse toggle.
+ * SECURITY INVARIANT: never add `allow-scripts` here. Combining it with
+ * `allow-same-origin` would let agent-authored HTML execute with the app's
+ * origin (cookies, storage, DOM) — a full sandbox escape.
  */
 export function HtmlPreview({ html, className }: { html: string; className?: string }) {
   const [expanded, setExpanded] = useState(false)
   const [showRaw, setShowRaw] = useState(false)
   const [copied, setCopied] = useState(false)
-  const height = expanded ? 1000 : 320
+  const [measured, setMeasured] = useState<number | null>(null)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+
+  // Measure on load, then re-measure shortly after: grid/table layout can
+  // settle a frame late, and a stale short height would clip the report.
+  const measure = () => {
+    const doc = iframeRef.current?.contentDocument
+    if (!doc) return
+    const next = Math.max(doc.documentElement?.scrollHeight ?? 0, doc.body?.scrollHeight ?? 0)
+    if (next > 0) setMeasured(Math.min(next + 2, MAX_AUTO_HEIGHT))
+  }
+  const onLoad = () => {
+    measure()
+    window.setTimeout(measure, 250)
+    window.setTimeout(measure, 1000)
+  }
+
+  const needsToggle = measured === null || measured > COLLAPSE_LIMIT
+  const height = measured === null
+    ? (expanded ? FALLBACK_EXPANDED : FALLBACK_COLLAPSED)
+    : expanded || measured <= COLLAPSE_LIMIT
+      ? measured
+      : COLLAPSE_LIMIT
 
   const copyHtml = async () => {
     try {
@@ -109,20 +139,24 @@ export function HtmlPreview({ html, className }: { html: string; className?: str
       ) : (
         <>
           <iframe
+            ref={iframeRef}
             title="Agent HTML output"
             srcDoc={toDocument(html)}
-            sandbox=""
-            scrolling={expanded ? 'yes' : 'no'}
+            sandbox="allow-same-origin"
+            onLoad={onLoad}
+            scrolling={height >= (measured ?? Number.POSITIVE_INFINITY) ? 'no' : 'yes'}
             className={cn('w-full rounded-lg border border-border bg-white', !expanded && 'overflow-hidden')}
             style={{ height }}
           />
-          <button
-            type="button"
-            onClick={() => setExpanded((value) => !value)}
-            className="mt-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-          >
-            {expanded ? 'Collapse' : 'Expand'}
-          </button>
+          {needsToggle && (
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+            >
+              {expanded ? 'Collapse' : 'Expand'}
+            </button>
+          )}
         </>
       )}
     </div>

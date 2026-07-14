@@ -1970,3 +1970,68 @@ test('resume replay re-takes the error edge for a route-failed step (completedRo
   assert.equal(result.status, 'succeeded')
   assert.equal(result.output, 'handled: boom', 'walk re-took the error edge')
 })
+
+test('a tool arg can reference the previous step by its display LABEL (the Slack bug)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'a1', input: '{{trigger.input}}', label: 'Previous Agent' } },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'post_message', args: '{"channel":"#sales","text":"{{Previous Agent.output.message}}"}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 't1' },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push(node.config)
+    return { output: 'ok' }
+  }
+  const result = await interpretFlow(graph, 'lead', { runAgent: stub({ a1: 'Qualified: strong fit.' }), runAction })
+  assert.equal(result.status, 'succeeded')
+  // The label path resolved to the agent's plain-text output — never "".
+  assert.deepEqual(calls[0].args, { channel: '#sales', text: 'Qualified: strong fit.' })
+})
+
+test('a tool arg with a truly unknown reference fails the step with the token named', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'post_message', args: '{"text":"{{Nonexistent Step.output}}"}' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 't1' }],
+  }
+  let dispatched = 0
+  const runAction: RunActionFn = async () => {
+    dispatched++
+    return { output: 'ok' }
+  }
+  const result = await interpretFlow(graph, '', { runAgent: async () => ({ output: 'unused' }), runAction })
+  assert.equal(result.status, 'failed')
+  assert.equal(dispatched, 0, 'the tool must not run with silently-blanked args')
+  assert.ok(result.error?.includes('{{Nonexistent Step.output}}'), `error names the exact token: ${result.error}`)
+})
+
+test('a canonical token naming a real step that produced no output stays empty, not a failure', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'flaky', type: 'agent', data: { agentId: 'a1', input: 'x', onError: 'continue' } },
+      { id: 't1', type: 'tool', data: { connectionId: 'c1', toolName: 'send', args: '{"text":"got:{{step.flaky.output}}"}' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'flaky' },
+      { id: 'e1', source: 'flaky', target: 't1' },
+    ],
+  }
+  const calls: Record<string, unknown>[] = []
+  const runAction: RunActionFn = async (node) => {
+    calls.push(node.config)
+    return { output: 'ok' }
+  }
+  const runAgent: RunAgentFn = async () => ({ error: 'boom' })
+  const result = await interpretFlow(graph, '', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(calls[0].args, { text: 'got:' }, 'continue-failed step reads as empty, not unknown')
+})

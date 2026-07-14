@@ -123,6 +123,59 @@ test('evalClause leaves non-string operands from structured outputs intact', () 
   assert.equal(evalClause({ left: '{{step.s.output.score}} ', op: 'gt', right: '90' }, c), true)
 })
 
+test('friendly step-label tokens resolve like canonical step.<id> tokens', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { n2: { output: 'Qualified: strong enterprise fit.' } },
+    stepAliases: { 'previous agent': 'n2' },
+  }
+  // The exact hand-typed shape from the bug report: label root + .output.message
+  // on a plain-text agent output.
+  assert.equal(resolveTemplate('{{Previous Agent.output.message}}', c), 'Qualified: strong enterprise fit.')
+  // Label in the step slot, case/spacing-insensitive, with or without .output.
+  assert.equal(resolveTemplate('{{step.Previous Agent.output}}', c), 'Qualified: strong enterprise fit.')
+  assert.equal(resolveTemplate('{{  previous   agent  .output}}', c), 'Qualified: strong enterprise fit.')
+  assert.equal(resolveTemplate('{{Previous Agent.text}}', c), 'Qualified: strong enterprise fit.')
+})
+
+test('friendly-label tokens read REAL fields off structured outputs', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { n2: { output: { message: 'hi', score: 91 } } },
+    stepAliases: { 'previous agent': 'n2' },
+  }
+  assert.equal(resolveTemplate('{{Previous Agent.output.message}}', c), 'hi')
+  assert.equal(resolveTemplate('{{Previous Agent.score}}', c), '91')
+})
+
+test('text-ish field names on a plain-text output mean the text itself', () => {
+  const c: FlowContext = { trigger: { input: '' }, step: { n2: { output: 'plain text' } } }
+  assert.equal(resolveTemplate('{{step.n2.output.message}}', c), 'plain text')
+  assert.equal(resolveTemplate('{{step.n2.output.summary}}', c), 'plain text')
+  // A non-text-ish field on plain text is still empty — no invented data.
+  assert.equal(resolveTemplate('{{step.n2.output.score}}', c), '')
+})
+
+test('JSON-text outputs walk structured on field access', () => {
+  assert.equal(resolveTemplate('{{step.n1.output.0}}', ctx), 'Acme')
+})
+
+test('onMissing reports broken references, not legitimately-empty ones', () => {
+  const c: FlowContext = {
+    trigger: { input: '' },
+    step: { n2: { output: 'x' } },
+    stepAliases: { 'previous agent': 'n2' },
+  }
+  const missing: string[] = []
+  const out = resolveTemplate('{{Bogus Step.output}}|{{step.zz.output}}|{{var.unset}}|{{Previous Agent.output}}', c, (p) => missing.push(p))
+  assert.equal(out, '|||x')
+  assert.deepEqual(missing, ['Bogus Step.output', 'step.zz.output'])
+  // Exact-token structured values report through the same channel.
+  const missing2: string[] = []
+  assert.deepEqual(resolveTemplateValue({ query: '{{Bogus Step.output}}' }, c, (p) => missing2.push(p)), { query: '' })
+  assert.deepEqual(missing2, ['Bogus Step.output'])
+})
+
 test('evalCondition combines clauses with all (AND) / any (OR)', () => {
   const pass = { left: '{{step.n3.output.score}}', op: 'gt' as const, right: '80' }
   const fail = { left: '{{item}}', op: 'eq' as const, right: 'Globex' }

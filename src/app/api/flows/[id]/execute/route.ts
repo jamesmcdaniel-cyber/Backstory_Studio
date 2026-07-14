@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
-import { runFlowExecution } from '@/features/flows/execute-flow'
+import { dispatchDetachedFlowExecution, startFlowExecution } from '@/features/flows/execute-flow'
 import { parseFlowInput } from '@/lib/flows/input'
 import { deriveRunWaiting } from '@/lib/flows/run-waiting'
 
@@ -55,11 +55,17 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       select: { id: true, status: true },
     })
     if (!owned) throw new ApiError('Run not found', 404, 'NOT_FOUND')
+    // Friendly synchronous check — the worker's atomic waiting→running claim
+    // is still the authority (a lost race there fails the queued job), but a
+    // reply to a run that plainly is not waiting should 409 immediately.
+    if (owned.status !== 'waiting') {
+      throw new ApiError('This run is not waiting for input', 409, 'FLOW_RUN_NOT_WAITING')
+    }
     // A run paused on a tool-step APPROVAL resumes only through the approvals
     // route (which calls runFlowExecution directly with the decision payload,
     // never through this endpoint). A user-supplied reply here must never be
     // interpreted as — or race with — an approval decision.
-    if (parsed.reply !== undefined && owned.status === 'waiting') {
+    if (parsed.reply !== undefined) {
       const steps = await prisma.flowRunStep.findMany({
         where: { flowRunId: owned.id },
         orderBy: { order: 'asc' },
@@ -69,14 +75,26 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         throw new ApiError('This run is waiting for an approval decision, not a reply.', 400, 'FLOW_RUN_AWAITING_APPROVAL')
       }
     }
+    // Resume durably: hand the reply to the dispatcher and return at once.
+    // The run row already exists; the builder/activity pages poll it live.
+    await dispatchDetachedFlowExecution({
+      flowId: id,
+      organizationId: auth.organizationId,
+      userId: auth.dbUser.id,
+      input: parseFlowInput(parsed.input),
+      flowRunId: parsed.flowRunId,
+      reply: parsed.reply,
+    })
+    return { success: true, run: { flowRunId: parsed.flowRunId, status: 'running', output: null } }
   }
-  const run = await runFlowExecution({
+  // Fresh run (or re-run from a step): the run row is created and validated
+  // BEFORE this returns — invalid graphs/input still fail the request — and
+  // execution continues in the background, surviving client navigation.
+  const run = await startFlowExecution({
     flowId: id,
     organizationId: auth.organizationId,
     userId: auth.dbUser.id,
     input: parseFlowInput(parsed.input),
-    flowRunId: parsed.flowRunId,
-    reply: parsed.reply,
     replayFrom: parsed.fromRunId && parsed.fromNodeId ? { runId: parsed.fromRunId, nodeId: parsed.fromNodeId } : undefined,
   })
   return { success: true, run }

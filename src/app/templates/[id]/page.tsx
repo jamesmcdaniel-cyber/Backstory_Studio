@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { IntegrationChip } from '@/components/integrations/integration-chip'
+import { HtmlPreview, looksLikeHtml } from '@/components/ui/html-preview'
 
 type Template = {
   id: string
@@ -98,9 +99,15 @@ export default function TemplateDetails() {
             {template.exampleOutput && (
               <div>
                 <p className="eyebrow mb-2">Example output</p>
-                <div className="rounded-lg border border-horizon-200 bg-horizon-50/40 p-4 shadow-1">
-                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{template.exampleOutput}</p>
-                </div>
+                {looksLikeHtml(template.exampleOutput) ? (
+                  // HTML examples render exactly like a live run's report —
+                  // the advertised output IS the actual output format.
+                  <HtmlPreview html={template.exampleOutput} />
+                ) : (
+                  <div className="rounded-lg border border-horizon-200 bg-horizon-50/40 p-4 shadow-1">
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{template.exampleOutput}</p>
+                  </div>
+                )}
                 <p className="mt-1.5 text-xs text-muted-foreground">Illustrative — actual output uses your live data.</p>
               </div>
             )}

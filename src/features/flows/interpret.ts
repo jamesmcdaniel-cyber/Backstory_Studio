@@ -1,5 +1,6 @@
 import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/graph'
-import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from './context'
+import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, type FlowContext } from './context'
+import { stepLabelsOf } from '@/lib/flows/token-text'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
 import { runDataOp } from '@/lib/flows/data-ops'
@@ -66,6 +67,11 @@ type Opts = {
   // ctx (and every loop/parallel sub-context) so they resolve everywhere.
   now?: { iso: string; date: string; time: string; unix: number }
   run?: { id: string; url: string; trigger: string; startedAt: string; flowId: string; flowName: string }
+  // Node-id → display-label map (as the builder shows them). Used to resolve
+  // hand-typed friendly-label tokens like `{{Previous Agent.output}}` to the
+  // right step. Defaults to labels derivable from the graph alone; callers
+  // that know agent titles (execute-flow) pass richer labels.
+  stepLabels?: Record<string, string>
 }
 
 // Result of executing a single node — an output, or a control signal that
@@ -282,12 +288,12 @@ function applyVariableOp(
   return { output: next }
 }
 
-function resolveConfigValue(value: string | undefined, ctx: FlowContext): unknown {
+function resolveConfigValue(value: string | undefined, ctx: FlowContext, onMissing?: (path: string) => void): unknown {
   if (!value?.trim()) return undefined
   try {
-    return resolveTemplateValue(JSON.parse(value), ctx)
+    return resolveTemplateValue(JSON.parse(value), ctx, onMissing)
   } catch {
-    return resolveTemplateValue(value, ctx)
+    return resolveTemplateValue(value, ctx, onMissing)
   }
 }
 
@@ -393,6 +399,21 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       }
       if (mode === 'continue') return { kind: 'ok', output: undefined }
       return { kind: 'fail', error }
+    }
+
+    // Broken data references (a token whose root is no step id, step label, or
+    // context key — see resolveContextPath) must fail the step with the exact
+    // token named, never silently substitute empty text into a message, HTTP
+    // call, or agent prompt. Collected per adapter-step resolution below.
+    const missingTokens = new Set<string>()
+    const onMissingToken = (path: string) => missingTokens.add(path)
+    const missingTokenFailure = (resolvedInput: unknown): NodeResult | null => {
+      if (!missingTokens.size) return null
+      const list = [...missingTokens].map((p) => `{{${p}}}`).join(', ')
+      const error = `Unknown data reference ${list} — this flow has no step or input with that name. Open the step's settings and pick the value from the data menu instead of typing it.`
+      const mode = 'onError' in node.data ? ((node.data as { onError?: 'stop' | 'continue' | 'route' }).onError ?? 'stop') : 'stop'
+      emit({ nodeId: node.id, status: 'failed', error, ...(mode === 'route' ? { output: { error, input: resolvedInput } } : {}) })
+      return onFailure(mode, error, resolvedInput)
     }
 
     if (node.type === 'trigger') return { kind: 'skip' }
@@ -550,12 +571,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
     if (node.type === 'tool' || node.type === 'http') {
       // Resolve every template in the node config, then delegate to runAction.
-      let resolvedArgs: unknown = resolveTemplate(node.type === 'tool' ? node.data.args ?? '{}' : '{}', ctx)
+      let resolvedArgs: unknown
       if (node.type === 'tool') {
         try {
-          resolvedArgs = resolveTemplateValue(JSON.parse(node.data.args ?? '{}'), ctx)
+          resolvedArgs = resolveTemplateValue(JSON.parse(node.data.args ?? '{}'), ctx, onMissingToken)
         } catch {
-          resolvedArgs = resolveTemplate(node.data.args ?? '{}', ctx)
+          resolvedArgs = resolveTemplate(node.data.args ?? '{}', ctx, onMissingToken)
         }
       }
       const config: Record<string, unknown> =
@@ -570,16 +591,18 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
           : {
               ...(node.data.connectionId ? { connectionId: node.data.connectionId } : {}),
               method: node.data.method,
-              url: resolveTemplate(node.data.url, ctx),
-              query: resolveConfigValue(node.data.query, ctx),
-              headers: resolveConfigValue(node.data.headers, ctx),
-              body: resolveConfigValue(node.data.body, ctx),
+              url: resolveTemplate(node.data.url, ctx, onMissingToken),
+              query: resolveConfigValue(node.data.query, ctx, onMissingToken),
+              headers: resolveConfigValue(node.data.headers, ctx, onMissingToken),
+              body: resolveConfigValue(node.data.body, ctx, onMissingToken),
               bodyMode: node.data.bodyMode,
               responseType: node.data.responseType,
               failOnHttpError: node.data.failOnHttpError,
               retries: node.data.retries,
               timeoutMs: node.data.timeoutMs,
             }
+      const broken = missingTokenFailure(config)
+      if (broken) return broken
       const res: RunAgentResult = opts.runAction
         ? await opts.runAction({ id: stepKey, kind: node.type, config, resume: opts.resumeNodeId === stepKey })
         : { error: `${node.type} steps are not supported in this runtime.` }
@@ -607,10 +630,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       // tool/http's — the SAME reliability envelope: the interpreter dispatches
       // to the adapter ONCE and never retries or races a timeout itself here;
       // that enforcement belongs to the adapter, same as tool/http today.
-      const resolvedInput = typeof node.data.input === 'string' && node.data.input.trim() ? resolveTemplate(node.data.input, ctx) : node.data.input
+      const resolvedInput = typeof node.data.input === 'string' && node.data.input.trim() ? resolveTemplate(node.data.input, ctx, onMissingToken) : node.data.input
       const resolvedInstructions =
-        typeof node.data.instructions === 'string' && node.data.instructions.trim() ? resolveTemplate(node.data.instructions, ctx) : node.data.instructions
+        typeof node.data.instructions === 'string' && node.data.instructions.trim() ? resolveTemplate(node.data.instructions, ctx, onMissingToken) : node.data.instructions
       const config: Record<string, unknown> = { ...node.data, input: resolvedInput, instructions: resolvedInstructions }
+      const broken = missingTokenFailure(config)
+      if (broken) return broken
       const res: RunAgentResult = opts.runAction
         ? await opts.runAction({ id: stepKey, kind: 'ai', config, resume: opts.resumeNodeId === stepKey })
         : { error: 'ai steps are not supported in this runtime.' }
@@ -635,10 +660,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       // interpreter dispatches ONCE — depth guards, retries, and timeouts are
       // the adapter's job.
       const resolvedInputs = node.data.inputs
-        ? Object.fromEntries(Object.entries(node.data.inputs).map(([key, value]) => [key, resolveTemplate(value, ctx)]))
+        ? Object.fromEntries(Object.entries(node.data.inputs).map(([key, value]) => [key, resolveTemplate(value, ctx, onMissingToken)]))
         : undefined
-      const resolvedInput = typeof node.data.input === 'string' && node.data.input.trim() ? resolveTemplate(node.data.input, ctx) : node.data.input
+      const resolvedInput = typeof node.data.input === 'string' && node.data.input.trim() ? resolveTemplate(node.data.input, ctx, onMissingToken) : node.data.input
       const config: Record<string, unknown> = { ...node.data, inputs: resolvedInputs, input: resolvedInput }
+      const broken = missingTokenFailure(config)
+      if (broken) return broken
       const res: RunAgentResult = opts.runAction
         ? await opts.runAction({ id: stepKey, kind: 'subflow', config, resume: opts.resumeNodeId === stepKey })
         : { error: 'subflow steps are not supported in this runtime.' }
@@ -661,8 +688,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       // Read-only retrieval: resolve the query, dispatch once, thread the hit
       // list. No onError/retries — the adapter never throws (empty list on
       // any failure), matching retrieveKnowledge's best-effort contract.
-      const query = resolveTemplate(node.data.query ?? '', ctx)
+      const query = resolveTemplate(node.data.query ?? '', ctx, onMissingToken)
       const config: Record<string, unknown> = { ...node.data, query }
+      const broken = missingTokenFailure(config)
+      if (broken) return broken
       const res: RunAgentResult = opts.runAction
         ? await opts.runAction({ id: stepKey, kind: 'knowledge', config, resume: opts.resumeNodeId === stepKey })
         : { error: 'knowledge steps are not supported in this runtime.' }
@@ -679,8 +708,10 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'agent') {
       const outputFields = node.data.outputFields ?? []
       const structured = node.data.responseFormat === 'structured' && outputFields.some((field) => field.name.trim())
-      let resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx)
+      let resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx, onMissingToken)
       if (structured) resolved = `${resolved}\n\n${structuredResponseInstruction(outputFields)}`
+      const broken = missingTokenFailure(resolved)
+      if (broken) return broken
       const res = await runAgentWithReliability(node, resolved, stepKey)
       if (res.waiting) {
         if (node.data.humanAssistance === false) {
@@ -719,7 +750,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item, index) => {
         // `variables` is shared by reference: writes inside the body persist
         // past the loop (one flow-global symbol table, MS parity).
-        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables, now: ctx.now, run: ctx.run }
+        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables, now: ctx.now, run: ctx.run, stepAliases: ctx.stepAliases }
         // Each iteration's body persists/resumes under `#<index>` (nested loops
         // append their own suffix) so a mid-loop pause never re-runs a prior
         // iteration's side effects on resume.
@@ -741,7 +772,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'parallel') {
       const results = await Promise.all(
         node.data.branches.map(async (branch) => {
-          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables, now: ctx.now, run: ctx.run }
+          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables, now: ctx.now, run: ctx.run, stepAliases: ctx.stepAliases }
           // Branch node ids are already unique, so parallel just propagates the
           // ambient `indexKey` (a parallel nested in a loop keeps the loop's
           // iteration suffix; a top-level parallel keeps bare ids).
@@ -794,7 +825,26 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     ),
   )
 
-  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {}, now: opts.now, run: opts.run }
+  // Friendly-label aliases: normalized display label → node id, so hand-typed
+  // `{{<label>.output}}` tokens resolve like the canonical `{{step.<id>...}}`
+  // chips. First label wins on a duplicate — ambiguous names resolve to the
+  // earliest step, matching how the builder lists them.
+  const stepAliases: Record<string, string> = {}
+  for (const [nodeId, label] of Object.entries(opts.stepLabels ?? stepLabelsOf(graph))) {
+    const alias = normalizeStepAlias(label)
+    if (alias && stepAliases[alias] === undefined) stepAliases[alias] = nodeId
+  }
+  // Every graph node id also aliases itself, so a canonical token that names a
+  // REAL step which produced no output on this walk (skipped branch, onError
+  // 'continue', not-yet-merged parallel body) stays a valid-but-empty
+  // reference instead of a hard "unknown reference" failure. Only tokens
+  // naming nothing in the graph fail loudly.
+  for (const node of graph.nodes) {
+    if (node.type === 'trigger') continue
+    const alias = normalizeStepAlias(node.id)
+    if (alias && stepAliases[alias] === undefined) stepAliases[alias] = node.id
+  }
+  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {}, now: opts.now, run: opts.run, stepAliases }
 
   // Resume: rebuild the symbol table from EVERY completed variable step before
   // walking. A completed loop/parallel short-circuits without entering its

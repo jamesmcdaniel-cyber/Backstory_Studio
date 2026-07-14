@@ -12,12 +12,14 @@ import { resolveFlowToolExecutor } from '@/features/agents/tool-planes'
 import { createApproval, capabilityFromProvider } from '@/lib/agents/approval'
 import { parseApprovalDecision, shouldConsumeApprovalDecision } from '@/lib/flows/approval-decision'
 import { notify } from '@/lib/notifications/service'
+import { apiLogger } from '@/lib/logger'
 import { recordAudit } from '@/lib/audit'
 import { assertPublicUrl } from '@/lib/net/ssrf'
 import { ApiError } from '@/lib/server/api-handler'
 import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/trigger'
 import { applyInputDefaults, missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { shouldReuseInput, storedRunInput } from '@/lib/flows/reuse-input'
+import { stepLabelsOf } from '@/lib/flows/token-text'
 import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
 import { flowActionRetries, flowActionTimeoutMs, runWithRetries, shouldRetryAfterTimeout } from './action-reliability'
 import { prepareHttpRequest, responseOutput, redactHttpStepInput, withBearerAuthorization } from './http'
@@ -52,6 +54,12 @@ export type FlowExecutionJob = {
   // ran BEFORE `nodeId` (on that run's pinned graph), then execute from
   // `nodeId` onward as a NEW run. Route-failed steps re-take their error edge.
   replayFrom?: { runId: string; nodeId: string }
+  // Set by startFlowExecution: the FlowRun row was already created (validated
+  // input + pinned graph persisted on it) before dispatch, so execution must
+  // adopt that row instead of creating a new one. This is what lets the
+  // interactive execute route return a run id immediately while the run
+  // continues in the background.
+  preparedRunId?: string
 }
 
 // Bound HTTP responses so downstream prompts/logs stay manageable.
@@ -78,6 +86,157 @@ async function subflowChildQuestion(childRunId: string, childName: string): Prom
   return question ? `${childName}: ${question}` : `"${childName}" paused to ask for input.`
 }
 
+type FlowRow = NonNullable<Awaited<ReturnType<typeof prisma.flow.findFirst>>>
+type FlowRunRow = NonNullable<Awaited<ReturnType<typeof prisma.flowRun.findFirst>>>
+type FlowGraph = ReturnType<typeof flowGraphSchema.parse>
+
+/** Load + guard the source run for a re-run-from-step request. */
+async function loadReplaySource(job: FlowExecutionJob): Promise<FlowRunRow | null> {
+  if (!job.replayFrom) return null
+  const replaySource = await prisma.flowRun.findFirst({
+    where: { id: job.replayFrom.runId, flowId: job.flowId, organizationId: job.organizationId },
+  })
+  if (!replaySource) throw new ApiError('The run to replay from no longer exists.', 404, 'NOT_FOUND')
+  if (replaySource.status === 'running' || replaySource.status === 'waiting') {
+    throw new ApiError('That run is still in progress — wait for it to finish before re-running from a step.', 409, 'FLOW_REPLAY_ACTIVE')
+  }
+  return replaySource
+}
+
+/**
+ * Pin + parse the graph this run executes, then validate it against current
+ * org state (agents/connections it references must still exist).
+ *
+ * Snapshot pinning: a resumed/prepared run executes the EXACT graph it started
+ * with (graphSnapshot), never whatever the flow currently is — a publish made
+ * while the run waited must not reshape a run already in flight. A replay pins
+ * the source run's snapshot the same way. Legacy fallback: a pre-snapshot run
+ * (graphSnapshot null) uses the flow's current graph — the same source a fresh
+ * run would use.
+ */
+async function resolveValidatedGraph(
+  job: FlowExecutionJob,
+  flow: FlowRow,
+  existingRun: FlowRunRow | null,
+  replaySource: FlowRunRow | null,
+): Promise<{ graph: FlowGraph; agents: { id: string; title: string }[] }> {
+  const currentGraph = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
+  const source = existingRun
+    ? existingRun.graphSnapshot ?? currentGraph
+    : replaySource
+      ? replaySource.graphSnapshot ?? currentGraph
+      : currentGraph
+  const graph = flowGraphSchema.parse(source)
+  const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
+    node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
+  ).filter((id): id is string => Boolean(id))))
+  const [agents, toolCatalog] = await Promise.all([
+    prisma.agentTask.findMany({
+      where: { organizationId: job.organizationId, status: 'ACTIVE' },
+      select: { id: true, description: true },
+      take: 500,
+    }),
+    usedConnectionIds.length
+      ? loadFlowToolCatalog(job.organizationId, { userId: job.userId, connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
+      : Promise.resolve([]),
+  ])
+  const agentRefs = agents.map((agent) => ({ id: agent.id, title: agent.description }))
+  const validation = validateFlowGraph(graph, {
+    agents: agentRefs,
+    toolCatalog,
+    flowId: job.flowId,
+  })
+  if (!validation.ok) {
+    throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
+  }
+  return { graph, agents: agentRefs }
+}
+
+/**
+ * Fresh-run input resolution. Required trigger inputs (declared on the trigger
+ * node) must be present. Input memory: before failing on missing fields, fall
+ * back to the last successful run's input — but only when the flow hasn't been
+ * edited since that run started (shouldReuseInput), so an edited flow always
+ * demands fresh input. A run that supplies every required field never falls
+ * back: deliberately different-but-complete input always wins.
+ */
+async function resolveFreshRunInput(
+  job: FlowExecutionJob,
+  flow: FlowRow,
+  graph: FlowGraph,
+  initial: unknown,
+): Promise<{ input: unknown; reusedInput: boolean }> {
+  const inputFields = triggerInputFieldsFromTrigger(triggerFromGraph(graph, flow.trigger))
+  // Fill declared per-field defaults into absent/blank structured inputs
+  // BEFORE the required-check, so a required field WITH a default is
+  // satisfied. Precedence: explicit provided value > field default >
+  // last-successful-reuse fallback (a field with neither an explicit value
+  // nor a default stays missing and can still trigger the reuse fallback).
+  let input = applyInputDefaults(inputFields, initial)
+  let reusedInput = false
+  let missing = missingRequiredInputFields(inputFields, input)
+  if (missing.length) {
+    const lastSuccess = await prisma.flowRun.findFirst({
+      where: { flowId: flow.id, organizationId: job.organizationId, status: 'succeeded' },
+      orderBy: { startedAt: 'desc' },
+      select: { input: true, startedAt: true },
+    })
+    if (lastSuccess && shouldReuseInput({ flowUpdatedAt: flow.updatedAt, lastSuccessStartedAt: lastSuccess.startedAt })) {
+      const candidate = storedRunInput(lastSuccess.input)
+      if (!missingRequiredInputFields(inputFields, candidate).length) {
+        input = candidate
+        reusedInput = true
+        missing = []
+      }
+    }
+  }
+  if (missing.length) {
+    throw new ApiError(
+      `Missing required input field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
+      400,
+      'FLOW_INPUT_ERROR',
+    )
+  }
+  return { input, reusedInput }
+}
+
+/** Create the FlowRun row a fresh execution runs against. */
+async function createFlowRunRow(
+  job: FlowExecutionJob,
+  flow: FlowRow,
+  graph: FlowGraph,
+  input: unknown,
+  reusedInput: boolean,
+): Promise<FlowRunRow> {
+  return prisma.flowRun.create({
+    data: {
+      flowId: flow.id,
+      status: 'running',
+      input: jsonValue({ prompt: input }),
+      // reusedInput marks the run as replaying the last successful input —
+      // the run panel surfaces it so replayed payloads are never silent.
+      trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}), ...(job.replayFrom ? { replayOf: job.replayFrom.runId, fromNodeId: job.replayFrom.nodeId } : {}) }),
+      graphSnapshot: jsonValue(graph),
+      organizationId: job.organizationId,
+      userId: job.userId,
+    },
+  })
+}
+
+/**
+ * Terminalize a pre-created run whose execution could not start or crashed
+ * outside the interpreter's own failure paths. Status-guarded: a run that
+ * legitimately settled or paused (`waiting`) is never clobbered.
+ */
+async function failPreparedRun(flowRunId: string, organizationId: string, message: string): Promise<void> {
+  await prisma.flowRun
+    .updateMany({
+      where: { id: flowRunId, organizationId, status: 'running' },
+      data: { status: 'failed', error: message.slice(0, 300), finishedAt: new Date() },
+    })
+    .catch(() => undefined)
+}
+
 /**
  * Run a flow to completion. Each agent node delegates to the real agent runtime
  * (runAgentExecution) and is recorded as a FlowRunStep so the builder canvas can
@@ -89,6 +248,7 @@ export async function runFlowExecution(
   const flow = await prisma.flow.findFirst({ where: { id: job.flowId, organizationId: job.organizationId } })
   if (!flow) throw new Error('Flow not found')
   const resuming = Boolean(job.flowRunId && job.reply !== undefined)
+  const prepared = Boolean(job.preparedRunId) && !resuming
 
   // Resume: atomically claim the run — only a genuinely `waiting` run may be
   // resumed. A concurrent resume (e.g. the reply route and the approvals
@@ -107,70 +267,43 @@ export async function runFlowExecution(
     })
     if (claimed.count === 0) throw new ApiError('This run is not waiting for input', 409, 'FLOW_RUN_NOT_WAITING')
   }
-  // Snapshot pinning: a resumed run executes the EXACT graph it started with
-  // (graphSnapshot), never whatever the flow currently is — a publish made
-  // while the run waited must not reshape a run already in flight.
-  //
-  // Invariant: once the claim above flips a run to `running`, the read-only
-  // preparation up to and including graph validation is wrapped so that any
-  // throw here — a deleted agent/connection the snapshot still references, a
-  // malformed snapshot, graph validation failure — rolls the run back to
-  // `waiting` before rethrowing. Otherwise the run would be stuck `running`
-  // with no executor, and the user's reply would be unretryable until the
-  // reaper terminalizes it after 30 minutes. The later resume-state block
-  // (marking the waiting step resumed, superseding stale approvals) sits
-  // OUTSIDE this wrap: those writes are destructive, so a blind rollback
-  // could not restore them anyway — a throw there strands the run until the
-  // reaper sweeps it (rare: plain DB writes). Once interpretFlow begins,
-  // failures are handled by the existing failure paths (run marked `failed`)
-  // — this rollback must not extend into that phase.
-  let graph!: ReturnType<typeof flowGraphSchema.parse>
+  // Invariant: once the resume claim above flips a run to `running`, the
+  // read-only preparation up to and including graph validation is wrapped so
+  // that any throw here — a deleted agent/connection the snapshot still
+  // references, a malformed snapshot, graph validation failure — rolls the run
+  // back to `waiting` before rethrowing. Otherwise the run would be stuck
+  // `running` with no executor, and the user's reply would be unretryable
+  // until the reaper terminalizes it after 30 minutes. A PREPARED run (row
+  // created up front by startFlowExecution) instead terminalizes as `failed`
+  // — there is no prior state to roll back to, and leaving it `running` would
+  // orphan it until the reaper. The later resume-state block (marking the
+  // waiting step resumed, superseding stale approvals) sits OUTSIDE this wrap:
+  // those writes are destructive, so a blind rollback could not restore them
+  // anyway — a throw there strands the run until the reaper sweeps it (rare:
+  // plain DB writes). Once interpretFlow begins, failures are handled by the
+  // existing failure paths (run marked `failed`) — this rollback must not
+  // extend into that phase.
+  let graph!: FlowGraph
+  let orgAgents: { id: string; title: string }[] = []
   try {
     if (resuming) {
       existingRun = await prisma.flowRun.findFirst({ where: { id: job.flowRunId, organizationId: job.organizationId } })
       if (!existingRun) throw new Error('Flow run not found after claim')
     }
-    if (job.replayFrom && !resuming) {
-      replaySource = await prisma.flowRun.findFirst({
-        where: { id: job.replayFrom.runId, flowId: job.flowId, organizationId: job.organizationId },
-      })
-      if (!replaySource) throw new ApiError('The run to replay from no longer exists.', 404, 'NOT_FOUND')
-      if (replaySource.status === 'running' || replaySource.status === 'waiting') {
-        throw new ApiError('That run is still in progress — wait for it to finish before re-running from a step.', 409, 'FLOW_REPLAY_ACTIVE')
+    if (prepared) {
+      existingRun = await prisma.flowRun.findFirst({ where: { id: job.preparedRunId, organizationId: job.organizationId } })
+      if (!existingRun) throw new Error('Prepared flow run not found')
+      // Stale/duplicate delivery (a reaped, cancelled, or already-settled
+      // run): executing it again would double every side effect — report the
+      // stored outcome instead.
+      if (existingRun.status !== 'running') {
+        return { flowRunId: existingRun.id, status: existingRun.status, output: existingRun.output }
       }
     }
-    // Legacy fallback: a pre-snapshot waiting run (graphSnapshot null) resumes
-    // against the flow's current graph — the same source a fresh run would use.
-    const currentGraph = job.usePublished && flow.publishedGraph != null ? flow.publishedGraph : flow.graph
-    // A replay pins the source run's snapshot the same way a resume does — the
-    // point is to re-run THAT run from a step, not today's edited graph.
-    const source = existingRun
-      ? existingRun.graphSnapshot ?? currentGraph
-      : replaySource
-        ? replaySource.graphSnapshot ?? currentGraph
-        : currentGraph
-    graph = flowGraphSchema.parse(source)
-    const usedConnectionIds = Array.from(new Set(graph.nodes.flatMap((node) =>
-      node.type === 'tool' || node.type === 'http' ? [node.data.connectionId] : [],
-    ).filter((id): id is string => Boolean(id))))
-    const [agents, toolCatalog] = await Promise.all([
-      prisma.agentTask.findMany({
-        where: { organizationId: job.organizationId, status: 'ACTIVE' },
-        select: { id: true, description: true },
-        take: 500,
-      }),
-      usedConnectionIds.length
-        ? loadFlowToolCatalog(job.organizationId, { userId: job.userId, connectionIds: usedConnectionIds, takeConnections: usedConnectionIds.length, takeTools: 100 })
-        : Promise.resolve([]),
-    ])
-    const validation = validateFlowGraph(graph, {
-      agents: agents.map((agent) => ({ id: agent.id, title: agent.description })),
-      toolCatalog,
-      flowId: job.flowId,
-    })
-    if (!validation.ok) {
-      throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
-    }
+    if (!resuming) replaySource = await loadReplaySource(job)
+    const resolvedGraph = await resolveValidatedGraph(job, flow, existingRun, replaySource)
+    graph = resolvedGraph.graph
+    orgAgents = resolvedGraph.agents
   } catch (error) {
     // The `status: 'running'` guard means we only roll back a claim we
     // ourselves hold — never stomp a reaper's terminal `failed` write.
@@ -180,6 +313,9 @@ export async function runFlowExecution(
         data: { status: 'waiting' },
       })
     }
+    if (prepared && existingRun) {
+      await failPreparedRun(existingRun.id, job.organizationId, error instanceof Error ? error.message : 'The flow could not start.')
+    }
     throw error
   }
   let input: unknown = job.input ?? ''
@@ -187,59 +323,17 @@ export async function runFlowExecution(
   // repeated. Explicit job.input still wins.
   if (replaySource && job.input === undefined) input = storedRunInput(replaySource.input)
 
-  // Required trigger inputs (declared on the trigger node) must be present.
-  // Skipped when resuming: the original input was validated on the first run.
-  // Input memory: before failing on missing fields, fall back to the last
-  // successful run's input — but only when the flow hasn't been edited since
-  // that run started (shouldReuseInput), so an edited flow always demands
-  // fresh input. A run that supplies every required field never falls back:
-  // deliberately different-but-complete input always wins.
+  // Fresh runs resolve defaults/required-fields/reuse here. Skipped when
+  // resuming (the original input was validated on the first run) and for
+  // prepared runs (startFlowExecution already resolved + persisted the input,
+  // and job.input carries the resolved value through the queue).
   let reusedInput = false
-  if (!resuming) {
-    const inputFields = triggerInputFieldsFromTrigger(triggerFromGraph(graph, flow.trigger))
-    // Fill declared per-field defaults into absent/blank structured inputs
-    // BEFORE the required-check, so a required field WITH a default is
-    // satisfied. Precedence: explicit provided value > field default >
-    // last-successful-reuse fallback (a field with neither an explicit value
-    // nor a default stays missing and can still trigger the reuse fallback).
-    input = applyInputDefaults(inputFields, input)
-    let missing = missingRequiredInputFields(inputFields, input)
-    if (missing.length) {
-      const lastSuccess = await prisma.flowRun.findFirst({
-        where: { flowId: flow.id, organizationId: job.organizationId, status: 'succeeded' },
-        orderBy: { startedAt: 'desc' },
-        select: { input: true, startedAt: true },
-      })
-      if (lastSuccess && shouldReuseInput({ flowUpdatedAt: flow.updatedAt, lastSuccessStartedAt: lastSuccess.startedAt })) {
-        const candidate = storedRunInput(lastSuccess.input)
-        if (!missingRequiredInputFields(inputFields, candidate).length) {
-          input = candidate
-          reusedInput = true
-          missing = []
-        }
-      }
-    }
-    if (missing.length) {
-      throw new ApiError(
-        `Missing required input field${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
-        400,
-        'FLOW_INPUT_ERROR',
-      )
-    }
+  if (!resuming && !prepared) {
+    const resolved = await resolveFreshRunInput(job, flow, graph, input)
+    input = resolved.input
+    reusedInput = resolved.reusedInput
   }
-  const run = existingRun ?? await prisma.flowRun.create({
-    data: {
-      flowId: flow.id,
-      status: 'running',
-      input: jsonValue({ prompt: input }),
-      // reusedInput marks the run as replaying the last successful input —
-      // the run panel surfaces it so replayed payloads are never silent.
-      trigger: jsonValue({ ...(job.trigger ?? { type: 'manual' }), ...(reusedInput ? { reusedInput: true } : {}), ...(job.replayFrom ? { replayOf: job.replayFrom.runId, fromNodeId: job.replayFrom.nodeId } : {}) }),
-      graphSnapshot: jsonValue(graph),
-      organizationId: job.organizationId,
-      userId: job.userId,
-    },
-  })
+  const run = existingRun ?? await createFlowRunRow(job, flow, graph, input, reusedInput)
   // Resume integrity: a resume request carries the user's reply, not the run
   // input, so `input` re-derives as '' here — downstream `Run input` tokens
   // would resolve empty. Reload the original input persisted on the run row.
@@ -843,6 +937,9 @@ export async function runFlowExecution(
     onStep,
     now,
     run: runMeta,
+    // Display labels (agent titles included) so hand-typed friendly-label
+    // tokens like {{Previous Agent.output}} resolve to the right step.
+    stepLabels: stepLabelsOf(graph, orgAgents),
     ...(resuming || replaySource ? { completed, completedRoutes } : {}),
     ...(resuming ? { resumeNodeId, resumeReply: job.reply } : {}),
   })
@@ -934,10 +1031,11 @@ export async function runFlowExecution(
 
 /**
  * Entry point for callers that want queue durability (BullMQ stall recovery
- * and dead-letter) instead of running inline in the request process. NOT YET
- * called from any route — infrastructure only (WS-R2 Task 2). In
- * `inlineExecution` mode (the default today) this is identical to calling
- * `runFlowExecution` directly.
+ * and dead-letter) instead of running inline in the request process — used by
+ * signal chains and cron schedule dispatch. In `inlineExecution` mode (dev/CI)
+ * this is identical to calling `runFlowExecution` directly. Interactive
+ * callers that must return immediately use startFlowExecution /
+ * dispatchDetachedFlowExecution instead.
  */
 export async function dispatchFlowExecution(
   job: FlowExecutionJob,
@@ -947,6 +1045,76 @@ export async function dispatchFlowExecution(
   const queue = createQueue(QUEUE_NAMES.FLOW_EXECUTION)
   await queue.add('execute-flow', job, flowJobOptions(job.flowRunId))
   return { queued: true }
+}
+
+// Detached inline executions in flight — a test seam only (see
+// flushDetachedFlowExecutions); production inline processes are long-lived
+// (next dev / node server), so the promises complete on their own.
+const detachedFlowRuns = new Set<Promise<unknown>>()
+
+/** Test seam: settle every detached inline flow execution started so far. */
+export async function flushDetachedFlowExecutions(): Promise<void> {
+  while (detachedFlowRuns.size) await Promise.allSettled([...detachedFlowRuns])
+}
+
+/**
+ * Dispatch a flow job WITHOUT tying execution to the caller's lifetime: queue
+ * mode enqueues the durable BullMQ job; inline mode (dev) runs it on a
+ * detached promise. Either way the caller returns as soon as the job is
+ * handed off — this is what lets a builder run keep executing after the user
+ * navigates away from the page (the interactive execute route used to await
+ * the whole run, so closing the tab aborted it mid-flight).
+ */
+export async function dispatchDetachedFlowExecution(job: FlowExecutionJob): Promise<void> {
+  if (!inlineExecution) {
+    if (!workersEnabled) throw new Error('Flow worker is disabled')
+    const queue = createQueue(QUEUE_NAMES.FLOW_EXECUTION)
+    await queue.add('execute-flow', job, flowJobOptions(job.flowRunId, job.preparedRunId))
+    return
+  }
+  const detached = runFlowExecution(job)
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : 'The flow run crashed before finishing.'
+      apiLogger.error('detached flow execution failed', { flowId: job.flowId, flowRunId: job.preparedRunId ?? job.flowRunId, error: message })
+      // A prepared run has a row to terminalize; resume failures either rolled
+      // back to `waiting` (preamble) or were already persisted by the
+      // interpreter's failure paths.
+      if (job.preparedRunId) await failPreparedRun(job.preparedRunId, job.organizationId, message)
+    })
+    .finally(() => detachedFlowRuns.delete(detached))
+  detachedFlowRuns.add(detached)
+}
+
+/**
+ * Start a fresh (or replayed-from-a-step) flow run durably: validate and
+ * create the FlowRun row up front — so run history exists the moment this
+ * returns — then hand execution to the detached dispatcher. Validation and
+ * required-input errors still throw synchronously, so interactive callers get
+ * immediate feedback; everything after that survives the caller going away.
+ * Resumes (flowRunId + reply) go through dispatchDetachedFlowExecution
+ * directly — their run row already exists.
+ */
+export async function startFlowExecution(
+  job: FlowExecutionJob,
+): Promise<{ flowRunId: string; status: string; output: unknown }> {
+  const flow = await prisma.flow.findFirst({ where: { id: job.flowId, organizationId: job.organizationId } })
+  if (!flow) throw new Error('Flow not found')
+  const replaySource = await loadReplaySource(job)
+  const { graph } = await resolveValidatedGraph(job, flow, null, replaySource)
+  let input: unknown = job.input ?? ''
+  // A replay re-runs the SOURCE run's input by default — explicit input wins.
+  if (replaySource && job.input === undefined) input = storedRunInput(replaySource.input)
+  const resolved = await resolveFreshRunInput(job, flow, graph, input)
+  const run = await createFlowRunRow(job, flow, graph, resolved.input, resolved.reusedInput)
+  try {
+    // job.input carries the RESOLVED input so the worker executes exactly what
+    // was validated + persisted here (no re-resolution drift).
+    await dispatchDetachedFlowExecution({ ...job, input: resolved.input, preparedRunId: run.id })
+  } catch (error) {
+    await failPreparedRun(run.id, job.organizationId, error instanceof Error ? error.message : 'Could not start the flow run.')
+    throw error
+  }
+  return { flowRunId: run.id, status: 'running', output: null }
 }
 
 /** BullMQ job handler — the worker calls this for each dequeued flow job. */

@@ -5,6 +5,7 @@ import { ChevronRight, Download, RotateCcw, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
+import { HtmlPreview, looksLikeHtml } from '@/components/ui/html-preview'
 import { TypewriterStatus } from '@/components/ui/typewriter-status'
 import { buildProcessTimeline, processFeedRows, type ProcessFeedRow } from '@/lib/agents/process-feed'
 import type { StepStatus } from './step-card'
@@ -87,7 +88,7 @@ function downloadOutput(value: unknown, baseName: string) {
   URL.revokeObjectURL(url)
 }
 
-/** Prose step outputs render as Markdown; structured data stays monospaced. */
+/** Prose step outputs render as Markdown (HTML reports render live); structured data stays monospaced. */
 function OutputView({ value }: { value: unknown }) {
   const isProse =
     typeof value === 'string' &&
@@ -95,6 +96,11 @@ function OutputView({ value }: { value: unknown }) {
     value.trim()[0] !== '{' &&
     value.trim()[0] !== '['
   if (isProse) {
+    // A report-format step output (self-contained HTML document) renders as
+    // the actual report, matching the assistant panel — never raw markup.
+    if (looksLikeHtml(value as string)) {
+      return <HtmlPreview html={value as string} />
+    }
     return (
       <div className="max-h-56 overflow-auto rounded border border-border/60 bg-background px-2.5 py-2">
         <Markdown className="text-xs [&_p]:leading-5">{value as string}</Markdown>

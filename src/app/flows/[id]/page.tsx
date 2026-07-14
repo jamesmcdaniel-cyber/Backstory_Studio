@@ -232,6 +232,9 @@ function FlowBuilder() {
   // Run the user explicitly picked (dropdown or ?run= deep-link). While set,
   // the poll tick refreshes that run's details instead of stealing selection.
   const pinnedRunId = useRef<string | null>(null)
+  // Last run + status this session has SEEN, so pollRuns only toasts outcomes
+  // it witnessed transition (never a stale terminal run on first poll).
+  const watchedRun = useRef<{ id: string; status: string } | null>(null)
   const dirty = savedSnapshot !== '' && JSON.stringify({ name, description, graph, status }) !== savedSnapshot
 
   useEffect(() => {
@@ -622,7 +625,25 @@ function FlowBuilder() {
       const allRuns = data?.runs as FlowRunDetail[] | undefined
       if (allRuns) setRuns(allRuns.map((r) => ({ id: r.id, status: r.status, startedAt: r.startedAt })))
       const latest = data?.latest as FlowRunDetail | null
-      if (!latest) return
+      if (!latest) {
+        // Nothing to watch (flow never ran) — stop the interval.
+        if (pollRef.current) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+        return
+      }
+      // Outcome toasts: runs execute in the background now (the execute route
+      // returns before the run finishes), so completion is observed here. Only
+      // a transition WITNESSED live in this session toasts — a terminal run
+      // seen on first poll (e.g. returning to the page later) stays silent.
+      const watched = watchedRun.current
+      if (watched?.id === latest.id && watched.status !== latest.status) {
+        if (latest.status === 'succeeded') toast.success('Flow ran.')
+        else if (latest.status === 'failed') toast.error('The flow failed — check the step statuses.')
+        else if (latest.status === 'waiting') toast('The flow is waiting for your reply.', { action: { label: 'View', onClick: () => setShowRuns(true) } })
+      }
+      watchedRun.current = { id: latest.id, status: latest.status }
       // Respect a pinned run: refresh its details (so a waiting banner clears
       // when it resumes) instead of stealing selection back to the latest run.
       const pinned = pinnedRunId.current && pinnedRunId.current !== latest.id
@@ -643,6 +664,14 @@ function FlowBuilder() {
     pollRef.current = setInterval(tick, 2000)
     tick()
   }, [id])
+
+  // Runs continue in the background after the execute request returns, so a
+  // user returning to the builder must immediately see history and pick up a
+  // still-live run. The tick self-stops once the latest run is terminal (or
+  // when the flow has never run).
+  useEffect(() => {
+    pollRuns()
+  }, [pollRuns])
 
   const updateSharing = useCallback(async (next: 'shared' | 'view' | 'private') => {
     const response = await fetch('/api/flows', {
@@ -760,7 +789,6 @@ function FlowBuilder() {
     pinnedRunId.current = null
     try {
       if (!(await save())) return
-      pollRuns()
       const response = await fetch(`/api/flows/${id}/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -768,9 +796,13 @@ function FlowBuilder() {
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) toast.error(data.error || 'Run failed.')
-      else if (data.run?.status === 'waiting') toast('The flow is waiting for your reply.', { action: { label: 'View', onClick: () => setShowRuns(true) } })
-      else if (data.run?.status === 'failed') toast.error('The flow failed — check the step statuses.')
-      else toast.success('Flow ran.')
+      else {
+        // The run executes in the background — it keeps going (and stays in
+        // history) even if you leave this page. pollRuns follows it live and
+        // toasts the outcome when it settles.
+        if (data.run?.flowRunId) watchedRun.current = { id: data.run.flowRunId, status: 'running' }
+        toast.success('Run started — it keeps going even if you leave this page.')
+      }
       pollRuns()
     } finally {
       setRunning(false)

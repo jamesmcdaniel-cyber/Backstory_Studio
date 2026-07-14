@@ -39,7 +39,43 @@ const builtInTemplates = [
       "weekly"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "EXECUTIVE DIGEST — Data Foundation + EDB segment\nScored 18 of 23 in-segment accounts (5 lacked usage data). Avg readiness 64; 6 ready now.\nTop 5: Seismic (91), Zscaler (88), CrowdStrike (84), Palo Alto Networks (79), Datadog (76).\nRisk themes: 3 accounts show competitive eval signals; 2 show engagement decay.\nFocus this week: Seismic — champion is engaged and usage is peaking.\n\nPRIORITY MATRIX (excerpt)\n| Tier | Account | Score | Risk | Primary use case |\n|---|---|---|---|---|\n| NOW | Seismic | 91 | medium | Forecast roll-ups |\n| NOW | Zscaler | 88 | high | Pipeline inspection |\n| NEXT | Datadog | 76 | low | Deal reviews |\n\nSTAKEHOLDER LIST + 4-WEEK ACTION PLANS follow per account…",
+    // House report format (see src/features/agents/report-format.ts) — the
+    // gallery renders this via HtmlPreview, so the advertised example IS the
+    // exact format live runs produce.
+    "exampleOutput": `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;background:#f1f5f9;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;color:#0f172a;padding:24px}
+.report{max-width:960px;margin:0 auto}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.hero{background:linear-gradient(135deg,#ecfdf5,#ffffff 60%);display:flex;justify-content:space-between;gap:16px}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#047857;margin:0 0 6px}
+h1{font-size:22px;margin:0 0 6px}h2{font-size:16px;margin:0}
+.sub{color:#475569;font-size:14px;margin:0}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #d1fae5;background:#fff;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600;color:#065f46;white-space:nowrap;height:fit-content}
+.dot{width:7px;height:7px;border-radius:999px;background:#10b981;display:inline-block}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.stat{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px}
+.stat b{font-size:18px}.stat span{display:block;color:#64748b;font-size:12px;margin-top:2px}
+.summary{border-left:3px solid #10b981}.summary p{color:#334155;font-size:14px;line-height:1.6;margin:10px 0 0}
+.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.count{border:1px solid #e2e8f0;border-radius:999px;padding:3px 10px;font-size:12px;color:#334155;background:#fff}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;text-align:left;padding:10px 12px;background:#f8fafc}
+td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
+.right{text-align:right}.muted{color:#64748b}
+.prio-high{color:#047857;font-weight:700;font-size:12px}.prio-med{color:#b45309;font-weight:700;font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.mini{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px}
+.mini b{font-size:13.5px}.mini p{margin:4px 0;color:#475569;font-size:13px}.mini small{color:#94a3b8;font-size:11.5px}
+.banner{background:#0f172a;color:#f8fafc;border-radius:14px;text-align:center;padding:14px;font-size:13px;font-weight:600}
+</style></head><body><div class="report">
+<div class="card hero"><div><p class="eyebrow">Upsell Intelligence Report</p><h1>SalesAI Upsell Engine — Weekly Sweep</h1><p class="sub">Scored the in-segment account universe across readiness, competitive risk, use-case fit, and sales motion.</p></div><span class="pill"><span class="dot"></span>18 of 23 scored · Action ready</span></div>
+<div class="stats"><div class="stat">🏆 <b>6</b><span>Accounts ready NOW</span></div><div class="stat">📈 <b>64</b><span>Avg readiness score</span></div><div class="stat">💰 <b>$2.1M</b><span>Qualified pipeline</span></div><div class="stat">⚠️ <b>3</b><span>Competitive eval signals</span></div></div>
+<div class="card summary"><h2>✨ Executive summary</h2><p>Scored 18 of 23 in-segment accounts (5 lacked usage data). Six are ready now, led by Seismic (91) with an engaged champion and peaking usage. Three accounts show live competitive evaluations and two show engagement decay. Recommended focus this week: close the Seismic expansion while re-engaging the two decaying renewals before the signals compound.</p></div>
+<div class="card"><p class="eyebrow">Evidence-backed analysis</p><div class="head"><h2>🔎 Priority matrix</h2><span class="count">Top 5 of 18 scored</span></div><table><tr><th>Tier</th><th>Account</th><th class="right">Readiness</th><th>Comp. risk</th><th>Primary use case</th></tr><tr><td class="prio-high">NOW</td><td>Seismic</td><td class="right">91</td><td>Medium</td><td>Forecast roll-ups</td></tr><tr><td class="prio-high">NOW</td><td>Zscaler</td><td class="right">88</td><td>High</td><td>Pipeline inspection</td></tr><tr><td class="prio-high">NOW</td><td>CrowdStrike</td><td class="right">84</td><td>Medium</td><td>Deal reviews</td></tr><tr><td class="prio-med">NEXT</td><td>Palo Alto Networks</td><td class="right">79</td><td>Medium</td><td>Renewal save plan</td></tr><tr><td class="prio-med">NEXT</td><td>Datadog</td><td class="right">76</td><td>Low</td><td>Deal reviews</td></tr></table></div>
+<div class="card"><p class="eyebrow">Recommended execution</p><div class="head"><h2>✅ Action plan — week 1</h2><span class="count">Owner + date assigned</span></div><table><tr><th>#</th><th>Next action</th><th>Owner</th><th>Due</th></tr><tr><td class="muted">1</td><td>Book Seismic expansion review with the engaged champion</td><td>Account team</td><td>Jul 16</td></tr><tr><td class="muted">2</td><td>Counter Zscaler's live competitive evaluation with ROI brief</td><td>Solutions</td><td>Jul 17</td></tr><tr><td class="muted">3</td><td>Re-engage the two decaying renewals with usage health review</td><td>CSM</td><td>Jul 18</td></tr></table></div>
+<div class="card"><h2>🧾 Evidence trail</h2><div class="cards"><div class="mini"><b>Backstory MCP</b><p>Opportunity data and 30-day communications intelligence.</p><small>↻ Updated 2h ago</small></div><div class="mini"><b>Snowflake</b><p>Feature adoption and usage telemetry per account.</p><small>↻ Jul 13</small></div><div class="mini"><b>Salesforce</b><p>Stage history, ARR, and named stakeholders.</p><small>↻ Updated 2h ago</small></div></div></div>
+<div class="banner">🎉 18 accounts scored · Priority matrix delivered · Executive digest emailed · Slack summary posted</div>
+</div></body></html>`,
     "allowSubagents": true,
     "playbook": "salesai-upsell"
   },

@@ -21,79 +21,161 @@ export type FlowContext = {
   // Run/flow metadata: `{{run.id}}`/`{{run.url}}`/`{{run.trigger}}`/
   // `{{run.startedAt}}` and the `{{flow.id}}`/`{{flow.name}}` aliases.
   run?: { id: string; url: string; trigger: string; startedAt: string; flowId: string; flowName: string }
+  // Friendly-name fallback: normalized step LABEL → node id. The chip picker
+  // stores canonical `{{step.<id>...}}` tokens, but users reading those chips
+  // reasonably hand-type the plain-English labels they see (e.g.
+  // `{{Previous Agent.output}}`) — those must resolve to the same step, not
+  // silently blank out.
+  stepAliases?: Record<string, string>
 }
 
-/** Read a dot-path off the context (e.g. 'trigger.input', 'step.n1.output.score', 'item'). */
-export function readPath(ctx: FlowContext, path: string): unknown {
-  const parts = path.trim().split('.')
-  // `var.<name>` roots into the variables map; deeper parts walk the value.
-  if (parts[0] === 'var') {
-    parts.shift()
-    let cursor: unknown = ctx.variables ?? {}
-    for (const part of parts) {
-      if (cursor == null || typeof cursor !== 'object') return undefined
-      cursor = (cursor as Record<string, unknown>)[part]
-    }
-    return cursor
-  }
-  // `now.*` reads the run's frozen clock; bare `{{now}}` is the ISO timestamp.
-  // Unknown subpaths read as undefined (→ '' when templated) — never crash.
-  if (parts[0] === 'now') {
-    const now = ctx.now
-    if (!now) return undefined
-    if (parts.length === 1) return now.iso
-    if (parts[1] === 'iso') return now.iso
-    if (parts[1] === 'date') return now.date
-    if (parts[1] === 'time') return now.time
-    if (parts[1] === 'unix') return now.unix
-    return undefined
-  }
-  // `flow.id`/`flow.name` alias the running flow's identity off the run metadata.
-  if (parts[0] === 'flow') {
-    const run = ctx.run
-    if (!run) return undefined
-    if (parts[1] === 'id') return run.flowId
-    if (parts[1] === 'name') return run.flowName
-    return undefined
-  }
-  // `run.*` reads this run's metadata (id, link, provenance, start time).
-  if (parts[0] === 'run') {
-    const run = ctx.run
-    if (!run) return undefined
-    if (parts[1] === 'id') return run.id
-    if (parts[1] === 'url') return run.url
-    if (parts[1] === 'trigger') return run.trigger
-    if (parts[1] === 'startedAt') return run.startedAt
-    return undefined
-  }
-  let cursor: unknown = ctx
+/** Normalize a step label for alias lookup: trimmed, lowercased, single-spaced. */
+export function normalizeStepAlias(label: string): string {
+  return label.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+// Reading a text-ish field name off a PLAIN-TEXT output means the text itself:
+// an agent step's output is a string, so `step.x.output.message` (or `.text`,
+// `.summary`…) resolves to the output instead of silently blanking.
+const TEXT_FIELD_ALIASES = new Set(['message', 'text', 'summary', 'content', 'response', 'result', 'output', 'value', 'answer'])
+
+/** Walk `parts` down a value; JSON-looking text is walked structured, and text-ish field names on plain text return the text. */
+function walkValue(start: unknown, parts: string[]): unknown {
+  let cursor: unknown = start
   for (const part of parts) {
-    if (cursor == null || typeof cursor !== 'object') return undefined
+    if (cursor == null) return undefined
+    if (typeof cursor === 'string') {
+      const structured = asStructured(cursor)
+      if (structured !== cursor && structured !== null && typeof structured === 'object') {
+        cursor = (structured as Record<string, unknown>)[part]
+        continue
+      }
+      if (TEXT_FIELD_ALIASES.has(part)) continue
+      return undefined
+    }
+    if (typeof cursor !== 'object') return undefined
     cursor = (cursor as Record<string, unknown>)[part]
   }
   return cursor
 }
 
-/** Replace `{{path}}` tokens with values from the context. Objects -> JSON; missing -> ''. */
-export function resolveTemplate(template: string, ctx: FlowContext): string {
+/**
+ * Resolve a leading run of `parts` as a step LABEL (longest match wins, so
+ * labels containing dots still resolve) and walk the remainder from that
+ * step's output. `rest` may or may not start with `output` — both
+ * `Previous Agent.output.message` and `Previous Agent.message` read the same.
+ */
+function readStepByAlias(ctx: FlowContext, parts: string[]): { matched: boolean; value: unknown } {
+  const aliases = ctx.stepAliases
+  if (!aliases) return { matched: false, value: undefined }
+  for (let end = parts.length; end >= 1; end--) {
+    const id = aliases[normalizeStepAlias(parts.slice(0, end).join('.'))]
+    if (!id) continue
+    const entry = ctx.step[id]
+    if (entry === undefined) return { matched: true, value: undefined } // step hasn't run yet
+    const rest = parts[end] === 'output' ? parts.slice(end + 1) : parts.slice(end)
+    return { matched: true, value: walkValue(entry.output, rest) }
+  }
+  return { matched: false, value: undefined }
+}
+
+// Roots the generic object walk understands. Anything else is either a step
+// label (aliased above) or an unknown reference the caller may surface.
+const KNOWN_ROOTS = new Set(['trigger', 'step', 'item', 'loop', 'variables'])
+
+/**
+ * Resolve a dot-path off the context. `found: false` means the path's ROOT is
+ * not a context key, a known step id, or a step label — i.e. the reference
+ * itself is broken (a typo'd or stale token), as opposed to a valid reference
+ * whose value is legitimately empty.
+ */
+export function resolveContextPath(ctx: FlowContext, path: string): { found: boolean; value: unknown } {
+  const parts = path.trim().split('.')
+  // `var.<name>` roots into the variables map; deeper parts walk the value.
+  if (parts[0] === 'var') {
+    return { found: true, value: walkValue(ctx.variables ?? {}, parts.slice(1)) }
+  }
+  // `now.*` reads the run's frozen clock; bare `{{now}}` is the ISO timestamp.
+  // Unknown subpaths read as undefined (→ '' when templated) — never crash.
+  if (parts[0] === 'now') {
+    const now = ctx.now
+    if (!now) return { found: true, value: undefined }
+    if (parts.length === 1) return { found: true, value: now.iso }
+    if (parts[1] === 'iso') return { found: true, value: now.iso }
+    if (parts[1] === 'date') return { found: true, value: now.date }
+    if (parts[1] === 'time') return { found: true, value: now.time }
+    if (parts[1] === 'unix') return { found: true, value: now.unix }
+    return { found: true, value: undefined }
+  }
+  // `flow.id`/`flow.name` alias the running flow's identity off the run metadata.
+  if (parts[0] === 'flow') {
+    const run = ctx.run
+    if (!run) return { found: true, value: undefined }
+    if (parts[1] === 'id') return { found: true, value: run.flowId }
+    if (parts[1] === 'name') return { found: true, value: run.flowName }
+    return { found: true, value: undefined }
+  }
+  // `run.*` reads this run's metadata (id, link, provenance, start time).
+  if (parts[0] === 'run') {
+    const run = ctx.run
+    if (!run) return { found: true, value: undefined }
+    if (parts[1] === 'id') return { found: true, value: run.id }
+    if (parts[1] === 'url') return { found: true, value: run.url }
+    if (parts[1] === 'trigger') return { found: true, value: run.trigger }
+    if (parts[1] === 'startedAt') return { found: true, value: run.startedAt }
+    return { found: true, value: undefined }
+  }
+  if (KNOWN_ROOTS.has(parts[0])) {
+    // `step.<key>` where <key> is not a node id: the friendly label was typed
+    // where the id belongs (`{{step.Previous Agent.output}}`) — alias it.
+    if (parts[0] === 'step' && parts.length > 1 && !(parts[1] in ctx.step)) {
+      const aliased = readStepByAlias(ctx, parts.slice(1))
+      if (aliased.matched) return { found: true, value: aliased.value }
+      return { found: false, value: undefined }
+    }
+    return { found: true, value: walkValue(ctx, parts) }
+  }
+  // Unknown root — try it as a bare step label (`{{Previous Agent.output}}`).
+  const aliased = readStepByAlias(ctx, parts)
+  if (aliased.matched) return { found: true, value: aliased.value }
+  return { found: false, value: undefined }
+}
+
+/** Read a dot-path off the context (e.g. 'trigger.input', 'step.n1.output.score', 'item'). */
+export function readPath(ctx: FlowContext, path: string): unknown {
+  return resolveContextPath(ctx, path).value
+}
+
+/**
+ * Replace `{{path}}` tokens with values from the context. Objects -> JSON;
+ * missing -> ''. `onMissing` (when given) is told about tokens whose reference
+ * is BROKEN (unknown root/step — see resolveContextPath), so callers can fail
+ * loudly with the exact token instead of silently posting empty text.
+ */
+export function resolveTemplate(template: string, ctx: FlowContext, onMissing?: (path: string) => void): string {
   return template.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_match, path: string) => {
-    const value = readPath(ctx, path)
-    if (value == null) return ''
-    return typeof value === 'object' ? JSON.stringify(value) : String(value)
+    const res = resolveContextPath(ctx, path)
+    if (!res.found) onMissing?.(path)
+    if (res.value == null) return ''
+    return typeof res.value === 'object' ? JSON.stringify(res.value) : String(res.value)
   })
 }
 
 /** Resolve templates inside structured values while preserving exact-token objects/arrays. */
-export function resolveTemplateValue(value: unknown, ctx: FlowContext): unknown {
+export function resolveTemplateValue(value: unknown, ctx: FlowContext, onMissing?: (path: string) => void): unknown {
   if (typeof value === 'string') {
     const exact = value.trim().match(/^\{\{\s*([^{}]+?)\s*\}\}$/)
-    if (exact) return readPath(ctx, exact[1]) ?? ''
-    return resolveTemplate(value, ctx)
+    if (exact) {
+      const res = resolveContextPath(ctx, exact[1])
+      if (!res.found) onMissing?.(exact[1])
+      return res.value ?? ''
+    }
+    return resolveTemplate(value, ctx, onMissing)
   }
-  if (Array.isArray(value)) return value.map((item) => resolveTemplateValue(item, ctx))
+  if (Array.isArray(value)) return value.map((item) => resolveTemplateValue(item, ctx, onMissing))
   if (value && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, resolveTemplateValue(item, ctx)]),
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, resolveTemplateValue(item, ctx, onMissing)]),
     )
   }
   return value

@@ -34,6 +34,16 @@ describe('buildAgentSystemPrompt', () => {
     assert.ok(/say so|don.t (?:guess|fabricate)|rather than inventing/i.test(prompt), 'expected an explicit refusal-over-fabrication instruction')
   })
 
+  it('teaches the house HTML report format for report deliverables (and keeps Markdown otherwise)', () => {
+    const prompt = buildAgentSystemPrompt('Do the work.', [])
+    assert.ok(prompt.includes('REPORT DELIVERABLES'), 'expected the report-format trigger rule')
+    assert.ok(prompt.includes('<!doctype html>'), 'expected the self-contained document rule')
+    assert.ok(prompt.includes('Executive summary'), 'expected the house skeleton (executive summary section)')
+    assert.ok(prompt.includes('Evidence trail'), 'expected the house skeleton (evidence trail section)')
+    assert.ok(prompt.includes('prio-high'), 'expected the priority badge classes')
+    assert.ok(/Otherwise, format the final response as clean Markdown/.test(prompt), 'Markdown stays the non-report default')
+  })
+
   it('softens the anti-hedging line to distinguish present from absent information', () => {
     const prompt = buildAgentSystemPrompt('Do the work.', [])
     // The old absolute "Never claim you lack access ..." must be gone.
