@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Search, Server } from 'lucide-react'
+import { AlertCircle, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Search } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
@@ -20,8 +20,7 @@ type Result =
 const NAV_ITEMS: NavResult[] = [
   { label: 'Home', href: '/dashboard', icon: Brain },
   { label: 'Integrations', href: '/integrations', icon: Plug },
-  { label: 'Explore', href: '/templates', icon: FileText },
-  { label: 'MCP Servers', href: '/connections', icon: Server },
+  { label: 'Templates', href: '/templates', icon: FileText },
 ]
 
 function runStatusIcon(status: string) {

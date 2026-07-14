@@ -533,8 +533,8 @@ function SuggestionsCard({
               <p className="text-sm font-medium text-gray-800">{suggestion.title}</p>
               <p className="text-xs text-gray-500">{suggestion.rationale}</p>
               {suggestion.actionType === 'connect' && (
-                <Link href="/connections" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                  <LinkIcon className="h-3 w-3" /> Open connections
+                <Link href="/integrations?tab=servers" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                  <LinkIcon className="h-3 w-3" /> Open integrations
                 </Link>
               )}
             </div>

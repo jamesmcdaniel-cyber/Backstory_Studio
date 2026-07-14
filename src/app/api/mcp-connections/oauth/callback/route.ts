@@ -8,7 +8,7 @@
  * 3. Exchange the authorization code (+ PKCE verifier) for tokens.
  * 4. Persist an McpConnection (authType 'oauth2', flow 'authcode') with all
  *    secrets ENCRYPTED in authConfig.
- * 5. Clear the cookie and redirect back to /connections.
+ * 5. Clear the cookie and redirect back to the MCP servers tab in Integrations.
  *
  * The `organizationId` is taken from the (trusted, encrypted) cookie that was
  * minted in the authenticated start route — the third-party redirect that
@@ -38,8 +38,9 @@ interface OAuthCookiePayload {
 }
 
 function redirect(request: NextRequest, query: string, clearCookie = false) {
+  // MCP Servers now lives as a tab inside Integrations.
   const response = NextResponse.redirect(
-    new URL(`/connections?${query}`, request.nextUrl.origin),
+    new URL(`/integrations?tab=servers&${query}`, request.nextUrl.origin),
   )
   if (clearCookie) {
     response.cookies.set(OAUTH_COOKIE, '', { path: '/', maxAge: 0 })
@@ -121,7 +122,7 @@ export async function GET(request: NextRequest) {
     const safeReturnTo = safeReturnToPath(payload.returnTo)
     const successPath = safeReturnTo
       ? `${safeReturnTo}${safeReturnTo.includes('?') ? '&' : '?'}connected=1`
-      : '/connections?connected=1'
+      : '/integrations?tab=servers&connected=1'
     const response = NextResponse.redirect(new URL(successPath, request.nextUrl.origin))
     response.cookies.set(OAUTH_COOKIE, '', { path: '/', maxAge: 0 })
     return response

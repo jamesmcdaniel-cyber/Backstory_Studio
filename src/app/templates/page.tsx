@@ -360,7 +360,7 @@ function ExplorePage() {
     return (
       <>
         <div className="max-w-6xl mx-auto p-6 space-y-6">
-          <PageHeader eyebrow="Library" title="Explore" />
+          <PageHeader eyebrow="Library" title="Templates" />
           {loading && (
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
               <Skeleton className="h-56 rounded-xl" />
@@ -380,7 +380,7 @@ function ExplorePage() {
   return (
     <>
       <div className="max-w-6xl mx-auto p-6 space-y-6">
-        <PageHeader eyebrow="Library" title="Explore" />
+        <PageHeader eyebrow="Library" title="Templates" />
 
         <div className="relative w-full">
           <Input

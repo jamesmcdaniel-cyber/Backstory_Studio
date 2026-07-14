@@ -161,7 +161,7 @@ export function McpConnectionDialog({
   const canConnectSso = Boolean(draft.name.trim() && draft.serverUrl.trim())
 
   // Full-page navigation so the browser follows the OAuth redirect chain
-  // (our /start route → Okta → /callback → back to /connections).
+  // (our /start route → Okta → /callback → back to the MCP servers tab).
   const connectWithSso = () => {
     if (!canConnectSso) return
     const params = new URLSearchParams({

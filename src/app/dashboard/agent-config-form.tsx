@@ -782,13 +782,13 @@ export function AgentConfigForm({
             </p>
             <div className="flex items-center gap-2">
               <Link
-                href="/connections"
+                href="/integrations?tab=servers"
                 className="text-xs font-medium text-primary hover:underline"
               >
                 + Connect a tool
               </Link>
               <span className="text-xs text-muted-foreground">
-                — add more in Connections.
+                — add more in Integrations.
               </span>
             </div>
           </div>
