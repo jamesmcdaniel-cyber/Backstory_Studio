@@ -38,19 +38,7 @@ export async function resolveDeliveryConnection(
   capability: DeliveryCapability,
   userId?: string | null,
 ): Promise<DeliveryConnection | null> {
-  const keys = DELIVERY_PROVIDERS[capability] as readonly string[]
-  const connections = await prisma.nangoConnection.findMany({
-    where: { organizationId, providerConfigKey: { in: [...keys] }, status: 'connected' },
-  })
-  if (connections.length === 0) return null
-
-  const own = userId ? connections.find((connection) => connection.userId === userId) : undefined
-  const chosen = own ?? connections.find((connection) => !connection.userId) ?? connections[0]
-  return {
-    connectionId: chosen.connectionId,
-    providerConfigKey: chosen.providerConfigKey,
-    scope: chosen.userId === userId && userId ? 'user' : 'org',
-  }
+  return resolveNangoConnection(organizationId, DELIVERY_PROVIDERS[capability] as readonly string[], userId)
 }
 
 // ── Proxy seam ───────────────────────────────────────────────────────────────
@@ -87,7 +75,7 @@ function proxyTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 20_000
 }
 
-function defaultProxy(): NangoProxy {
+export function defaultProxy(): NangoProxy {
   const nango = getNangoClient()
   return (args) =>
     withTimeout(
@@ -95,6 +83,31 @@ function defaultProxy(): NangoProxy {
       proxyTimeoutMs(),
       `Nango proxy ${args.method} ${args.endpoint}`,
     )
+}
+
+/**
+ * Resolve a Nango connection for ANY provider by its config key(s): the acting
+ * user's own connection first, then any org connection. This is the generalized
+ * form of resolveDeliveryConnection — used by the multi-provider tool registry
+ * (provider-tools.ts) so every provider's tools resolve a connection the same
+ * way delivery tools do.
+ */
+export async function resolveNangoConnection(
+  organizationId: string,
+  providerConfigKeys: readonly string[],
+  userId?: string | null,
+): Promise<DeliveryConnection | null> {
+  const connections = await prisma.nangoConnection.findMany({
+    where: { organizationId, providerConfigKey: { in: [...providerConfigKeys] }, status: 'connected' },
+  })
+  if (connections.length === 0) return null
+  const own = userId ? connections.find((connection) => connection.userId === userId) : undefined
+  const chosen = own ?? connections.find((connection) => !connection.userId) ?? connections[0]
+  return {
+    connectionId: chosen.connectionId,
+    providerConfigKey: chosen.providerConfigKey,
+    scope: chosen.userId === userId && userId ? 'user' : 'org',
+  }
 }
 
 // ── Adapters ─────────────────────────────────────────────────────────────────

@@ -23,7 +23,8 @@ import { cacheGet, cacheSet } from '@/lib/cache'
 import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/peopleai/client'
-import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection, type DeliveryCapability } from '@/lib/nango/delivery'
+import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection, resolveNangoConnection, type DeliveryCapability, type DeliveryConnection } from '@/lib/nango/delivery'
+import { NANGO_PROVIDER_TOOLS, PROVIDER_CONFIG_KEYS } from '@/lib/nango/provider-tools'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
 import { isStrataUrl } from '@/lib/mcp/strata'
@@ -473,7 +474,45 @@ export async function loadNangoPlaneGroups(
       })
     }
   }
+
+  // Multi-provider Nango tools (the Klavis replacement): one group PER TOOL so
+  // each carries its own isWrite — read tools (list/search) skip the approval
+  // gate, writes (create/update/comment) keep it. Connections resolve once per
+  // provider. Selection matches `nango:<provider>` or the bare provider key.
+  const connByProvider = new Map<string, DeliveryConnection | null>()
+  for (const tool of NANGO_PROVIDER_TOOLS) {
+    if (options.providers && !options.providers.some((p) => p === `nango:${tool.provider}` || p.toLowerCase() === tool.provider)) continue
+    try {
+      if (!connByProvider.has(tool.provider)) {
+        connByProvider.set(tool.provider, await resolveNangoConnection(organizationId, PROVIDER_CONFIG_KEYS[tool.provider] ?? [tool.provider], ownerUserId))
+      }
+      const connection = connByProvider.get(tool.provider)
+      if (!connection) continue
+      groups.push({
+        id: formatFlowToolConnectionId('nango', tool.name),
+        plane: 'nango',
+        name: providerLabel(tool.provider),
+        provider: `nango:${tool.provider}`,
+        serverUrl: 'nango',
+        isWrite: tool.isWrite,
+        client: { executeTool: (_serverUrl, _toolName, args) => tool.run(connection, args) },
+        tools: [{ name: tool.name, description: tool.description, inputSchema: tool.inputSchema }],
+      })
+    } catch (error) {
+      apiLogger.warn('loadTools: Nango provider tool setup failed, skipping', {
+        provider: tool.provider,
+        tool: tool.name,
+        organizationId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
   return groups
+}
+
+/** Plain-English label for a Nango provider key (e.g. 'google_sheets' → 'Google Sheets'). */
+function providerLabel(provider: string): string {
+  return provider.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 // ── Flow tool-step execution ──────────────────────────────────────────────────
