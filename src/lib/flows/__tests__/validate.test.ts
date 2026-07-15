@@ -782,3 +782,40 @@ test('validateFlowGraph rejects a score step whose minimum is not below its maxi
     'a lone bound with nothing to compare against is not yet a bad range',
   )
 })
+
+test('a graph with a cycle is rejected with CYCLE', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'x', input: 'x' } },
+      { id: 'b', type: 'agent', data: { agentId: 'x', input: 'x' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a' },
+      { id: 'e1', source: 'a', target: 'b' },
+      { id: 'e2', source: 'b', target: 'a' }, // back-edge → cycle
+    ],
+  }
+  const result = validateFlowGraph(graph, { agents: [{ id: 'x', title: 'X' }] })
+  assert.equal(result.ok, false)
+  assert.ok(result.issues.some((i) => i.code === 'CYCLE'))
+})
+
+test('a multi-incoming (fan-in) graph is valid', () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'x', input: 'x' } },
+      { id: 'b', type: 'agent', data: { agentId: 'x', input: 'x' } },
+      { id: 'j', type: 'agent', data: { agentId: 'x', input: 'x' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a' },
+      { id: 'e1', source: 'trigger', target: 'b' },
+      { id: 'e2', source: 'a', target: 'j' },
+      { id: 'e3', source: 'b', target: 'j' },
+    ],
+  }
+  const result = validateFlowGraph(graph, { agents: [{ id: 'x', title: 'X' }] })
+  assert.ok(result.ok, JSON.stringify(result.issues))
+})

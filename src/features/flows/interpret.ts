@@ -1,7 +1,7 @@
 import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/graph'
 import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, buildUpstreamContextBlock, type FlowContext } from './context'
 import { stepLabelsOf } from '@/lib/flows/token-text'
-import { buildAdjacency, edgeActivationsFor, type EdgeState, type EdgeResult, type NodeRunState } from './dag-scheduler'
+import { buildAdjacency, edgeActivationsFor, type EdgeState, type EdgeResult, type NodeRunState } from '@/lib/flows/dag-scheduler'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
 import { runDataOp } from '@/lib/flows/data-ops'

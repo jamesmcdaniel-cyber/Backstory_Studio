@@ -2,6 +2,7 @@ import { AI_OP_LABELS, FIELD_TYPES, type FlowGraph, type FlowNode } from '@/lib/
 import { DATA_OP_LABELS } from '@/lib/flows/data-ops'
 import { FLOW_TRIGGER_TYPES } from '@/lib/flows/trigger'
 import { parseFlowToolConnectionId } from '@/lib/flows/tool-connection-id'
+import { buildAdjacency, findCycle } from '@/lib/flows/dag-scheduler'
 
 export type FlowValidationIssue = {
   level: 'error' | 'warning'
@@ -656,6 +657,25 @@ export function validateFlowGraph(graph: FlowGraph, context: FlowValidationConte
     if (node.type !== 'trigger' && !reachable.has(node.id)) {
       add(issues, 'warning', 'UNREACHABLE_STEP', `${nodeLabel(node)} is not connected to the trigger.`, node.id)
     }
+  }
+
+  // The outer DAG (container bodies excluded) must be acyclic — the scheduler
+  // waits for a node's inputs to resolve, so a back-edge would deadlock (a node
+  // in the loop never becomes ready). Fan-in (multiple incoming edges) is fine;
+  // only cycles are rejected. Retry loops belong in a step's `retries` field.
+  const containerMembers = new Set(
+    graph.nodes.flatMap((node) =>
+      node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : [],
+    ),
+  )
+  const { outgoing: dagOutgoing, dagNodeIds } = buildAdjacency(graph.nodes, graph.edges, containerMembers)
+  const cycle = findCycle(dagNodeIds, dagOutgoing)
+  if (cycle) {
+    const labels = cycle.map((id) => {
+      const node = graph.nodes.find((n) => n.id === id)
+      return node ? nodeLabel(node) : id
+    }).join(' → ')
+    add(issues, 'error', 'CYCLE', `These steps form a loop (${labels}). A flow must run forward — to retry a step, set its retry count instead of looping an edge back.`, cycle[0])
   }
 
   const errors = issues.filter((issue) => issue.level === 'error')
