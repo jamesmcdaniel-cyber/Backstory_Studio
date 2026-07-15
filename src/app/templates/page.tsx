@@ -134,6 +134,8 @@ function ExplorePage() {
   // Card grids cap at 9 per page; each tab pages independently.
   const [templatesPage, setTemplatesPage] = useState(1)
   const [skillsPage, setSkillsPage] = useState(1)
+  // Category filter chips (per tab). 'All' shows everything.
+  const [category, setCategory] = useState('All')
   // Track which skill's dropdown is open
   const [openSkillMenu, setOpenSkillMenu] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
@@ -209,6 +211,8 @@ function ExplorePage() {
   }
 
   const handleTabChange = (value: string) => {
+    // Categories differ per tab, so a filter from one tab shouldn't linger.
+    setCategory('All')
     router.replace(value === 'skills' ? '/templates?tab=skills' : '/templates', { scroll: false })
   }
 
@@ -257,11 +261,23 @@ function ExplorePage() {
   const q = search.trim().toLowerCase()
   const matches = (item: { name: string; description: string; category: string; tags?: string[] }) =>
     !q || `${item.name} ${item.description} ${item.category} ${(item.tags || []).join(' ')}`.toLowerCase().includes(q)
-  const filteredTemplates = templates.filter(matches)
-  const filteredSkills = skills.filter(matches)
+  const inCategory = (item: { category: string }) => category === 'All' || item.category === category
+  // Category chips are derived from the active tab's real categories (sorted,
+  // deduped) — so they always reflect what's actually in the library.
+  const categoriesFor = (items: { category: string }[]) =>
+    ['All', ...Array.from(new Set(items.map((i) => i.category).filter(Boolean))).sort()]
+  const activeCategories = categoriesFor(activeTab === 'skills' ? skills : templates)
+  const filteredTemplates = templates.filter(matches).filter(inCategory)
+  const filteredSkills = skills.filter(matches).filter(inCategory)
 
   const onSearch = (value: string) => {
     setSearch(value)
+    setTemplatesPage(1)
+    setSkillsPage(1)
+  }
+
+  const onCategory = (value: string) => {
+    setCategory(value)
     setTemplatesPage(1)
     setSkillsPage(1)
   }
@@ -476,6 +492,27 @@ function ExplorePage() {
             <TabsTrigger value="skills">Skills</TabsTrigger>
           </TabsList>
 
+          {/* Category filter — derived from the active tab's real categories. */}
+          {activeCategories.length > 2 && (
+            <div className="mt-5 flex flex-wrap gap-2">
+              {activeCategories.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => onCategory(c)}
+                  className={cn(
+                    'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                    category === c
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300'
+                      : 'border-border/70 text-muted-foreground hover:border-border hover:bg-accent hover:text-foreground',
+                  )}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* ── Templates tab ─────────────────────────────────────────────── */}
           <TabsContent value="templates" className="mt-6">
             <div className="flex items-center justify-between mb-6">
@@ -543,6 +580,10 @@ function ExplorePage() {
                               </div>
                             </div>
                           )}
+                          <div className="flex items-center gap-1 pt-1 text-sm font-medium text-indigo-600 opacity-0 transition-opacity group-hover:opacity-100 dark:text-indigo-300">
+                            Use template
+                            <span aria-hidden className="transition-transform group-hover:translate-x-0.5">→</span>
+                          </div>
                         </CardContent>
                       </Card>
                     </Link>

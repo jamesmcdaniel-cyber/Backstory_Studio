@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
+import { ArrowLeft, Bot, Info, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { IntegrationChip } from '@/components/integrations/integration-chip'
@@ -69,57 +71,105 @@ export default function TemplateDetails() {
 
   return (
     <>
-      <div className="mx-auto max-w-3xl space-y-5 p-6">
+      <div className="mx-auto max-w-6xl space-y-5 p-6">
         {!template ? (
           <div className="space-y-4">
             <Skeleton className="h-9 w-2/3 rounded-lg" />
             <Skeleton className="h-5 w-full rounded" />
-            <Skeleton className="h-64 rounded-lg" />
+            <div className="grid gap-5 lg:grid-cols-2">
+              <Skeleton className="h-72 rounded-xl" />
+              <Skeleton className="h-72 rounded-xl" />
+            </div>
           </div>
         ) : (
           <>
-            <div className="flex animate-fade-in-up items-start justify-between gap-4">
-              <div>
-                <h1 className="text-2xl font-bold">{template.name}</h1>
-                <p className="mt-2 text-gray-600">{template.description}</p>
+            <Link href="/templates" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+              <ArrowLeft className="h-4 w-4" /> Back to templates
+            </Link>
+
+            <div className="flex animate-fade-in-up flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+              <div className="min-w-0">
+                <p className="eyebrow mb-1">Template</p>
+                <h1 className="text-2xl font-bold leading-tight">{template.name}</h1>
+                <p className="mt-2 max-w-2xl text-muted-foreground">{template.description}</p>
               </div>
               <div className="flex shrink-0 gap-2">
+                <Button variant={template.playbook ? 'outline' : 'default'} onClick={createAgent} loading={creating}>
+                  <Bot className="mr-1.5 h-4 w-4" />
+                  {creating ? 'Creating…' : 'Connect to agent'}
+                </Button>
                 {template.playbook && (
                   <Button onClick={deployPlaybook} loading={deploying}>
-                    {deploying ? 'Deploying…' : 'Deploy as Flow'}
+                    <Workflow className="mr-1.5 h-4 w-4" />
+                    {deploying ? 'Deploying…' : 'Connect to flow'}
                   </Button>
                 )}
-                <Button variant={template.playbook ? 'outline' : 'default'} onClick={createAgent} loading={creating}>
-                  {creating ? 'Creating…' : 'Use template'}
-                </Button>
               </div>
             </div>
-            <pre className="whitespace-pre-wrap rounded-lg border bg-gray-50 p-4 text-sm shadow-1">{template.instructions}</pre>
-
-            {template.exampleOutput && (
-              <div>
-                <p className="eyebrow mb-2">Example output</p>
-                {looksLikeHtml(template.exampleOutput) ? (
-                  // HTML examples render exactly like a live run's report —
-                  // the advertised output IS the actual output format.
-                  <HtmlPreview html={template.exampleOutput} />
-                ) : (
-                  <div className="rounded-lg border border-horizon-200 bg-horizon-50/40 p-4 shadow-1">
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">{template.exampleOutput}</p>
-                  </div>
-                )}
-                <p className="mt-1.5 text-xs text-muted-foreground">Illustrative — actual output uses your live data.</p>
-              </div>
-            )}
 
             {template.integrations.length > 0 && (
-              <div>
-                <p className="eyebrow mb-2">Requires</p>
-                <div className="flex flex-wrap gap-2">
-                  {template.integrations.map((integration) => <IntegrationChip key={integration} name={integration} />)}
-                </div>
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
+                <Info className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  This template uses {template.integrations.join(', ')}. Make sure they&apos;re connected before every
+                  step can run.{' '}
+                  <Link href="/integrations" className="font-semibold underline underline-offset-2 hover:opacity-80">
+                    Open integrations
+                  </Link>
+                </p>
               </div>
             )}
+
+            <div className="grid gap-5 lg:grid-cols-2">
+              <section className="rounded-2xl border border-border/60 bg-card p-5 shadow-1">
+                <p className="eyebrow mb-3">Agent instructions</p>
+                <pre className="max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-lg bg-muted/40 p-4 font-mono text-[13px] leading-relaxed text-foreground/90">{template.instructions}</pre>
+              </section>
+
+              <section className="rounded-2xl border border-border/60 bg-card p-5 shadow-1">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="eyebrow">Output example</p>
+                  <span className="text-xs text-muted-foreground">Illustrative</span>
+                </div>
+                {template.exampleOutput ? (
+                  looksLikeHtml(template.exampleOutput) ? (
+                    <HtmlPreview html={template.exampleOutput} />
+                  ) : (
+                    <div className="rounded-lg border border-border/60 bg-muted/30 p-4">
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{template.exampleOutput}</p>
+                    </div>
+                  )
+                ) : (
+                  <p className="rounded-lg border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground">
+                    This template doesn&apos;t include a sample output yet — the real output uses your live data.
+                  </p>
+                )}
+                {template.exampleOutput && (
+                  <p className="mt-2 text-xs text-muted-foreground">Actual output uses your connected tools and live data.</p>
+                )}
+              </section>
+            </div>
+
+            <div className="grid gap-4 rounded-2xl border border-border/60 bg-card p-5 shadow-1 sm:grid-cols-2">
+              <div>
+                <p className="eyebrow mb-2">Automation</p>
+                <p className="text-sm text-muted-foreground">
+                  {template.playbook
+                    ? 'Deploys a wired flow you can run manually or schedule.'
+                    : 'Runs manually, or add a schedule after connecting.'}
+                </p>
+              </div>
+              <div>
+                <p className="eyebrow mb-2">Requires</p>
+                {template.integrations.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {template.integrations.map((integration) => <IntegrationChip key={integration} name={integration} />)}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No integrations required.</p>
+                )}
+              </div>
+            </div>
           </>
         )}
       </div>
