@@ -55,6 +55,11 @@ const agentNode = z.object({
     // MS-parity "request human assistance when unsure": when false, a step
     // that pauses to ask a human fails instead of waiting.
     humanAssistance: z.boolean().optional(),
+    // Aggregated upstream context: append every earlier step's captured output
+    // (API/query data etc.) to the agent's prompt so nodes feed each other.
+    // true → always; false → never; undefined → auto (append only when the
+    // input doesn't already reference step data).
+    includeUpstreamContext: z.boolean().optional(),
   }),
 })
 /** One left/op/right comparison; a condition ANDs/ORs a list of these. */

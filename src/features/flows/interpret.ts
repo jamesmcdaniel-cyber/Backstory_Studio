@@ -1,5 +1,5 @@
 import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/graph'
-import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, type FlowContext } from './context'
+import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, buildUpstreamContextBlock, referencesStepData, type FlowContext } from './context'
 import { stepLabelsOf } from '@/lib/flows/token-text'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
@@ -708,7 +708,23 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'agent') {
       const outputFields = node.data.outputFields ?? []
       const structured = node.data.responseFormat === 'structured' && outputFields.some((field) => field.name.trim())
-      let resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx, onMissingToken)
+      const inputTemplate = node.data.input ?? '{{trigger.input}}'
+      let resolved = resolveTemplate(inputTemplate, ctx, onMissingToken)
+      // Aggregated upstream context: feed the agent EVERYTHING earlier steps
+      // captured (each API/query node's data, labeled), so nodes work together
+      // instead of the agent only seeing whatever tokens the input named.
+      //   includeUpstreamContext === false → never (opt out)
+      //   === true                         → always append
+      //   undefined (default)              → auto: append only when the input
+      //     doesn't already pull in step data ({{step...}}/{{steps}}), so a
+      //     curated prompt is left exactly as-is but a bare agent standing
+      //     after data nodes is no longer starved of that data.
+      const includePref = node.data.includeUpstreamContext
+      const includeUpstream = includePref === true || (includePref === undefined && !referencesStepData(inputTemplate))
+      if (includeUpstream) {
+        const contextBlock = buildUpstreamContextBlock(ctx, node.id)
+        if (contextBlock) resolved = `${resolved}\n\n${contextBlock}`
+      }
       if (structured) resolved = `${resolved}\n\n${structuredResponseInstruction(outputFields)}`
       const broken = missingTokenFailure(resolved)
       if (broken) return broken
@@ -750,7 +766,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const perItem = await mapLimit(items, node.data.concurrency ?? 1, async (item, index) => {
         // `variables` is shared by reference: writes inside the body persist
         // past the loop (one flow-global symbol table, MS parity).
-        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables, now: ctx.now, run: ctx.run, stepAliases: ctx.stepAliases }
+        const itemCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item, loop: { index, count: items.length }, variables: ctx.variables, now: ctx.now, run: ctx.run, stepAliases: ctx.stepAliases, stepLabels: ctx.stepLabels }
         // Each iteration's body persists/resumes under `#<index>` (nested loops
         // append their own suffix) so a mid-loop pause never re-runs a prior
         // iteration's side effects on resume.
@@ -772,7 +788,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'parallel') {
       const results = await Promise.all(
         node.data.branches.map(async (branch) => {
-          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables, now: ctx.now, run: ctx.run, stepAliases: ctx.stepAliases }
+          const branchCtx: FlowContext = { trigger: ctx.trigger, step: { ...ctx.step }, item: ctx.item, loop: ctx.loop, variables: ctx.variables, now: ctx.now, run: ctx.run, stepAliases: ctx.stepAliases, stepLabels: ctx.stepLabels }
           // Branch node ids are already unique, so parallel just propagates the
           // ambient `indexKey` (a parallel nested in a loop keeps the loop's
           // iteration suffix; a top-level parallel keeps bare ids).
@@ -829,8 +845,9 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
   // `{{<label>.output}}` tokens resolve like the canonical `{{step.<id>...}}`
   // chips. First label wins on a duplicate — ambiguous names resolve to the
   // earliest step, matching how the builder lists them.
+  const stepLabelMap = opts.stepLabels ?? stepLabelsOf(graph)
   const stepAliases: Record<string, string> = {}
-  for (const [nodeId, label] of Object.entries(opts.stepLabels ?? stepLabelsOf(graph))) {
+  for (const [nodeId, label] of Object.entries(stepLabelMap)) {
     const alias = normalizeStepAlias(label)
     if (alias && stepAliases[alias] === undefined) stepAliases[alias] = nodeId
   }
@@ -844,7 +861,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     const alias = normalizeStepAlias(node.id)
     if (alias && stepAliases[alias] === undefined) stepAliases[alias] = node.id
   }
-  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {}, now: opts.now, run: opts.run, stepAliases }
+  const ctx: FlowContext = { trigger: { input }, step: {}, variables: {}, now: opts.now, run: opts.run, stepAliases, stepLabels: stepLabelMap }
 
   // Resume: rebuild the symbol table from EVERY completed variable step before
   // walking. A completed loop/parallel short-circuits without entering its

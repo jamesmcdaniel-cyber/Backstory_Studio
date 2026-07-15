@@ -27,6 +27,101 @@ export type FlowContext = {
   // `{{Previous Agent.output}}`) — those must resolve to the same step, not
   // silently blank out.
   stepAliases?: Record<string, string>
+  // Node id → display LABEL, so the `{{steps}}` aggregate and the agent
+  // upstream-context block can name each captured output the way the builder
+  // shows it ("Fetch CRM accounts") instead of the raw node id.
+  stepLabels?: Record<string, string>
+}
+
+// An HTTP node's output is the full envelope { ok, status, headers, body,
+// bodyText, ... }. When aggregating for an agent, the useful payload is the
+// parsed body — surface that, not the transport metadata.
+function isHttpEnvelope(value: unknown): value is { body: unknown } {
+  return Boolean(
+    value && typeof value === 'object' && !Array.isArray(value) &&
+    'ok' in value && 'status' in value && 'body' in value && 'bodyText' in value,
+  )
+}
+
+/** The consumable payload of a step's output: an HTTP envelope collapses to its body. */
+export function unwrapStepOutput(output: unknown): unknown {
+  return isHttpEnvelope(output) ? output.body : output
+}
+
+/**
+ * The aggregate of every captured upstream step output, keyed by the step's
+ * display label (falling back to node id). This is what `{{steps}}` resolves
+ * to and the source for an agent's auto-included context — so a downstream
+ * agent can be fed EVERYTHING earlier nodes gathered without hand-wiring a
+ * token per node. `excludeId` omits the consuming node itself.
+ */
+export function aggregateSteps(ctx: FlowContext, excludeId?: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [id, entry] of Object.entries(ctx.step)) {
+    if (id === excludeId) continue
+    const label = ctx.stepLabels?.[id] || id
+    // Two steps can share a label; disambiguate the collision so no data is
+    // silently dropped from the aggregate.
+    const key = out[label] === undefined ? label : `${label} (${id})`
+    out[key] = unwrapStepOutput(entry.output)
+  }
+  return out
+}
+
+/** JSON, capped — used to render one step's output inside the context block. */
+function cappedJson(value: unknown, max: number): string {
+  let text: string
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  } catch {
+    text = String(value)
+  }
+  if (text == null) text = ''
+  return text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text
+}
+
+/**
+ * A human-readable, size-capped block of all captured upstream data, labeled by
+ * step, for appending to an agent's prompt. Returns '' when there is nothing
+ * upstream to include. Bounds both per-step and total size so a large API
+ * response can't blow up the prompt.
+ */
+export function buildUpstreamContextBlock(
+  ctx: FlowContext,
+  excludeId: string,
+  opts: { perStepMax?: number; totalMax?: number } = {},
+): string {
+  const perStepMax = opts.perStepMax ?? 4_000
+  const totalMax = opts.totalMax ?? 12_000
+  const aggregate = aggregateSteps(ctx, excludeId)
+  const entries = Object.entries(aggregate)
+  if (entries.length === 0) return ''
+  const sections: string[] = []
+  let used = 0
+  let dropped = 0
+  for (const [label, value] of entries) {
+    if (value === undefined) continue
+    const rendered = `### ${label}\n${cappedJson(value, perStepMax)}`
+    if (used + rendered.length > totalMax && sections.length > 0) {
+      dropped = entries.length - sections.length
+      break
+    }
+    sections.push(rendered)
+    used += rendered.length + 2
+  }
+  if (sections.length === 0) return ''
+  const note = dropped > 0 ? `\n\n[${dropped} more earlier step${dropped === 1 ? '' : 's'} omitted for length.]` : ''
+  return [
+    'Data gathered by earlier steps in this flow (use it as the context for your task):',
+    sections.join('\n\n'),
+    'End of earlier-step data.' + note,
+  ].join('\n\n')
+}
+
+/** True when a template already pulls in step data — used to decide auto-context. */
+export function referencesStepData(template: string | undefined): boolean {
+  if (!template) return false
+  return /\{\{\s*steps?\b/i.test(template)
 }
 
 /** Normalize a step label for alias lookup: trimmed, lowercased, single-spaced. */
@@ -124,6 +219,14 @@ export function resolveContextPath(ctx: FlowContext, path: string): { found: boo
     if (parts[1] === 'trigger') return { found: true, value: run.trigger }
     if (parts[1] === 'startedAt') return { found: true, value: run.startedAt }
     return { found: true, value: undefined }
+  }
+  // `steps` (plural) is the AGGREGATE of every captured upstream output, keyed
+  // by step label — one token feeds an agent everything gathered so far.
+  // `{{steps}}` is the whole object; `{{steps.<label>}}` reads one step's data.
+  if (parts[0] === 'steps') {
+    const aggregate = aggregateSteps(ctx)
+    if (parts.length === 1) return { found: true, value: aggregate }
+    return { found: true, value: walkValue(aggregate, parts.slice(1)) }
   }
   if (KNOWN_ROOTS.has(parts[0])) {
     // `step.<key>` where <key> is not a node id: the friendly label was typed

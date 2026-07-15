@@ -19,7 +19,15 @@ export type FlowHttpOutput = {
   statusText: string
   url: string
   headers: Record<string, string>
+  // The parsed response (object/array) when JSON, else the response text. This
+  // is the data downstream steps consume — reachable as `.body` or `.data`.
   body: unknown
+  // Alias of `body`, so `{{step.<id>.output.data}}` reads the response payload
+  // regardless of whether the caller thinks in ".body" or ".data".
+  data: unknown
+  // The raw response text, truncated for display/persistence. `body` is parsed
+  // from the FULL text (never this truncated mirror), so structured field
+  // access survives responses larger than the display cap.
   bodyText: string
 }
 
@@ -199,12 +207,19 @@ function shouldParseJson(contentType: string, responseType: 'auto' | 'json' | 't
 }
 
 export async function responseOutput(response: Response, responseType: 'auto' | 'json' | 'text', maxChars = 50_000): Promise<FlowHttpOutput> {
-  const bodyText = (await response.text()).slice(0, maxChars)
+  // Read the FULL text, then parse JSON from it BEFORE truncating. Truncating
+  // first (the old behavior) silently de-structured any JSON larger than
+  // maxChars into an invalid, truncated string — so `{{...output.body.field}}`
+  // returned undefined with no error. Parsing the whole payload keeps large
+  // API responses fully structured; only the raw-text mirror (`bodyText`) is
+  // capped, for display/persistence.
+  const raw = await response.text()
   const headers = Object.fromEntries(response.headers.entries())
+  const bodyText = raw.slice(0, maxChars)
   let body: unknown = bodyText
-  if (bodyText && shouldParseJson(headers['content-type'] ?? '', responseType, bodyText)) {
+  if (raw && shouldParseJson(headers['content-type'] ?? '', responseType, raw)) {
     try {
-      body = JSON.parse(bodyText)
+      body = JSON.parse(raw)
     } catch {
       if (responseType === 'json') throw new Error('HTTP response was not valid JSON.')
     }
@@ -216,6 +231,7 @@ export async function responseOutput(response: Response, responseType: 'auto' | 
     url: response.url,
     headers,
     body,
+    data: body,
     bodyText,
   }
 }
