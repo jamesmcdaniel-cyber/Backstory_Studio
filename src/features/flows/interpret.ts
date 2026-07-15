@@ -1,6 +1,7 @@
 import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/graph'
 import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, buildUpstreamContextBlock, type FlowContext } from './context'
 import { stepLabelsOf } from '@/lib/flows/token-text'
+import { buildAdjacency, edgeActivationsFor, type EdgeState, type EdgeResult, type NodeRunState } from './dag-scheduler'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
 import { runDataOp } from '@/lib/flows/data-ops'
@@ -94,6 +95,10 @@ type NodeResult =
   | { kind: 'branch'; branch: string; output: unknown }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+// Independent ready nodes run concurrently up to this bound. Matches the
+// loop-node default; variable writes across concurrent branches are unordered.
+const MAX_CONCURRENT_NODES = 8
 
 // Sentinel a timed-out race resolves to — distinguishable from a RunAgentResult
 // that happens to carry an error.
@@ -430,6 +435,12 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const output = opts.completed[stepKey]
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'skipped', output })
+      // A completed condition/switch must replay as the SAME branch it took, not
+      // a plain 'ok' (which the scheduler would read as "fan out to all edges").
+      // The recorded output IS the branch (boolean for condition, case id for
+      // switch), so reconstruct it without re-evaluating.
+      if (node.type === 'condition') return { kind: 'branch', branch: output ? 'true' : 'false', output }
+      if (node.type === 'switch') return { kind: 'branch', branch: String(output), output }
       // A route-failed step re-takes its error edge on replay — returning ok
       // here would silently divert the resumed run down the normal path.
       if (opts.completedRoutes?.has(stepKey)) return { kind: 'route', output }
@@ -901,52 +912,112 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     }
   }
 
-  let lastOutput: unknown = input
-  let current: FlowNode | undefined = byId.get('trigger') ?? graph.nodes[0]
-
   // Attach the run-level named outputs (present only when ≥1 output node ran) to
   // every result. Undefined when no output node ran, preserving back-compat.
   const done = (result: InterpretResult): InterpretResult =>
     namedOutputs !== undefined ? { ...result, namedOutputs } : result
 
-  while (current) {
-    const res = await execNode(current, ctx)
-    if (res.kind === 'fail') return done({ status: 'failed', steps, output: lastOutput, error: res.error })
-    if (res.kind === 'pause') return done({ status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } })
-    // A stop node or a main-chain filter that didn't pass ends the flow cleanly.
-    if (res.kind === 'stop' || res.kind === 'drop') return done({ status: 'succeeded', steps, output: lastOutput })
-    // A condition/switch decision follows the chosen branch edge (skipping over
-    // any container-internal target, matching the normal-edge advance below).
-    if (res.kind === 'branch') {
-      const edge = outgoing(current.id, res.branch)
-      let next = edge ? byId.get(edge.target) : undefined
-      while (next && contained.has(next.id)) {
-        const skip = normalOutgoing(next.id)
-        next = skip ? byId.get(skip.target) : undefined
-      }
-      current = next
-      continue
-    }
-    // A route-on-error failure and a successful step both surface their output as
-    // the chained value; the difference is only which edge the walk follows next.
-    if (res.kind === 'route' || (res.kind === 'ok' && res.output !== undefined)) lastOutput = res.output
+  // ── Dependency scheduler ──────────────────────────────────────────────────
+  // Replaces the single-active-path walk. A node runs once its incoming edges
+  // resolve (all terminal, ≥1 active); a node whose incoming edges are all dead
+  // is skipped and its own out-edges go dead (dead-path elimination / OR-join).
+  // Independent ready nodes run concurrently. Containers stay single nodes.
+  const { incoming, outgoing: outEdges, dagNodeIds } = buildAdjacency(graph.nodes, graph.edges, contained)
+  const edgeState = new Map<FlowEdge, EdgeState>(graph.edges.map((edge) => [edge, 'unresolved']))
+  const nodeState = new Map<string, NodeRunState>(dagNodeIds.map((id) => [id, 'pending']))
+  // The entry point (the trigger, or the first node) is the ONLY seed — a node
+  // with no incoming edges that ISN'T the entry is an unreachable orphan and
+  // must never run, exactly as the old walk (which only reached nodes via
+  // edges) left it untouched.
+  const entryId = byId.has('trigger') ? 'trigger' : dagNodeIds[0]
 
-    // Error Shield routing: a step that FAILED with onError:'route' follows its
-    // labeled 'error' edge when one exists; with none it falls through to the
-    // normal edge (continue-like) — never a dead-end. Every other case (and a
-    // route step that SUCCEEDED) follows the normal, non-error edge. The visit
-    // budget (`overBudget` in execNode) bounds this exactly like any other walk,
-    // so an error edge that loops back can't spin forever.
-    const currentId = current.id
-    const errorEdge = res.kind === 'route' ? graph.edges.find((edge) => edge.source === currentId && edge.branch === 'error') : undefined
-    const edge = errorEdge ?? normalOutgoing(currentId)
-    let next = edge ? byId.get(edge.target) : undefined
-    while (next && contained.has(next.id)) {
-      const skip = normalOutgoing(next.id)
-      next = skip ? byId.get(skip.target) : undefined
+  const resolveEdges = (id: string, result: EdgeResult) => {
+    const acts = edgeActivationsFor(result, outEdges.get(id) ?? [])
+    for (const [edge, state] of acts) if (edgeState.get(edge) === 'unresolved') edgeState.set(edge, state)
+  }
+  const incomingResolved = (id: string) => (incoming.get(id) ?? []).every((edge) => edgeState.get(edge) !== 'unresolved')
+  const hasActiveIncoming = (id: string) => (incoming.get(id) ?? []).some((edge) => edgeState.get(edge) === 'active')
+
+  // Dead-path elimination, run to a fixpoint so deadness cascades. A node with
+  // no incoming edges is never skipped here (the entry runs; orphans idle).
+  const markSkipped = (id: string) => {
+    nodeState.set(id, 'skipped')
+    for (const edge of outEdges.get(id) ?? []) if (edgeState.get(edge) === 'unresolved') edgeState.set(edge, 'dead')
+  }
+  const propagateSkips = () => {
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const id of dagNodeIds) {
+        if (nodeState.get(id) !== 'pending') continue
+        if ((incoming.get(id) ?? []).length === 0) continue
+        if (!incomingResolved(id) || hasActiveIncoming(id)) continue
+        markSkipped(id)
+        changed = true
+      }
     }
-    current = next
   }
 
-  return done({ status: 'succeeded', steps, output: lastOutput })
+  let terminal: InterpretResult | null = null
+  let lastOutput: unknown = input // filter-drop / no-sink back-compat output
+
+  const runOne = async (node: FlowNode): Promise<void> => {
+    nodeState.set(node.id, 'running')
+    const res = await execNode(node, ctx)
+    if (terminal) return // a sibling already ended the run; ignore late results
+    if (res.kind === 'fail') { terminal = done({ status: 'failed', steps, output: lastOutput, error: res.error }); return }
+    if (res.kind === 'pause') { terminal = done({ status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } }); return }
+    if (res.kind === 'stop') { nodeState.set(node.id, 'done'); terminal = done({ status: 'succeeded', steps, output: lastOutput }); return }
+    if (res.kind === 'drop') { nodeState.set(node.id, 'skipped'); resolveEdges(node.id, 'drop'); return }
+    // Only surface a chained value when there is one: a route always carries its
+    // { error, input } object; an `ok` with an undefined output (a passing
+    // filter, an empty output node) must NOT clobber the last real value.
+    if (res.kind === 'route' || (res.kind === 'ok' && res.output !== undefined)) lastOutput = res.output
+    nodeState.set(node.id, 'done')
+    resolveEdges(node.id, res.kind === 'branch' ? { branch: res.branch } : res.kind === 'route' ? 'route' : res.kind === 'skip' ? 'skip' : 'ok')
+  }
+
+  const running = new Set<Promise<void>>()
+  const readyNodes = () =>
+    dagNodeIds.filter((id) =>
+      nodeState.get(id) === 'pending' && (id === entryId || (incomingResolved(id) && hasActiveIncoming(id))),
+    )
+
+  propagateSkips()
+  while (!terminal) {
+    const ready = readyNodes()
+    if (ready.length === 0) {
+      if (running.size === 0) break // quiescent — the run is done
+      await Promise.race(running)
+      propagateSkips()
+      continue
+    }
+    for (const id of ready) {
+      if (running.size >= MAX_CONCURRENT_NODES) break
+      const node = byId.get(id)!
+      const promise = runOne(node).finally(() => running.delete(promise))
+      running.add(promise)
+    }
+    await Promise.race(running)
+    propagateSkips()
+  }
+  await Promise.allSettled(running) // let in-flight nodes settle before returning
+  if (terminal) return terminal
+
+  // Terminal output: named outputs win; else the sinks (done nodes with no
+  // active out-edge). One data sink → its output (linear back-compat); several
+  // → aggregate by label; none → the last value carried into a dead end.
+  const sinkOutputs: { label: string; output: unknown }[] = []
+  for (const id of dagNodeIds) {
+    if (nodeState.get(id) !== 'done') continue
+    // `output` nodes contribute to namedOutputs, not the implicit sink output.
+    if (byId.get(id)?.type === 'output') continue
+    if ((outEdges.get(id) ?? []).some((edge) => edgeState.get(edge) === 'active')) continue
+    const entry = ctx.step[id]
+    if (entry !== undefined) sinkOutputs.push({ label: stepLabelMap[id] || id, output: entry.output })
+  }
+  let output: unknown = lastOutput
+  if (sinkOutputs.length === 1) output = sinkOutputs[0].output
+  else if (sinkOutputs.length > 1) output = Object.fromEntries(sinkOutputs.map((s) => [s.label, s.output]))
+  return done({ status: 'succeeded', steps, output })
 }
