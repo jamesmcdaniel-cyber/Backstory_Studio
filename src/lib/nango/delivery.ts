@@ -50,6 +50,7 @@ export interface NangoProxyArgs {
   providerConfigKey: string
   data?: unknown
   params?: Record<string, string | number>
+  headers?: Record<string, string>
 }
 
 export type NangoProxy = (args: NangoProxyArgs) => Promise<{ data: unknown }>

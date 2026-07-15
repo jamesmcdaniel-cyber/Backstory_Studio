@@ -110,3 +110,48 @@ test('toolsForProvider groups by provider', () => {
   assert.equal(toolsForProvider('linear').length, 3)
   assert.equal(toolsForProvider('nonexistent').length, 0)
 })
+
+test('all authored providers have tools and unique tool names', () => {
+  const providers = new Set(NANGO_PROVIDER_TOOLS.map((t) => t.provider))
+  for (const p of ['github', 'linear', 'jira', 'asana', 'notion', 'hubspot', 'confluence', 'google_drive', 'google_sheets', 'monday', 'zendesk', 'slack', 'salesforce', 'gmail']) {
+    assert.ok(providers.has(p), `provider ${p} has tools`)
+  }
+  const names = NANGO_PROVIDER_TOOLS.map((t) => t.name)
+  assert.equal(names.length, new Set(names).size, 'tool names are unique')
+})
+
+test('jira_list_issues builds JQL from a project when no jql given', async () => {
+  const byJql = await run('jira_list_issues', { jql: 'assignee = currentUser()' })
+  assert.equal(byJql.endpoint, '/rest/api/3/search')
+  assert.equal((byJql.params as { jql: string }).jql, 'assignee = currentUser()')
+  const byProject = await run('jira_list_issues', { project: 'ENG' })
+  assert.ok((byProject.params as { jql: string }).jql.includes('project = ENG'))
+})
+
+test('notion tools send the Notion-Version header', async () => {
+  const c = await run('notion_search', { query: 'launch' })
+  assert.equal((c.headers as Record<string, string>)['Notion-Version'], '2022-06-28')
+  assert.equal(c.endpoint, '/v1/search')
+})
+
+test('google_sheets_append_row wraps a single row and sets valueInputOption', async () => {
+  const c = await run('google_sheets_append_row', { spreadsheetId: 'S1', range: 'Sheet1!A1', values: ['a', 'b'] })
+  assert.equal(c.method, 'POST')
+  assert.ok(c.endpoint.endsWith(':append'))
+  assert.equal((c.params as { valueInputOption: string }).valueInputOption, 'USER_ENTERED')
+  assert.deepEqual((c.data as { values: unknown[][] }).values, [['a', 'b']])
+})
+
+test('salesforce_query → GET /query with the SOQL in q', async () => {
+  const c = await run('salesforce_query', { soql: 'SELECT Id FROM Account' })
+  assert.equal(c.method, 'GET')
+  assert.equal(c.endpoint, '/services/data/v60.0/query')
+  assert.equal((c.params as { q: string }).q, 'SELECT Id FROM Account')
+})
+
+test('monday_create_item embeds a GraphQL mutation with the item name JSON-escaped', async () => {
+  const c = await run('monday_create_item', { boardId: '123', itemName: 'Say "hi"' })
+  assert.equal(c.endpoint, '/v2')
+  const q = (c.data as { query: string }).query
+  assert.ok(q.includes('create_item') && q.includes('board_id: 123') && q.includes('"Say \\"hi\\""'))
+})
