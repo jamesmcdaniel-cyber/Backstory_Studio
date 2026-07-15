@@ -324,15 +324,6 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     const name = node.data.name.trim()
     if (name && !declaredTypes.has(name)) declaredTypes.set(name, node.data.varType ?? 'string')
   }
-  const outgoing = (id: string, branch?: string): FlowEdge | undefined =>
-    graph.edges.find((edge) => edge.source === id && (branch === undefined || edge.branch === branch || edge.branch === undefined))
-  // The normal (success/default) edge out of a node — an 'error'-labeled edge is
-  // reserved for a route-on-error step that FAILED, so it must never be taken on
-  // the success path (regardless of edge order). For every node without an error
-  // edge this is identical to `outgoing(id)` (the first edge from the source).
-  const normalOutgoing = (id: string): FlowEdge | undefined =>
-    graph.edges.find((edge) => edge.source === id && edge.branch !== 'error')
-
   const steps: StepOutcome[] = []
   const emitOutcome = (outcome: StepOutcome) => {
     steps.push(outcome)
