@@ -89,6 +89,9 @@ type NodeResult =
   // 'error' edge (Error Shield). Inside a container body (no branch edges) this
   // is treated like 'continue': the body threads the error object and proceeds.
   | { kind: 'route'; output: unknown }
+  // A condition/switch decision — the scheduler activates the matching branch
+  // edge and deads the rest. `output` mirrors the recorded outcome value.
+  | { kind: 'branch'; branch: string; output: unknown }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -438,9 +441,21 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       return { kind: 'stop' }
     }
 
-    if (node.type === 'condition' || node.type === 'switch') {
-      // Conditions/switches route on the main chain; inside a body they can't branch.
-      return { kind: 'skip' }
+    if (node.type === 'condition') {
+      // Decide the branch here so the scheduler can resolve edges uniformly;
+      // inside a container body (no branch edges) a 'branch' result threads no
+      // output and the body just proceeds.
+      const branch = evalCondition(node.data, ctx) ? 'true' : 'false'
+      emit({ nodeId: node.id, status: 'succeeded', output: branch === 'true' })
+      return { kind: 'branch', branch, output: branch === 'true' }
+    }
+
+    if (node.type === 'switch') {
+      // First matching case wins; otherwise the 'default' edge.
+      const hit = node.data.cases.find((c) => evalClause({ left: c.left, op: c.op, right: c.right }, ctx))
+      const branch = hit ? hit.id : 'default'
+      emit({ nodeId: node.id, status: 'succeeded', output: branch })
+      return { kind: 'branch', branch, output: branch }
     }
 
     if (node.type === 'humanReview') {
@@ -895,29 +910,23 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     namedOutputs !== undefined ? { ...result, namedOutputs } : result
 
   while (current) {
-    if (current.type === 'condition') {
-      if (overBudget()) return done({ status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' })
-      const branch = evalCondition(current.data, ctx) ? 'true' : 'false'
-      const edge = outgoing(current.id, branch)
-      current = edge ? byId.get(edge.target) : undefined
-      continue
-    }
-
-    if (current.type === 'switch') {
-      if (overBudget()) return done({ status: 'failed', steps, output: lastOutput, error: 'Flow exceeded the maximum number of steps.' })
-      // First matching case wins; otherwise follow the 'default' edge.
-      const hit = current.data.cases.find((c) => evalClause({ left: c.left, op: c.op, right: c.right }, ctx))
-      emitOutcome({ nodeId: current.id, status: 'succeeded', output: hit?.id ?? 'default' })
-      const edge = outgoing(current.id, hit ? hit.id : 'default')
-      current = edge ? byId.get(edge.target) : undefined
-      continue
-    }
-
     const res = await execNode(current, ctx)
     if (res.kind === 'fail') return done({ status: 'failed', steps, output: lastOutput, error: res.error })
     if (res.kind === 'pause') return done({ status: 'waiting', steps, output: lastOutput, waiting: { nodeId: res.nodeId, question: res.question } })
     // A stop node or a main-chain filter that didn't pass ends the flow cleanly.
     if (res.kind === 'stop' || res.kind === 'drop') return done({ status: 'succeeded', steps, output: lastOutput })
+    // A condition/switch decision follows the chosen branch edge (skipping over
+    // any container-internal target, matching the normal-edge advance below).
+    if (res.kind === 'branch') {
+      const edge = outgoing(current.id, res.branch)
+      let next = edge ? byId.get(edge.target) : undefined
+      while (next && contained.has(next.id)) {
+        const skip = normalOutgoing(next.id)
+        next = skip ? byId.get(skip.target) : undefined
+      }
+      current = next
+      continue
+    }
     // A route-on-error failure and a successful step both surface their output as
     // the chained value; the difference is only which edge the walk follows next.
     if (res.kind === 'route' || (res.kind === 'ok' && res.output !== undefined)) lastOutput = res.output

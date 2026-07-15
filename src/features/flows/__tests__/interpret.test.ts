@@ -2117,3 +2117,23 @@ test('includeUpstreamContext:true forces the context even alongside a token; fal
   assert.ok((await capture(true)).includes('Data gathered by earlier steps'), 'true → always include')
   assert.ok(!(await capture(false)).includes('Data gathered by earlier steps'), 'false → never include')
 })
+
+test('condition/switch selection is unchanged after moving into execNode', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'n1', type: 'agent', data: { agentId: 'score', input: '{{trigger.input}}' } },
+      { id: 'c', type: 'condition', data: { left: '{{step.n1.output.score}}', op: 'gt', right: '80' } },
+      { id: 'hi', type: 'agent', data: { agentId: 'high', input: 'x' } },
+      { id: 'lo', type: 'agent', data: { agentId: 'low', input: 'x' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'n1' },
+      { id: 'e1', source: 'n1', target: 'c' },
+      { id: 'e2', source: 'c', target: 'hi', branch: 'true' },
+      { id: 'e3', source: 'c', target: 'lo', branch: 'false' },
+    ],
+  }
+  const result = await interpretFlow(graph, 'Acme', { runAgent: stub({ score: '{"score":91}', high: 'HIGH', low: 'LOW' }) })
+  assert.equal(result.output, 'HIGH')
+})
