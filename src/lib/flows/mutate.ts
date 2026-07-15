@@ -1,4 +1,6 @@
 import { flowNodeSchema, type FlowGraph, type FlowNode } from '@/lib/flows/graph'
+import { buildAdjacency, findCycle } from '@/lib/flows/dag-scheduler'
+import type { NodePosition } from '@/lib/flows/layout'
 
 /** Node types a user can create as a step (everything but the trigger). */
 export type StepType = Exclude<FlowNode['type'], 'trigger'>
@@ -129,9 +131,19 @@ export function appendToBranch(graph: FlowGraph, conditionId: string, branch: st
   return insertNodeAfter(graph, tail, type, agentId)
 }
 
-/** Replace a node (matched by id) with an updated version. */
+/** Replace a node (matched by id) with an updated version. Preserves the
+ *  existing canvas position when the update doesn't carry one, so editing a
+ *  step's data in the drawer never resets where it sits on the canvas. */
 export function updateNode(graph: FlowGraph, updated: FlowNode): FlowGraph {
-  return { ...graph, nodes: graph.nodes.map((node) => (node.id === updated.id ? updated : node)) }
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      if (node.id !== updated.id) return node
+      return updated.position === undefined && node.position !== undefined
+        ? ({ ...updated, position: node.position } as FlowNode)
+        : updated
+    }),
+  }
 }
 
 /** Change a node's type, resetting its data. Containers get a body agent step. */
@@ -242,10 +254,16 @@ export function duplicateNode(graph: FlowGraph, id: string): { graph: FlowGraph;
  */
 export function deleteNode(graph: FlowGraph, id: string): FlowGraph {
   if (id === 'trigger') return graph
-  const incoming = graph.edges.find((edge) => edge.target === id)
-  const outgoing = graph.edges.find((edge) => edge.source === id && !edge.branch)
+  const incomingEdges = graph.edges.filter((edge) => edge.target === id)
+  const outgoingEdges = graph.edges.filter((edge) => edge.source === id && !edge.branch)
   const edges = graph.edges.filter((edge) => edge.source !== id && edge.target !== id)
-  if (incoming && outgoing) {
+  // Heal the chain ONLY when the wiring is unambiguous — exactly one incoming
+  // and one non-branch outgoing (every linear/branch graph). A fan-in or
+  // fan-out node has no single correct reconnection, so just drop its edges
+  // rather than guess a wiring (which could cross-connect unrelated paths).
+  if (incomingEdges.length === 1 && outgoingEdges.length === 1) {
+    const incoming = incomingEdges[0]
+    const outgoing = outgoingEdges[0]
     edges.push({ id: edgeId(incoming.source, outgoing.target, incoming.branch), source: incoming.source, target: outgoing.target, ...(incoming.branch ? { branch: incoming.branch } : {}) })
   }
   const nodes = graph.nodes
@@ -366,6 +384,52 @@ export function moveContainerStep(graph: FlowGraph, containerId: string, from: n
     return updateNode(graph, { ...container, data: { ...container.data, branches } })
   }
   return graph
+}
+
+// ── Free-form DAG edge editing (Phase 2) ──────────────────────────────────────
+
+/** Ids that live inside a container body — never valid free-form edge endpoints. */
+function containerMemberIds(graph: FlowGraph): Set<string> {
+  return new Set(graph.nodes.flatMap(containedIdsOf))
+}
+
+/**
+ * Connect two existing nodes with a new edge (DAG fan-in/fan-out). Rejected —
+ * returns the graph unchanged with `added: false` — for a self-loop, a
+ * duplicate of an existing edge, an endpoint that is a container body member or
+ * the trigger as a target, or any connection that would introduce a CYCLE (the
+ * scheduler requires a DAG). `branch` tags a condition/switch/error edge.
+ */
+export function addEdge(graph: FlowGraph, source: string, target: string, branch?: string): { graph: FlowGraph; added: boolean } {
+  if (source === target || target === 'trigger') return { graph, added: false }
+  const ids = new Set(graph.nodes.map((n) => n.id))
+  if (!ids.has(source) || !ids.has(target)) return { graph, added: false }
+  const contained = containerMemberIds(graph)
+  if (contained.has(source) || contained.has(target)) return { graph, added: false }
+  const exists = graph.edges.some((e) => e.source === source && e.target === target && (e.branch ?? '') === (branch ?? ''))
+  if (exists) return { graph, added: false }
+  const edge = { id: edgeId(source, target, branch), source, target, ...(branch ? { branch } : {}) }
+  const next: FlowGraph = { ...graph, edges: [...graph.edges, edge] }
+  // Reject any connection that would make the outer graph cyclic.
+  const { outgoing, dagNodeIds } = buildAdjacency(next.nodes, next.edges, contained)
+  if (findCycle(dagNodeIds, outgoing)) return { graph, added: false }
+  return { graph: next, added: true }
+}
+
+/** Remove an edge by id. */
+export function removeEdge(graph: FlowGraph, id: string): FlowGraph {
+  return { ...graph, edges: graph.edges.filter((edge) => edge.id !== id) }
+}
+
+/** Persist canvas positions from a layout/drag. Nodes absent from the map keep theirs. */
+export function setNodePositions(graph: FlowGraph, positions: Map<string, NodePosition>): FlowGraph {
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node) => {
+      const pos = positions.get(node.id)
+      return pos ? ({ ...node, position: pos } as FlowNode) : node
+    }),
+  }
 }
 
 /** Validate clipboard content into a paste-safe step (never a trigger; containers emptied). */

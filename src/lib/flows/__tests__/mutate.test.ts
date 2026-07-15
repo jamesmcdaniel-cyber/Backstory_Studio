@@ -12,6 +12,9 @@ import {
   moveContainerStep,
   sanitizeCopiedNode,
   pasteNodeAfter,
+  addEdge,
+  removeEdge,
+  setNodePositions,
 } from '../mutate'
 import { emptyGraph, type FlowGraph, type FlowNode } from '../graph'
 
@@ -229,4 +232,82 @@ test('duplicateNode inside a loop body inserts the copy into the body list', () 
   const after = duped.nodes.find((n) => n.id === loop.id) as Extract<FlowNode, { type: 'loop' }>
   assert.deepEqual(after.data.body, [bodyId, nodeId])
   assert.equal(duped.edges.some((e) => e.source === bodyId), false)
+})
+
+test('addEdge connects two nodes (fan-in) and rejects self/dup/cycle', () => {
+  const base: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'x', input: 'y' } },
+      { id: 'b', type: 'agent', data: { agentId: 'x', input: 'y' } },
+      { id: 'j', type: 'agent', data: { agentId: 'x', input: 'y' } },
+    ],
+    edges: [
+      { id: 'trigger->a', source: 'trigger', target: 'a' },
+      { id: 'trigger->b', source: 'trigger', target: 'b' },
+      { id: 'a->j', source: 'a', target: 'j' },
+    ],
+  }
+  // Add a second parent into j (fan-in) — allowed.
+  const added = addEdge(base, 'b', 'j')
+  assert.equal(added.added, true)
+  assert.equal(added.graph.edges.filter((e) => e.target === 'j').length, 2)
+  // Self-edge rejected.
+  assert.equal(addEdge(base, 'a', 'a').added, false)
+  // Duplicate rejected.
+  assert.equal(addEdge(added.graph, 'b', 'j').added, false)
+  // Trigger as target rejected.
+  assert.equal(addEdge(base, 'a', 'trigger').added, false)
+  // Cycle rejected: j -> a would loop (a -> j already exists).
+  assert.equal(addEdge(base, 'j', 'a').added, false)
+})
+
+test('removeEdge drops the edge by id', () => {
+  const g: FlowGraph = {
+    nodes: [{ id: 'trigger', type: 'trigger', data: {} }, { id: 'a', type: 'agent', data: { agentId: 'x', input: 'y' } }],
+    edges: [{ id: 'trigger->a', source: 'trigger', target: 'a' }],
+  }
+  assert.equal(removeEdge(g, 'trigger->a').edges.length, 0)
+})
+
+test('setNodePositions writes positions and leaves absent nodes untouched', () => {
+  const g: FlowGraph = {
+    nodes: [{ id: 'trigger', type: 'trigger', data: {} }, { id: 'a', type: 'agent', data: { agentId: 'x', input: 'y' } }],
+    edges: [],
+  }
+  const out = setNodePositions(g, new Map([['a', { x: 5, y: 6 }]]))
+  assert.deepEqual(out.nodes.find((n) => n.id === 'a')!.position, { x: 5, y: 6 })
+  assert.equal(out.nodes.find((n) => n.id === 'trigger')!.position, undefined)
+})
+
+test('deleteNode heals a linear 1-in-1-out node but only drops edges for a fan-in node', () => {
+  // Linear: trigger -> a -> b -> c; delete b heals trigger... a -> c.
+  const linear: FlowGraph = {
+    nodes: ['trigger', 'a', 'b', 'c'].map((id) => (id === 'trigger' ? { id, type: 'trigger', data: {} } : { id, type: 'agent', data: { agentId: 'x', input: 'y' } })) as FlowGraph['nodes'],
+    edges: [
+      { id: 't->a', source: 'trigger', target: 'a' },
+      { id: 'a->b', source: 'a', target: 'b' },
+      { id: 'b->c', source: 'b', target: 'c' },
+    ],
+  }
+  const healed = deleteNode(linear, 'b')
+  assert.ok(healed.edges.some((e) => e.source === 'a' && e.target === 'c'), 'a reconnects to c')
+  assert.ok(!healed.nodes.some((n) => n.id === 'b'))
+
+  // Fan-in: p1,p2 -> j -> c; delete j drops its edges, NO guessed reconnection.
+  const fanIn: FlowGraph = {
+    nodes: ['trigger', 'p1', 'p2', 'j', 'c'].map((id) => (id === 'trigger' ? { id, type: 'trigger', data: {} } : { id, type: 'agent', data: { agentId: 'x', input: 'y' } })) as FlowGraph['nodes'],
+    edges: [
+      { id: 't->p1', source: 'trigger', target: 'p1' },
+      { id: 't->p2', source: 'trigger', target: 'p2' },
+      { id: 'p1->j', source: 'p1', target: 'j' },
+      { id: 'p2->j', source: 'p2', target: 'j' },
+      { id: 'j->c', source: 'j', target: 'c' },
+    ],
+  }
+  const dropped = deleteNode(fanIn, 'j')
+  assert.ok(!dropped.nodes.some((n) => n.id === 'j'))
+  assert.equal(dropped.edges.filter((e) => e.source === 'j' || e.target === 'j').length, 0)
+  // No cross-wiring invented between p1/p2 and c.
+  assert.ok(!dropped.edges.some((e) => (e.source === 'p1' || e.source === 'p2') && e.target === 'c'))
 })
