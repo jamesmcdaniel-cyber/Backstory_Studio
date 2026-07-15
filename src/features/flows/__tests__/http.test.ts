@@ -185,3 +185,18 @@ test('responseOutput can force text or JSON parsing', async () => {
   assert.equal(text.body, '{"ok":true}')
   await assert.rejects(() => responseOutput(new Response('not-json'), 'json'), /not valid JSON/)
 })
+
+test('a JSON response larger than the display cap stays STRUCTURED (parsed before truncation)', async () => {
+  // A big list of records — its JSON text far exceeds the display cap. The old
+  // behavior truncated first, corrupting the JSON so `.body` became a truncated
+  // string and downstream field reads silently blanked. Now `.body` is the full
+  // parsed array; only `.bodyText` is capped.
+  const records = Array.from({ length: 400 }, (_, i) => ({ id: i, name: `Account ${i}`, note: 'x'.repeat(40) }))
+  const json = JSON.stringify(records)
+  assert.ok(json.length > 500, 'fixture should exceed the tiny cap used here')
+  const output = await responseOutput(new Response(json, { headers: { 'content-type': 'application/json' } }), 'auto', 500)
+  assert.ok(Array.isArray(output.body), 'body must remain a parsed array, not a truncated string')
+  assert.equal((output.body as unknown[]).length, 400, 'all records survive — no silent data loss')
+  assert.equal((output.body as { name: string }[])[399].name, 'Account 399')
+  assert.equal(output.bodyText.length, 500, 'the raw-text mirror is still capped for display/persistence')
+})

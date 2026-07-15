@@ -156,6 +156,17 @@ export function buildDataTree(source: DataTreeSource): DataField[] {
       description: 'Zero-based position of the current item in the list.',
     })
   }
+  // Aggregate root: one chip that feeds EVERYTHING earlier steps captured
+  // (each API/query node's data, labeled). Only worth offering when there are
+  // ≥2 upstream steps — with one, its dedicated root below already covers it.
+  if (source.upstream.length >= 2) {
+    roots.push({
+      label: 'All earlier data',
+      token: '{{steps}}',
+      type: 'object',
+      description: 'Everything captured by the steps before this one, combined into one value.',
+    })
+  }
   for (const step of source.upstream) {
     const basePath = `step.${step.id}.output`
     const children: DataField[] = []

@@ -1,5 +1,5 @@
 import type { FlowGraph, FlowNode, FlowEdge, VariableType } from '@/lib/flows/graph'
-import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, buildUpstreamContextBlock, referencesStepData, type FlowContext } from './context'
+import { resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, normalizeStepAlias, buildUpstreamContextBlock, type FlowContext } from './context'
 import { stepLabelsOf } from '@/lib/flows/token-text'
 import { shouldRetryAfterTimeout } from './action-reliability'
 import { structuredResponseInstruction, parseStructuredAgentOutput } from './agent-response'
@@ -708,20 +708,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     if (node.type === 'agent') {
       const outputFields = node.data.outputFields ?? []
       const structured = node.data.responseFormat === 'structured' && outputFields.some((field) => field.name.trim())
-      const inputTemplate = node.data.input ?? '{{trigger.input}}'
-      let resolved = resolveTemplate(inputTemplate, ctx, onMissingToken)
-      // Aggregated upstream context: feed the agent EVERYTHING earlier steps
-      // captured (each API/query node's data, labeled), so nodes work together
-      // instead of the agent only seeing whatever tokens the input named.
-      //   includeUpstreamContext === false → never (opt out)
-      //   === true                         → always append
-      //   undefined (default)              → auto: append only when the input
-      //     doesn't already pull in step data ({{step...}}/{{steps}}), so a
-      //     curated prompt is left exactly as-is but a bare agent standing
-      //     after data nodes is no longer starved of that data.
-      const includePref = node.data.includeUpstreamContext
-      const includeUpstream = includePref === true || (includePref === undefined && !referencesStepData(inputTemplate))
-      if (includeUpstream) {
+      let resolved = resolveTemplate(node.data.input ?? '{{trigger.input}}', ctx, onMissingToken)
+      // Aggregated upstream context: when enabled, feed the agent EVERYTHING
+      // earlier steps captured (each API/query node's data, labeled), so nodes
+      // work together instead of the agent only seeing the tokens its input
+      // named. Opt-in per node (`includeUpstreamContext: true`) — new agent
+      // nodes default it on (see mutate.ts defaultData); existing flows are
+      // untouched, so this never changes a run that didn't ask for it.
+      if (node.data.includeUpstreamContext === true) {
         const contextBlock = buildUpstreamContextBlock(ctx, node.id)
         if (contextBlock) resolved = `${resolved}\n\n${contextBlock}`
       }

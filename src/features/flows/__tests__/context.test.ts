@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readPath, resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, type FlowContext } from '../context'
+import { readPath, resolveTemplate, resolveTemplateValue, asStructured, evalCondition, evalClause, aggregateSteps, unwrapStepOutput, buildUpstreamContextBlock, type FlowContext } from '../context'
 
 const ctx: FlowContext = {
   trigger: { input: 'Acme, Globex' },
@@ -174,6 +174,70 @@ test('onMissing reports broken references, not legitimately-empty ones', () => {
   const missing2: string[] = []
   assert.deepEqual(resolveTemplateValue({ query: '{{Bogus Step.output}}' }, c, (p) => missing2.push(p)), { query: '' })
   assert.deepEqual(missing2, ['Bogus Step.output'])
+})
+
+// ── Upstream data aggregation ({{steps}} + agent context) ─────────────────────
+
+const httpEnvelope = { ok: true, status: 200, statusText: 'OK', url: 'https://api.example.com', headers: {}, body: { accounts: [{ name: 'Acme' }] }, bodyText: '...' }
+
+const aggCtx: FlowContext = {
+  trigger: { input: 'go' },
+  step: {
+    n1: { output: httpEnvelope },
+    n2: { output: 'Qualified: strong fit.' },
+    n3: { output: { score: 91 } },
+  },
+  stepLabels: { n1: 'Fetch accounts', n2: 'Summarize', n3: 'Score' },
+}
+
+test('unwrapStepOutput collapses an HTTP envelope to its parsed body, passes others through', () => {
+  assert.deepEqual(unwrapStepOutput(httpEnvelope), { accounts: [{ name: 'Acme' }] })
+  assert.equal(unwrapStepOutput('plain'), 'plain')
+  assert.deepEqual(unwrapStepOutput({ score: 91 }), { score: 91 })
+})
+
+test('aggregateSteps keys every prior output by step label, HTTP unwrapped', () => {
+  assert.deepEqual(aggregateSteps(aggCtx), {
+    'Fetch accounts': { accounts: [{ name: 'Acme' }] },
+    Summarize: 'Qualified: strong fit.',
+    Score: { score: 91 },
+  })
+  // excludeId omits the consuming node itself.
+  assert.deepEqual(Object.keys(aggregateSteps(aggCtx, 'n2')), ['Fetch accounts', 'Score'])
+})
+
+test('{{steps}} resolves to the whole aggregate; {{steps.<label>}} reads one step', () => {
+  // Whole aggregate as JSON.
+  const whole = resolveTemplate('{{steps}}', aggCtx)
+  assert.ok(whole.includes('Fetch accounts') && whole.includes('Qualified: strong fit.'))
+  // One step by label — the HTTP body, not the transport envelope.
+  assert.deepEqual(resolveTemplateValue('{{steps.Fetch accounts}}', aggCtx), { accounts: [{ name: 'Acme' }] })
+  assert.equal(resolveTemplate('{{steps.Score.score}}', aggCtx), '91')
+})
+
+test('{{step.<httpId>.output.data}} aliases the parsed body (no stored duplicate needed)', () => {
+  assert.deepEqual(resolveTemplateValue('{{step.n1.output.data}}', aggCtx), { accounts: [{ name: 'Acme' }] })
+  // .body still works and is identical.
+  assert.deepEqual(resolveTemplateValue('{{step.n1.output.body}}', aggCtx), { accounts: [{ name: 'Acme' }] })
+})
+
+test('buildUpstreamContextBlock produces a labeled, capped block (or empty when nothing upstream)', () => {
+  const block = buildUpstreamContextBlock(aggCtx, 'n4')
+  assert.ok(block.includes('Data gathered by earlier steps'))
+  assert.ok(block.includes('### Fetch accounts') && block.includes('### Summarize') && block.includes('### Score'))
+  assert.ok(block.includes('Acme') && block.includes('Qualified: strong fit.'))
+  // Nothing upstream → empty (no header appended to a lone agent).
+  assert.equal(buildUpstreamContextBlock({ trigger: { input: '' }, step: {} }, 'x'), '')
+})
+
+test('buildUpstreamContextBlock caps total size and notes omissions', () => {
+  const big: FlowContext = {
+    trigger: { input: '' },
+    step: { a: { output: 'A'.repeat(5000) }, b: { output: 'B'.repeat(5000) }, c: { output: 'C'.repeat(5000) } },
+    stepLabels: { a: 'A', b: 'B', c: 'C' },
+  }
+  const block = buildUpstreamContextBlock(big, 'z', { perStepMax: 5000, totalMax: 8000 })
+  assert.ok(block.includes('omitted for length'), 'over-budget steps are dropped with a note, not silently')
 })
 
 test('evalCondition combines clauses with all (AND) / any (OR)', () => {

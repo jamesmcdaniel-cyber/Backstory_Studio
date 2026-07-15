@@ -19,7 +19,10 @@ function edgeId(source: string, target: string, branch?: string): string {
 function defaultData(type: FlowNode['type'], extra?: { bodyId?: string; agentId?: string }): FlowNode['data'] {
   switch (type) {
     case 'agent':
-      return { agentId: extra?.agentId ?? '', input: 'Use this flow input:\n{{trigger.input}}' }
+      // includeUpstreamContext on by default: a newly-added agent automatically
+      // receives the data every earlier step captured, so a chain of API/query
+      // steps feeding an agent works without hand-wiring a token per step.
+      return { agentId: extra?.agentId ?? '', input: 'Use this flow input:\n{{trigger.input}}', includeUpstreamContext: true }
     case 'condition':
       return { match: 'all', clauses: [{ left: '', op: 'contains', right: '' }] }
     case 'loop':

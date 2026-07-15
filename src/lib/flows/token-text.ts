@@ -75,6 +75,7 @@ export function friendlyTokenLabel(path: string, ctx: TokenLabelContext): string
     const stepLabel = ctx.stepLabels[parts[1]] || `Step ${parts[1]}`
     return joinParts(stepLabel, parts.slice(3))
   }
+  if (parts[0] === 'steps') return joinParts('All earlier data', parts.slice(1))
   if (parts[0] === 'item') return joinParts('Current item', parts.slice(1))
   if (parts[0] === 'var' && parts[1]) return joinParts('Variable', parts.slice(1))
   if (path === 'loop.index') return 'Item number'

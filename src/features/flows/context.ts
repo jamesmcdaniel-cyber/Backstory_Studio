@@ -118,12 +118,6 @@ export function buildUpstreamContextBlock(
   ].join('\n\n')
 }
 
-/** True when a template already pulls in step data — used to decide auto-context. */
-export function referencesStepData(template: string | undefined): boolean {
-  if (!template) return false
-  return /\{\{\s*steps?\b/i.test(template)
-}
-
 /** Normalize a step label for alias lookup: trimmed, lowercased, single-spaced. */
 export function normalizeStepAlias(label: string): string {
   return label.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -149,6 +143,13 @@ function walkValue(start: unknown, parts: string[]): unknown {
       return undefined
     }
     if (typeof cursor !== 'object') return undefined
+    // `.data` on an HTTP envelope aliases `.body` (the parsed response), so
+    // `{{step.<httpId>.output.data}}` reads the payload without persisting a
+    // duplicate of it on the run row.
+    if (part === 'data' && isHttpEnvelope(cursor) && !('data' in cursor)) {
+      cursor = cursor.body
+      continue
+    }
     cursor = (cursor as Record<string, unknown>)[part]
   }
   return cursor

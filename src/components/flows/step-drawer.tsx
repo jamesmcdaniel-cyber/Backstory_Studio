@@ -456,6 +456,21 @@ export function StepDrawer({
                 <DataTree fields={dataFields} onInsert={insertToken} />
               </div>
             </div>
+            <div>
+              <label className={labelClass}>Data from earlier steps</label>
+              <select
+                className={fieldClass}
+                value={node.data.includeUpstreamContext === true ? 'on' : 'off'}
+                onChange={(e) => onChange({ ...node, data: { ...node.data, includeUpstreamContext: e.target.value === 'on' } })}
+              >
+                <option value="on">Include every earlier step&apos;s data (recommended)</option>
+                <option value="off">Only what the message references</option>
+              </select>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                When on, the data captured by the API and other steps before this one is added to the
+                agent&apos;s context automatically — so it has everything it needs without wiring each token.
+              </p>
+            </div>
             <AdvancedParamsSection node={node} onChange={onChange} defaultOpen />
             <div>
               <label className={labelClass}>Human assistance</label>

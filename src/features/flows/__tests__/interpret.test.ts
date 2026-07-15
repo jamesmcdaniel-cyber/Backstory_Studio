@@ -2035,3 +2035,85 @@ test('a canonical token naming a real step that produced no output stays empty, 
   assert.equal(result.status, 'succeeded')
   assert.deepEqual(calls[0].args, { text: 'got:' }, 'continue-failed step reads as empty, not unknown')
 })
+
+test('SCENARIO: API nodes run before an agent, and the agent auto-receives all their data', async () => {
+  // trigger → http(fetch CRM) → http(fetch usage) → agent. The agent input is
+  // BARE ({{trigger.input}}), yet it must still receive both API payloads —
+  // this is the "nodes work together" parity the aggregation delivers.
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'crm', type: 'http', data: { method: 'GET', url: 'https://api.example.com/accounts', label: 'Fetch CRM accounts' } },
+      { id: 'usage', type: 'http', data: { method: 'GET', url: 'https://api.example.com/usage', label: 'Fetch usage data' } },
+      { id: 'agent', type: 'agent', data: { agentId: 'analyst', input: '{{trigger.input}}', label: 'Analyst', includeUpstreamContext: true } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'crm' },
+      { id: 'e1', source: 'crm', target: 'usage' },
+      { id: 'e2', source: 'usage', target: 'agent' },
+    ],
+  }
+  let promptSeenByAgent = ''
+  const runAgent: RunAgentFn = async (node) => {
+    promptSeenByAgent = node.input
+    return { output: 'analysis done' }
+  }
+  const runAction: RunActionFn = async (node) => {
+    if (node.id === 'crm') return { output: { ok: true, status: 200, statusText: 'OK', url: 'u', headers: {}, body: { accounts: [{ name: 'Acme', arr: 84000 }] }, bodyText: '' } }
+    return { output: { ok: true, status: 200, statusText: 'OK', url: 'u', headers: {}, body: { seats: 40, weeklyActive: 31 } }, bodyText: '' }
+  }
+  const result = await interpretFlow(graph, 'Assess Acme for expansion', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  // The agent's prompt carries BOTH API payloads, labeled — unwrapped from the HTTP envelope.
+  assert.ok(promptSeenByAgent.includes('Assess Acme for expansion'), 'keeps the original instruction')
+  assert.ok(promptSeenByAgent.includes('Data gathered by earlier steps'), 'appends the aggregated context')
+  assert.ok(promptSeenByAgent.includes('Fetch CRM accounts') && promptSeenByAgent.includes('Acme'), 'includes CRM data')
+  assert.ok(promptSeenByAgent.includes('Fetch usage data') && promptSeenByAgent.includes('weeklyActive'), 'includes usage data')
+  // It must be the parsed body, never the raw HTTP envelope metadata.
+  assert.ok(!promptSeenByAgent.includes('bodyText'), 'transport envelope is unwrapped away')
+})
+
+test('an agent WITHOUT includeUpstreamContext (existing flows) is untouched — no context appended', async () => {
+  // Backward-compat guarantee: the field is opt-in, so a run built before this
+  // feature behaves exactly as before — the agent sees only its resolved input.
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'crm', type: 'http', data: { method: 'GET', url: 'https://api.example.com/accounts', label: 'Fetch CRM' } },
+      { id: 'agent', type: 'agent', data: { agentId: 'a', input: 'Summarize {{step.crm.output.body}}', label: 'Agent' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'crm' },
+      { id: 'e1', source: 'crm', target: 'agent' },
+    ],
+  }
+  let seen = ''
+  const runAgent: RunAgentFn = async (node) => { seen = node.input; return { output: 'ok' } }
+  const runAction: RunActionFn = async () => ({ output: { ok: true, status: 200, statusText: 'OK', url: 'u', headers: {}, body: { x: 1 }, bodyText: '' } })
+  const result = await interpretFlow(graph, '', { runAgent, runAction })
+  assert.equal(result.status, 'succeeded')
+  assert.ok(!seen.includes('Data gathered by earlier steps'), 'undefined → off (no behavior change for existing flows)')
+  assert.ok(seen.includes('"x":1') || seen.includes('{"x":1}'), 'the referenced token still resolved')
+})
+
+test('includeUpstreamContext:true forces the context even alongside a token; false disables it', async () => {
+  const base = (include: boolean | undefined): FlowGraph => ({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'crm', type: 'http', data: { method: 'GET', url: 'https://api.example.com/a', label: 'CRM' } },
+      { id: 'agent', type: 'agent', data: { agentId: 'a', input: 'Look at {{step.crm.output.body}}', label: 'Agent', includeUpstreamContext: include } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'crm' },
+      { id: 'e1', source: 'crm', target: 'agent' },
+    ],
+  })
+  const runAction: RunActionFn = async () => ({ output: { ok: true, status: 200, statusText: 'OK', url: 'u', headers: {}, body: { y: 2 }, bodyText: '' } })
+  const capture = async (include: boolean | undefined) => {
+    let seen = ''
+    await interpretFlow(base(include), '', { runAgent: async (n) => { seen = n.input; return { output: 'ok' } }, runAction })
+    return seen
+  }
+  assert.ok((await capture(true)).includes('Data gathered by earlier steps'), 'true → always include')
+  assert.ok(!(await capture(false)).includes('Data gathered by earlier steps'), 'false → never include')
+})

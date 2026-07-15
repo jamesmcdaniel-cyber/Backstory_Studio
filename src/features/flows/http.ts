@@ -20,16 +20,18 @@ export type FlowHttpOutput = {
   url: string
   headers: Record<string, string>
   // The parsed response (object/array) when JSON, else the response text. This
-  // is the data downstream steps consume — reachable as `.body` or `.data`.
+  // is the data downstream steps consume — reachable as `.body`, or the `.data`
+  // read-time alias (see readPath's http-envelope handling), so structure
+  // survives responses larger than the display cap.
   body: unknown
-  // Alias of `body`, so `{{step.<id>.output.data}}` reads the response payload
-  // regardless of whether the caller thinks in ".body" or ".data".
-  data: unknown
-  // The raw response text, truncated for display/persistence. `body` is parsed
-  // from the FULL text (never this truncated mirror), so structured field
-  // access survives responses larger than the display cap.
+  // The raw response text, truncated for display/persistence.
   bodyText: string
 }
+
+// Parse JSON from up to this many chars of the response. Generous so real
+// query-API payloads stay fully structured, bounded so a pathological response
+// can't persist an unbounded object on the run row.
+const PARSE_MAX_CHARS = 400_000
 
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH'])
 const JSON_RE = /^(?:\{|\[|true|false|null|-?\d|")/
@@ -216,10 +218,11 @@ export async function responseOutput(response: Response, responseType: 'auto' | 
   const raw = await response.text()
   const headers = Object.fromEntries(response.headers.entries())
   const bodyText = raw.slice(0, maxChars)
+  const parseSource = raw.length > PARSE_MAX_CHARS ? raw.slice(0, PARSE_MAX_CHARS) : raw
   let body: unknown = bodyText
-  if (raw && shouldParseJson(headers['content-type'] ?? '', responseType, raw)) {
+  if (parseSource && shouldParseJson(headers['content-type'] ?? '', responseType, parseSource)) {
     try {
-      body = JSON.parse(raw)
+      body = JSON.parse(parseSource)
     } catch {
       if (responseType === 'json') throw new Error('HTTP response was not valid JSON.')
     }
@@ -231,7 +234,6 @@ export async function responseOutput(response: Response, responseType: 'auto' | 
     url: response.url,
     headers,
     body,
-    data: body,
     bodyText,
   }
 }
