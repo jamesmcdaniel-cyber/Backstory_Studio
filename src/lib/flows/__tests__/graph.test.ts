@@ -170,3 +170,23 @@ test('ai node schema allows timeouts up to 20 minutes but no further', () => {
     }),
   )
 })
+
+test('node schema accepts an optional canvas position and round-trips it', () => {
+  const withPos = flowGraphSchema.safeParse({
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {}, position: { x: 10, y: 20 } },
+      { id: 'a', type: 'agent', data: { agentId: 'x', input: 'y' } },
+    ],
+    edges: [{ id: 'e0', source: 'trigger', target: 'a' }],
+  })
+  assert.equal(withPos.success, true)
+  if (withPos.success) {
+    const trigger = withPos.data.nodes.find((n) => n.id === 'trigger')!
+    assert.deepEqual(trigger.position, { x: 10, y: 20 })
+    // A node without a position stays valid and undefined (back-compat).
+    assert.equal(withPos.data.nodes.find((n) => n.id === 'a')!.position, undefined)
+    // Type narrowing still works through the intersection.
+    const a = withPos.data.nodes.find((n) => n.id === 'a')!
+    if (a.type === 'agent') assert.equal(a.data.agentId, 'x')
+  }
+})

@@ -371,9 +371,17 @@ const knowledgeNode = z.object({
   }),
 })
 
-export const flowNodeSchema = z.discriminatedUnion('type', [
-  triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode, subflowNode, knowledgeNode,
-])
+// Optional persisted canvas position for the DAG builder. Absent on every
+// pre-canvas flow (and freshly-created nodes) — the builder auto-lays those out
+// with dagre and persists positions thereafter. Purely presentational: the
+// interpreter and validator ignore it.
+const nodePositionSchema = z.object({ x: z.number(), y: z.number() }).optional()
+
+export const flowNodeSchema = z
+  .discriminatedUnion('type', [
+    triggerNode, agentNode, conditionNode, loopNode, parallelNode, stopNode, toolNode, httpNode, transformNode, filterNode, switchNode, variableNode, dataNode, humanReviewNode, outputNode, joinNode, aiNode, subflowNode, knowledgeNode,
+  ])
+  .and(z.object({ position: nodePositionSchema }))
 export const flowEdgeSchema = z.object({
   id: z.string(),
   source: z.string(),
