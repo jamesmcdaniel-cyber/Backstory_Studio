@@ -2137,3 +2137,108 @@ test('condition/switch selection is unchanged after moving into execNode', async
   const result = await interpretFlow(graph, 'Acme', { runAgent: stub({ score: '{"score":91}', high: 'HIGH', low: 'LOW' }) })
   assert.equal(result.output, 'HIGH')
 })
+
+test('DAG fan-in: three independent nodes converge on one agent, which runs once with all their data', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'a', input: 'x', label: 'A' } },
+      { id: 'b', type: 'agent', data: { agentId: 'b', input: 'x', label: 'B' } },
+      { id: 'c', type: 'agent', data: { agentId: 'c', input: 'x', label: 'C' } },
+      { id: 'j', type: 'agent', data: { agentId: 'sink', input: '{{steps}}', label: 'Sink', includeUpstreamContext: false } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a' },
+      { id: 'e1', source: 'trigger', target: 'b' },
+      { id: 'e2', source: 'trigger', target: 'c' },
+      { id: 'e3', source: 'a', target: 'j' },
+      { id: 'e4', source: 'b', target: 'j' },
+      { id: 'e5', source: 'c', target: 'j' },
+    ],
+  }
+  let runs = 0
+  let sinkInput = ''
+  const runAgent: RunAgentFn = async (node) => {
+    if (node.agentId === 'sink') { runs++; sinkInput = node.input; return { output: 'merged' } }
+    return { output: `${node.agentId.toUpperCase()}-out` }
+  }
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(runs, 1, 'the fan-in node runs exactly once, after all parents')
+  assert.ok(sinkInput.includes('A-out') && sinkInput.includes('B-out') && sinkInput.includes('C-out'), 'it sees every parent output via {{steps}}')
+})
+
+test('DAG dead-path: a condition gates two paths that both feed a join; only the taken side runs, join runs once', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'c', type: 'condition', data: { left: '{{trigger.input}}', op: 'eq', right: 'go' } },
+      { id: 'hi', type: 'agent', data: { agentId: 'hi', input: 'x', label: 'Hi' } },
+      { id: 'lo', type: 'agent', data: { agentId: 'lo', input: 'x', label: 'Lo' } },
+      { id: 'j', type: 'join', data: {} },
+      { id: 'end', type: 'agent', data: { agentId: 'end', input: 'x', label: 'End', includeUpstreamContext: false } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'c' },
+      { id: 'e1', source: 'c', target: 'hi', branch: 'true' },
+      { id: 'e2', source: 'c', target: 'lo', branch: 'false' },
+      { id: 'e3', source: 'hi', target: 'j' },
+      { id: 'e4', source: 'lo', target: 'j' },
+      { id: 'e5', source: 'j', target: 'end' },
+    ],
+  }
+  const seen: string[] = []
+  const runAgent: RunAgentFn = async (node) => { seen.push(node.agentId); return { output: `${node.agentId}!` } }
+  const result = await interpretFlow(graph, 'go', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.ok(seen.includes('hi') && seen.includes('end'), 'the taken branch and the join both run')
+  assert.ok(!seen.includes('lo'), 'the dead branch never runs')
+  assert.equal(seen.filter((s) => s === 'end').length, 1, 'the join-downstream node runs exactly once (no per-branch duplication)')
+})
+
+test('DAG concurrency: independent parents overlap in time, and the join waits for all', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'a', input: 'x', label: 'A' } },
+      { id: 'b', type: 'agent', data: { agentId: 'b', input: 'x', label: 'B' } },
+      { id: 'j', type: 'agent', data: { agentId: 'j', input: 'x', label: 'J', includeUpstreamContext: false } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a' },
+      { id: 'e1', source: 'trigger', target: 'b' },
+      { id: 'e2', source: 'a', target: 'j' },
+      { id: 'e3', source: 'b', target: 'j' },
+    ],
+  }
+  let active = 0, maxActive = 0, jStartedAfter = 0
+  const doneParents = { count: 0 }
+  const runAgent: RunAgentFn = async (node) => {
+    if (node.agentId === 'j') { jStartedAfter = doneParents.count; return { output: 'j' } }
+    active++; maxActive = Math.max(maxActive, active)
+    await new Promise((r) => setTimeout(r, 20))
+    active--; doneParents.count++
+    return { output: node.agentId }
+  }
+  const result = await interpretFlow(graph, '', { runAgent })
+  assert.equal(result.status, 'succeeded')
+  assert.equal(maxActive, 2, 'a and b run concurrently')
+  assert.equal(jStartedAfter, 2, 'j starts only after both parents finished')
+})
+
+test('DAG multi-sink: two terminal sinks aggregate by label; a single sink stays bare (back-compat)', async () => {
+  const twoSinks: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'x', type: 'agent', data: { agentId: 'x', input: 'x', label: 'X' } },
+      { id: 'y', type: 'agent', data: { agentId: 'y', input: 'x', label: 'Y' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'x' },
+      { id: 'e1', source: 'trigger', target: 'y' },
+    ],
+  }
+  const runAgent: RunAgentFn = async (node) => ({ output: `${node.agentId}-out` })
+  const result = await interpretFlow(twoSinks, '', { runAgent })
+  assert.deepEqual(result.output, { X: 'x-out', Y: 'y-out' })
+})
