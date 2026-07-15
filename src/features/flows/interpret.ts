@@ -433,6 +433,14 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
     // value from before a later completed write.
     if (opts.completed && Object.prototype.hasOwnProperty.call(opts.completed, stepKey)) {
       const output = opts.completed[stepKey]
+      // A completed FILTER must replay its gate decision, not a plain 'ok': a
+      // filter that dropped (`output === false`) re-drops so its downstream
+      // stays dead on resume; one that passed re-passes. Otherwise the scheduler
+      // would read the replay as a normal step and revive the dropped path.
+      if (node.type === 'filter') {
+        emit({ nodeId: node.id, status: output ? 'succeeded' : 'skipped', output })
+        return output ? { kind: 'ok', output: undefined } : { kind: 'drop' }
+      }
       ctx.step[node.id] = { output }
       emit({ nodeId: node.id, status: 'skipped', output })
       // A completed condition/switch must replay as the SAME branch it took, not

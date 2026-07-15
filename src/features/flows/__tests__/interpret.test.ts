@@ -2242,3 +2242,47 @@ test('DAG multi-sink: two terminal sinks aggregate by label; a single sink stays
   const result = await interpretFlow(twoSinks, '', { runAgent })
   assert.deepEqual(result.output, { X: 'x-out', Y: 'y-out' })
 })
+
+test('DAG resume: a diamond with two parents already done resumes and runs only the join', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'a', type: 'agent', data: { agentId: 'a', input: 'x', label: 'A' } },
+      { id: 'b', type: 'agent', data: { agentId: 'b', input: 'x', label: 'B' } },
+      { id: 'j', type: 'agent', data: { agentId: 'j', input: 'x', label: 'J', includeUpstreamContext: false } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'a' },
+      { id: 'e1', source: 'trigger', target: 'b' },
+      { id: 'e2', source: 'a', target: 'j' },
+      { id: 'e3', source: 'b', target: 'j' },
+    ],
+  }
+  const runs: string[] = []
+  const runAgent: RunAgentFn = async (node) => { runs.push(node.agentId); return { output: node.agentId } }
+  const result = await interpretFlow(graph, '', { runAgent, completed: { a: 'A-out', b: 'B-out' } })
+  assert.equal(result.status, 'succeeded')
+  assert.deepEqual(runs, ['j'], 'only the unfinished node runs; a and b are not re-executed')
+})
+
+test('DAG resume: a filter that dropped on the prior run stays dead (its downstream never runs)', async () => {
+  const graph: FlowGraph = {
+    nodes: [
+      { id: 'trigger', type: 'trigger', data: {} },
+      { id: 'p1', type: 'agent', data: { agentId: 'p1', input: 'x', label: 'P1' } },
+      { id: 'f', type: 'filter', data: { match: 'all', clauses: [{ left: '{{trigger.input}}', op: 'eq', right: 'never' }] } },
+      { id: 'afterFilter', type: 'agent', data: { agentId: 'afterFilter', input: 'x', label: 'AfterFilter' } },
+    ],
+    edges: [
+      { id: 'e0', source: 'trigger', target: 'p1' },
+      { id: 'e1', source: 'p1', target: 'f' },
+      { id: 'e2', source: 'f', target: 'afterFilter' },
+    ],
+  }
+  const runs: string[] = []
+  const runAgent: RunAgentFn = async (node) => { runs.push(node.agentId); return { output: node.agentId } }
+  // Prior run: p1 succeeded, the filter dropped (completed value false).
+  const result = await interpretFlow(graph, 'go', { runAgent, completed: { p1: 'P1-out', f: false } })
+  assert.equal(result.status, 'succeeded')
+  assert.ok(!runs.includes('afterFilter'), 'the node after a dropped filter must not run on resume')
+})
