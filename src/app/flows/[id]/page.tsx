@@ -416,6 +416,8 @@ function FlowBuilder() {
   }, [viewingVersion])
   const { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId } =
     useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
+  // Everyone here except me — for the presence avatar stack and the Jam dialog.
+  const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
   // ── Jam autosave ────────────────────────────────────────────────────────────
   // All peers share the merged graph via broadcast, so only ONE client needs
   // to write it to Postgres: the deterministically-elected persister (owner
@@ -479,6 +481,26 @@ function FlowBuilder() {
       try { return JSON.stringify({ ...JSON.parse(prev), graph: graphRef.current }) } catch { return prev }
     })
   }), [bus])
+  // Arrival cue: opening a flow where a jam is live (or a teammate joining
+  // yours) is announced once per client — an invitee lands INSIDE a session,
+  // not on a silent canvas.
+  const seenJamClients = useRef<Set<string>>(new Set())
+  const announcedJam = useRef(false)
+  useEffect(() => {
+    if (others.length === 0) return
+    if (!announcedJam.current) {
+      announcedJam.current = true
+      for (const p of others) seenJamClients.current.add(p.clientId)
+      toast(`Jam in progress — ${others.length === 1 ? `${others[0].name} is` : `${others.length} people are`} here`, {
+        action: { label: 'View', onClick: () => setShowJam(true) },
+      })
+      return
+    }
+    for (const p of others) {
+      if (!seenJamClients.current.has(p.clientId)) toast(`${p.name} joined the jam`)
+      seenJamClients.current.add(p.clientId)
+    }
+  }, [others])
   // ── Voice huddle ────────────────────────────────────────────────────────────
   const huddle = useFlowHuddle(bus, selfClientId, setInHuddle)
   // Everyone whose presence says they're in the huddle (incl. self once joined).
@@ -494,8 +516,6 @@ function FlowBuilder() {
     const point = toContentSpace(event.clientX, event.clientY, rect, zoom)
     sendCursor(point.x, point.y)
   }, [canvasPan.handlers, zoom, sendCursor])
-  // Everyone here except me — for the presence avatar stack and the Jam dialog.
-  const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
   // Who's-editing ring: publish our selected node; render everyone else's.
   useEffect(() => { setSelection(selectedId) }, [selectedId, setSelection])
   const remoteSelections = useMemo(() => {
@@ -1593,7 +1613,9 @@ function FlowBuilder() {
         visibility={visibility as 'shared' | 'view' | 'private'}
         canEdit={canEdit}
         onChangeVisibility={(next) => void updateSharing(next)}
-        presence={others.map((p) => ({ id: p.clientId, name: p.name }))}
+        presence={others.map((p) => ({ id: p.clientId, name: p.name, color: p.color, inHuddle: p.inHuddle }))}
+        onJoinHuddle={() => { setShowJam(false); void huddle.join() }}
+        huddleJoined={huddle.joined}
       />
 
       {subflowDraft && (() => {
