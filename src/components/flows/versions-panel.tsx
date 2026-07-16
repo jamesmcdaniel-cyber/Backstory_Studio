@@ -29,6 +29,7 @@ export function VersionsPanel({
   onClose: () => void
 }) {
   const [versions, setVersions] = useState<VersionRow[]>([])
+  const [recentEdits, setRecentEdits] = useState<{ id: string; at: string; by: string; detail?: { nodes?: number; edges?: number } | null }[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -36,7 +37,10 @@ export function VersionsPanel({
     fetch(`/api/flows/${flowId}/versions`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelled && data.success) setVersions(data.versions)
+        if (!cancelled && data.success) {
+          setVersions(data.versions)
+          setRecentEdits(data.recentEdits ?? [])
+        }
       })
       .catch(() => undefined)
       .finally(() => {
@@ -56,10 +60,28 @@ export function VersionsPanel({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
+        {!loading && recentEdits.length > 0 && (
+          <div className="border-b border-border/60 px-3 py-2.5">
+            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Recent edits</p>
+            <ul className="space-y-1">
+              {recentEdits.slice(0, 8).map((edit) => (
+                <li key={edit.id} className="flex items-baseline justify-between gap-2 text-xs">
+                  <span className="truncate">
+                    <span className="font-medium text-foreground">{edit.by}</span>
+                    {edit.detail?.nodes != null ? ` · ${edit.detail.nodes} step${edit.detail.nodes === 1 ? '' : 's'}` : ''}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">{new Date(edit.at).toLocaleString()}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {loading ? (
           <p className="p-4 text-sm text-muted-foreground">Loading…</p>
         ) : versions.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">Publish the flow to start its version history.</p>
+          <p className="p-4 text-sm text-muted-foreground">
+            {recentEdits.length > 0 ? 'Publish the flow to snapshot a restorable version.' : 'Edits and published versions will appear here.'}
+          </p>
         ) : (
           versions.map((row) => {
             const isCurrent = row.version === currentVersion

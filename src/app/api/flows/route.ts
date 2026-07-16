@@ -6,6 +6,7 @@ import { flowGraphSchema, emptyGraph } from '@/lib/flows/graph'
 import { serializeFlow } from '@/lib/flows/serialize'
 import { normalizeFlowTrigger, preserveWebhookSecretHash, triggerFromGraph } from '@/lib/flows/trigger'
 import { assertFlowEditable } from '@/lib/flows/access'
+import { recordAudit } from '@/lib/audit'
 
 // Strip undefined + narrow to plain JSON so Prisma's InputJsonValue accepts the
 // zod-inferred shapes (passthrough trigger / discriminated-union graph).
@@ -88,6 +89,19 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       ...(body.graph !== undefined && { graph: jsonValue(body.graph) }),
     },
   })
+  // Per-user edit log: record WHO saved a graph change, so the History panel can
+  // show a Jam-style timeline of who edited when. Manual saves only (no
+  // autosave), so this stays low-volume; best-effort, never blocks the save.
+  if (body.graph !== undefined) {
+    void recordAudit({
+      organizationId: auth.organizationId,
+      actorUserId: auth.dbUser.id,
+      action: 'flow.edited',
+      resourceType: 'flow',
+      resourceId: body.id,
+      detail: { nodes: body.graph.nodes.length, edges: body.graph.edges.length },
+    }).catch(() => undefined)
+  }
   return { success: true, flow: serializeFlow(flow) }
 })
 

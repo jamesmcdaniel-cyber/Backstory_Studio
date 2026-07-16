@@ -391,13 +391,13 @@ function FlowBuilder() {
   const { participants, broadcastGraph, selfClientId } = useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
   // Everyone here except me — for the presence avatar stack and the Jam dialog.
   const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
-  // Broadcast local edits (debounced). Skips the remote-applied graph and the
-  // initial loaded graph so only genuine local edits go out.
+  // Broadcast local edits (the hook throttles + size-guards internally). Skips
+  // the remote-applied graph and the initial loaded graph so only genuine local
+  // edits go out — never an echo, never a stale-load clobber.
   useEffect(() => {
     if (graph === remoteGraphRef.current) { remoteGraphRef.current = null; return }
     if (graph === loadedGraphRef.current) return
-    const t = setTimeout(() => broadcastGraph(graph), 200)
-    return () => clearTimeout(t)
+    broadcastGraph(graph)
   }, [graph, broadcastGraph])
 
   const undo = useCallback(() => {

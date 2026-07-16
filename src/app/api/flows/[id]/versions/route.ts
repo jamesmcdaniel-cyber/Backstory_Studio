@@ -47,9 +47,32 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     ? await prisma.user.findMany({ where: { id: { in: publisherIds }, organizationId: auth.organizationId }, select: { id: true, name: true, email: true } })
     : []
   const nameById = new Map(publishers.map((u) => [u.id, u.name || u.email || null]))
+
+  // Per-user edit timeline: the recent `flow.edited` audit events (one per
+  // manual save) with actor names, so History shows who changed the flow when —
+  // the Jam-style change log, distinct from the coarser publish snapshots.
+  const editEvents = await prisma.auditEvent.findMany({
+    where: { organizationId: auth.organizationId, action: 'flow.edited', resourceType: 'flow', resourceId: id },
+    orderBy: { createdAt: 'desc' },
+    take: 30,
+    select: { id: true, actorUserId: true, createdAt: true, detail: true },
+  })
+  const editorIds = Array.from(new Set(editEvents.map((e) => e.actorUserId).filter((v): v is string => Boolean(v))))
+  const editors = editorIds.length
+    ? await prisma.user.findMany({ where: { id: { in: editorIds }, organizationId: auth.organizationId }, select: { id: true, name: true, email: true } })
+    : []
+  const editorNameById = new Map(editors.map((u) => [u.id, u.name || u.email || null]))
+  const recentEdits = editEvents.map((e) => ({
+    id: e.id,
+    at: e.createdAt,
+    by: e.actorUserId ? editorNameById.get(e.actorUserId) ?? 'A teammate' : 'A teammate',
+    detail: e.detail as { nodes?: number; edges?: number } | null,
+  }))
+
   return {
     success: true,
     versions: versions.map((v) => ({ ...v, publishedByName: v.publishedBy ? nameById.get(v.publishedBy) ?? null : null })),
+    recentEdits,
   }
 })
 

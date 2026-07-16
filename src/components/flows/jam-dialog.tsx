@@ -1,13 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { Check, Copy, Link2, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, Copy, Link2, Send, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 type Visibility = 'shared' | 'view' | 'private'
+type Member = { id: string; name: string | null; email: string | null }
 
 const OPTIONS: { value: Visibility; label: string; hint: string }[] = [
   { value: 'shared', label: 'Everyone can edit', hint: 'Anyone in your workspace can jam on and run this flow.' },
@@ -43,7 +44,53 @@ export function JamDialog({
   presence?: { id: string; name: string }[]
 }) {
   const [copied, setCopied] = useState(false)
+  const [members, setMembers] = useState<Member[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [sending, setSending] = useState(false)
   const inviteLink = typeof window !== 'undefined' ? `${window.location.origin}/flows/${flowId}` : `/flows/${flowId}`
+  const shareable = visibility !== 'private'
+  const canInvite = canEdit && shareable
+
+  // Load workspace members to invite (once the dialog opens, for editors of a
+  // shareable flow).
+  useEffect(() => {
+    if (!open || !canInvite) return
+    let cancelled = false
+    fetch('/api/organizations/members', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((data) => { if (!cancelled && data.success) setMembers(data.members ?? []) })
+      .catch(() => undefined)
+    return () => { cancelled = true }
+  }, [open, canInvite])
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const sendInvites = async () => {
+    if (selected.size === 0) return
+    setSending(true)
+    try {
+      const res = await fetch(`/api/flows/${flowId}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userIds: Array.from(selected) }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Could not send invites.')
+        return
+      }
+      toast.success(`Invited ${data.invited} ${data.invited === 1 ? 'person' : 'people'} — they’ll get a notification linking to this flow.`)
+      setSelected(new Set())
+    } finally {
+      setSending(false)
+    }
+  }
 
   const copy = async () => {
     try {
@@ -83,6 +130,40 @@ export function JamDialog({
               Anyone you send this to opens straight into this flow after signing in. They can jam based on the access below.
             </p>
           </div>
+
+          {canInvite && members.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Invite teammates</p>
+              <div className="max-h-40 space-y-0.5 overflow-y-auto rounded-lg border border-border/60 p-1">
+                {members.map((m) => {
+                  const label = m.name || m.email || 'Teammate'
+                  const checked = selected.has(m.id)
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => toggle(m.id)}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+                    >
+                      <span className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded border', checked ? 'border-indigo-500 bg-indigo-500' : 'border-muted-foreground/40')}>
+                        {checked && <Check className="h-3 w-3 text-white" />}
+                      </span>
+                      <span className="truncate">{label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+              <Button size="sm" className="w-full" onClick={sendInvites} loading={sending} disabled={selected.size === 0}>
+                <Send className="mr-1.5 h-4 w-4" />
+                {selected.size > 0 ? `Send invite to ${selected.size}` : 'Select teammates to invite'}
+              </Button>
+            </div>
+          )}
+          {canEdit && !shareable && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
+              This flow is private. Set it to “Everyone can view” or “edit” below to invite teammates.
+            </p>
+          )}
 
           {presence && presence.length > 0 && (
             <div className="space-y-2">
