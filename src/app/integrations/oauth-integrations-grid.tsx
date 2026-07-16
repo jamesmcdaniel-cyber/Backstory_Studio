@@ -6,8 +6,7 @@ import { CheckCircle2, Loader2, RefreshCw, Sparkles, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { TiltCard } from '@/components/ui/motion-primitives'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Pagination, paginate } from '@/components/ui/pagination'
@@ -248,11 +247,11 @@ export function OAuthIntegrationsGrid() {
         />
       )}
 
-      <div className="stagger-children grid gap-4 [perspective:1000px] md:grid-cols-2 lg:grid-cols-3">
+      <div className="stagger-children grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {pageItems.map((integration) => {
           const connection = connections[integration.id]
           return (
-            <TiltCard key={integration.id} maxDeg={5} className="hover:border-horizon-200">
+            <Card key={integration.id} variant="interactive">
               <CardHeader>
                 <CardTitle className="flex items-center justify-between gap-3 text-base">
                   <span className="flex items-center gap-2">
@@ -277,7 +276,7 @@ export function OAuthIntegrationsGrid() {
                       Connect
                     </Button>}
               </CardContent>
-            </TiltCard>
+            </Card>
           )
         })}
       </div>

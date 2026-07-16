@@ -154,8 +154,8 @@ export default function FlowsPage() {
           <div className="stagger-children grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
             {pageItems.map((flow) => (
               <Link key={flow.id} href={`/flows/${flow.id}`} className="block">
-                <Card className="group relative h-full overflow-hidden border-border/60 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:ring-1 hover:ring-indigo-300/70 dark:hover:ring-indigo-500/40">
-                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 to-blue-400 opacity-80 transition-opacity group-hover:opacity-100" />
+                <Card className="group relative h-full overflow-hidden border-border/60 transition-[transform,box-shadow,border-color] duration-300 ease-out-quart hover:-translate-y-1 hover:shadow-4 hover:ring-1 hover:ring-indigo-300/70 dark:hover:ring-indigo-500/40">
+                  <div className="absolute inset-x-0 top-0 z-10 h-1 bg-gradient-to-r from-indigo-500 to-blue-400 opacity-80 transition-opacity group-hover:opacity-100" />
                   <CardHeader className="space-y-2.5 pt-5">
                     <div className="flex items-center justify-between">
                       <Badge variant="outline" className={cn('text-[11px] font-medium capitalize', STATUS_STYLE[flow.status] || STATUS_STYLE.draft)}>

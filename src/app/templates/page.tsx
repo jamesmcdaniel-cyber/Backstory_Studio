@@ -11,7 +11,6 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { TiltCard } from '@/components/ui/motion-primitives'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -536,9 +535,10 @@ function ExplorePage() {
                   const accent = accentFor(t.category)
                   const Icon = categoryIcon(t.category)
                   return (
-                    <Link key={t.id} href={`/templates/${t.id}`} className="block [perspective:1000px]">
-                      <TiltCard maxDeg={6} className={cn(
-                        'group h-full overflow-hidden border-border/60 hover:ring-1',
+                    <Link key={t.id} href={`/templates/${t.id}`} className="block">
+                      <Card className={cn(
+                        'group relative h-full overflow-hidden border-border/60 transition-[transform,box-shadow,border-color] duration-300 ease-out-quart',
+                        'hover:-translate-y-1 hover:shadow-4 hover:ring-1',
                         accent.ring,
                       )}>
                         {/* colored accent bar that brightens on hover */}
@@ -585,7 +585,7 @@ function ExplorePage() {
                             <span aria-hidden className="transition-transform group-hover:translate-x-0.5">→</span>
                           </div>
                         </CardContent>
-                      </TiltCard>
+                      </Card>
                     </Link>
                   )
                 })}
@@ -621,9 +621,8 @@ function ExplorePage() {
                   const Icon = categoryIcon(skill.category)
                   return (
                   // overflow stays visible so the add-to-agent menu isn't clipped
-                  <Card key={skill.id} className={cn(
-                    'group relative h-full flex flex-col border-border/60 transition-all duration-200',
-                    'hover:-translate-y-0.5 hover:shadow-lg hover:ring-1',
+                  <Card key={skill.id} variant="interactive" className={cn(
+                    'group relative flex h-full flex-col border-border/60 hover:ring-1',
                     accent.ring,
                   )}>
                     <div className={cn('absolute inset-x-0 top-0 h-1 rounded-t-xl bg-gradient-to-r opacity-80 transition-opacity group-hover:opacity-100', accent.bar)} />

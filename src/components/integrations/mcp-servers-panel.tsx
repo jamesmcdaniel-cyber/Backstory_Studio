@@ -205,7 +205,7 @@ export function McpServersPanel({ returnTo = '/integrations?tab=servers' }: { re
             {connections.map((conn) => (
               <div
                 key={conn.id}
-                className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-1 transition-all duration-base ease-out-quart hover:-translate-y-px hover:shadow-2"
+                className="flex flex-col gap-3 rounded-xl border bg-card p-4 shadow-2 transition-[transform,box-shadow,border-color] duration-base ease-out-quart hover:-translate-y-1 hover:border-horizon-200 hover:shadow-4"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">

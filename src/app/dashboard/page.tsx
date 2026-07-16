@@ -389,7 +389,7 @@ function AgentHQ() {
       >
         {/* ── Left pane: activity for the selected agent, or the setup flow ── */}
         <section className="min-w-0 border-b bg-white lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
-          <div className="sticky top-0 z-10 border-b bg-white p-4">
+          <div className="sticky top-0 z-10 border-b bg-white/80 p-4 backdrop-blur-md supports-[backdrop-filter]:bg-white/70">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0 flex-1">
                 {agents.length > 0 ? (

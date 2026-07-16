@@ -238,6 +238,7 @@ export function Magnetic({
  */
 export function Spotlight({ className, size = 380 }: { className?: string; size?: number }) {
   const reduced = useReducedMotion()
+  const ref = React.useRef<HTMLDivElement>(null)
   const mx = useMotionValue(-size)
   const my = useMotionValue(-size)
   const background = useTransform(
@@ -245,15 +246,24 @@ export function Spotlight({ className, size = 380 }: { className?: string; size?
     ([x, y]: number[]) =>
       `radial-gradient(${size}px circle at ${x}px ${y}px, rgba(68,124,147,0.16), transparent 70%)`,
   )
+  // The layer is pointer-events-none (so it never blocks the content it sits
+  // over), so it can't receive pointer events itself — listen on the parent.
+  React.useEffect(() => {
+    const parent = ref.current?.parentElement
+    if (!parent || reduced) return
+    const onMove = (event: PointerEvent) => {
+      const rect = parent.getBoundingClientRect()
+      mx.set(event.clientX - rect.left)
+      my.set(event.clientY - rect.top)
+    }
+    parent.addEventListener('pointermove', onMove, { passive: true })
+    return () => parent.removeEventListener('pointermove', onMove)
+  }, [reduced, mx, my])
   if (reduced) return null
   return (
     <motion.div
+      ref={ref}
       aria-hidden="true"
-      onPointerMove={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect()
-        mx.set(event.clientX - rect.left)
-        my.set(event.clientY - rect.top)
-      }}
       style={{ background }}
       className={cn('pointer-events-none absolute inset-0', className)}
     />
