@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { generateStructured, DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
@@ -135,18 +136,28 @@ export async function reflectAndRemember(
       // The latest critique is ALWAYS injected next run — store it on the task
       // metadata (single slot), not as an accumulating memory row. A proposed
       // goal must persist even when there's no critique this run.
-      const agent = await prisma.agentTask.findFirst({ where: { id: params.agentId, organizationId: params.organizationId }, select: { metadata: true, goal: true } })
-      const metadata = (agent?.metadata && typeof agent.metadata === 'object' && !Array.isArray(agent.metadata) ? agent.metadata : {}) as Record<string, unknown>
-      await prisma.agentTask.update({
+      //
+      // This runs fire-and-forget AFTER the run completes, and metadata is the
+      // agent's LIVE config (model, skills, maxTurns, requireApproval, …). A
+      // read-modify-write of the whole blob here would silently revert any edit
+      // the user made while the run was in flight — so patch ONLY our own keys
+      // atomically with jsonb_set, never rewriting the object. (goal is a scalar
+      // column; reading it does not participate in the clobber.)
+      const agent = await prisma.agentTask.findFirst({
         where: { id: params.agentId, organizationId: params.organizationId },
-        data: {
-          metadata: {
-            ...metadata,
-            ...(critique ? { lastCritique: critique.slice(0, 1500) } : {}),
-            ...(reflection.suggestedGoal && !agent?.goal ? { suggestedGoal: reflection.suggestedGoal.slice(0, 500) } : {}),
-          },
-        },
+        select: { goal: true },
       })
+      let expr = Prisma.sql`COALESCE(metadata, '{}'::jsonb)`
+      if (critique) {
+        expr = Prisma.sql`jsonb_set(${expr}, '{lastCritique}', to_jsonb(${critique.slice(0, 1500)}::text))`
+      }
+      if (reflection.suggestedGoal && !agent?.goal) {
+        expr = Prisma.sql`jsonb_set(${expr}, '{suggestedGoal}', to_jsonb(${reflection.suggestedGoal.slice(0, 500)}::text))`
+      }
+      await prisma.$executeRaw`
+        UPDATE agent_tasks SET metadata = ${expr}
+        WHERE id = ${params.agentId} AND "organizationId" = ${params.organizationId}::uuid
+      `
     }
 
     for (const suggestion of reflection.suggestions.slice(0, 3)) {

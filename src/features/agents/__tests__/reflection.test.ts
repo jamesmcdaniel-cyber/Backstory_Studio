@@ -1,5 +1,6 @@
-import { test } from 'node:test'
+import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import { parseReflection, buildReflectionPrompt } from '../reflection'
 
 test('parseReflection accepts clean JSON', () => {
@@ -57,3 +58,83 @@ test('reflectAndRemember calls generate with the built prompt and tolerates down
   assert.equal(typeof captured!.model, 'string')
   assert.ok(captured!.model && captured!.model.length > 0, 'reflection should request the cheap model tier')
 })
+
+// DB-gated: the metadata persist writes ONLY its own keys via jsonb_set, so a
+// concurrent agent-config edit is never reverted (and the raw SQL is exercised
+// against real Postgres).
+const TEST_DB = process.env.TEST_DATABASE_URL
+if (TEST_DB) {
+  process.env.DATABASE_URL = TEST_DB
+  process.env.DIRECT_URL = TEST_DB
+
+  let prisma: any
+  let reflectAndRemember: any
+  const ids: Record<string, string> = {}
+
+  const fakeGenerate = (selfCritique: string, suggestedGoal = '') => async () =>
+    JSON.stringify({ learnings: [], selfCritique, suggestions: [], goalAssessment: '', ...(suggestedGoal ? { suggestedGoal } : {}) })
+
+  before(async () => {
+    ;({ prisma } = await import('@/lib/prisma'))
+    ;({ reflectAndRemember } = await import('../reflection'))
+    const org = await prisma.organization.create({ data: { name: 'Rf', slug: `rf-${Date.now()}` } })
+    const user = await prisma.user.create({ data: { supabaseId: crypto.randomUUID(), organizationId: org.id } })
+    const agent = await prisma.agentTask.create({
+      data: {
+        description: 'a', objective: 'o', status: 'ACTIVE', agentType: 'assistant',
+        organizationId: org.id, userId: user.id,
+        // Live config the reflection write must NOT clobber.
+        metadata: { model: 'claude-sonnet-5', skills: ['skill-a'], requireApproval: true, maxTurns: 24 },
+      },
+    })
+    ids.org = org.id
+    ids.user = user.id
+    ids.agent = agent.id
+  })
+
+  after(async () => {
+    await prisma.agentTask.deleteMany({ where: { organizationId: ids.org } })
+    await prisma.user.deleteMany({ where: { id: ids.user } })
+    await prisma.organization.deleteMany({ where: { id: ids.org } })
+    await prisma.$disconnect()
+  })
+
+  test('reflection stores lastCritique without reverting other metadata keys', async () => {
+    await reflectAndRemember(
+      { organizationId: ids.org, agentId: ids.agent, executionId: 'exec-1', goal: null, objective: 'o', summary: 's', processLog: 'l', recordSuggestionEvent: async () => undefined },
+      { generate: fakeGenerate('Query the warehouse before the CRM next time.') },
+    )
+    const row = await prisma.agentTask.findFirst({ where: { id: ids.agent, organizationId: ids.org }, select: { metadata: true } })
+    // Our key is written…
+    assert.match(row.metadata.lastCritique, /warehouse/)
+    // …and every pre-existing config key survives (the clobber bug reverted these).
+    assert.equal(row.metadata.model, 'claude-sonnet-5')
+    assert.deepEqual(row.metadata.skills, ['skill-a'])
+    assert.equal(row.metadata.requireApproval, true)
+    assert.equal(row.metadata.maxTurns, 24)
+  })
+
+  test('a concurrent config edit landing before the reflection write is preserved', async () => {
+    // Simulate the race: the user changes the model while a run is reflecting.
+    await prisma.agentTask.updateMany({ where: { id: ids.agent, organizationId: ids.org }, data: { metadata: { model: 'claude-opus-4-8', skills: ['skill-a', 'skill-b'], requireApproval: false, maxTurns: 24 } } })
+    await reflectAndRemember(
+      { organizationId: ids.org, agentId: ids.agent, executionId: 'exec-2', goal: null, objective: 'o', summary: 's', processLog: 'l', recordSuggestionEvent: async () => undefined },
+      { generate: fakeGenerate('Second critique.') },
+    )
+    const row = await prisma.agentTask.findFirst({ where: { id: ids.agent, organizationId: ids.org }, select: { metadata: true } })
+    assert.match(row.metadata.lastCritique, /Second/)
+    assert.equal(row.metadata.model, 'claude-opus-4-8', 'the concurrent edit must not be reverted')
+    assert.equal(row.metadata.requireApproval, false)
+    assert.deepEqual(row.metadata.skills, ['skill-a', 'skill-b'])
+  })
+
+  test('suggestedGoal is written only when the agent has no goal', async () => {
+    await reflectAndRemember(
+      { organizationId: ids.org, agentId: ids.agent, executionId: 'exec-3', goal: null, objective: 'o', summary: 's', processLog: 'l', recordSuggestionEvent: async () => undefined },
+      { generate: fakeGenerate('', 'Grow the upsell pipeline.') },
+    )
+    const row = await prisma.agentTask.findFirst({ where: { id: ids.agent, organizationId: ids.org }, select: { metadata: true } })
+    assert.match(row.metadata.suggestedGoal, /upsell/)
+    assert.equal(row.metadata.model, 'claude-opus-4-8', 'still no clobber')
+  })
+}

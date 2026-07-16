@@ -343,7 +343,13 @@ export async function runAgentExecution(
   // the execution id as soon as its row exists — long before the run finishes —
   // so live UIs can start following the run. It is intentionally NOT part of
   // AgentExecutionJob: queue jobs are serialized and can't carry a function.
-  data: AgentExecutionJob & { onExecutionCreated?: (executionId: string) => void | Promise<void> },
+  // treeTokens is likewise inline-only: a shared mutable counter for the whole
+  // sub-agent run tree (see below). Sub-runs always execute inline, so passing a
+  // live object is safe; the queue never carries it.
+  data: AgentExecutionJob & {
+    onExecutionCreated?: (executionId: string) => void | Promise<void>
+    treeTokens?: { used: number }
+  },
 ) {
   const { agentId, organizationId, userId } = data
   const agent = await prisma.agentTask.findFirst({
@@ -354,6 +360,15 @@ export async function runAgentExecution(
   const agentMetadata = metadataOf(agent.metadata)
   const model = agentMetadata.model || DEFAULT_AGENT_MODEL
   const runner = createModelRunner(model)
+
+  // Tree-wide token counter, shared across the ENTIRE sub-agent run tree.
+  // Sub-agent runs execute inline, each with its OWN fresh per-run cap, so a
+  // depth-2 × 15-wide fan-out could multiply the per-run cap ~241× from a single
+  // click. The root run creates the counter; every sub-run receives and
+  // increments the SAME object, and each run enforces one tree-wide ceiling
+  // against it — so the whole tree is bounded, not just each node.
+  const treeTokens = data.treeTokens ?? { used: 0 }
+  const treeTokenCap = Number(process.env.AGENT_MAX_TREE_TOKENS) || 20_000_000
 
   const queuedExecution = data.executionId
     ? await prisma.agentExecution.findFirst({
@@ -636,6 +651,9 @@ export async function runAgentExecution(
               input: subInput,
               depth: depth + 1,
               ancestorAgentIds: chain,
+              // Share the counter so the sub-run's spend counts against the same
+              // tree-wide ceiling and can't reset its own budget.
+              treeTokens,
             })
             // A completed sub-run returns { summary }; a suspended one (asked
             // the user / awaiting approval) returns { status: 'waiting_*' }.
@@ -775,6 +793,7 @@ export async function runAgentExecution(
       const turnResult = await runner.next(transcript, system, [...tools, ASK_USER_TOOL])
       usage.inputTokens += turnResult.usage.inputTokens
       usage.outputTokens += turnResult.usage.outputTokens
+      treeTokens.used += turnResult.usage.inputTokens + turnResult.usage.outputTokens
 
       // Record this turn's spend on the live cross-process counter, then enforce
       // both the per-run cap and the (in-flight-aware) monthly ceiling mid-run so
@@ -785,6 +804,12 @@ export async function runAgentExecution(
       if (perRunTokenCap > 0 && runTotal >= perRunTokenCap) {
         finalText = turnResult.text || 'Run stopped: it reached its per-run token cap.'
         await recordEvent(execution.id, null, 'run.capped', { reason: 'per_run_token_cap', runTotal, cap: perRunTokenCap })
+        break
+      }
+      // Tree-wide ceiling across the whole sub-agent fan-out (see treeTokens).
+      if (treeTokenCap > 0 && treeTokens.used >= treeTokenCap) {
+        finalText = turnResult.text || 'Run stopped: the sub-agent group reached its combined token cap.'
+        await recordEvent(execution.id, null, 'run.capped', { reason: 'tree_token_cap', treeTotal: treeTokens.used, cap: treeTokenCap })
         break
       }
       if (monthlyLimit > 0 && (monthTotal ?? 0) >= monthlyLimit) {
