@@ -54,12 +54,20 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 })
 
 export const PUT = withAuthenticatedApi(async (request, auth) => {
-  const body = z.object({ id: z.string().min(1) }).merge(flowSchema.partial()).parse(await request.json())
+  const body = z.object({ id: z.string().min(1), baseUpdatedAt: z.string().optional() }).merge(flowSchema.partial()).parse(await request.json())
   const existing = await prisma.flow.findFirst({
     where: { id: body.id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
   if (!existing) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
   assertFlowEditable(existing, auth.dbUser.id)
+  // Optimistic concurrency: when a graph write carries the baseUpdatedAt the
+  // client last loaded, reject if the flow has moved on since (a co-editor
+  // saved) so a stale full-graph PUT can't silently clobber their work. The
+  // client reloads/merges on 409. Omitted baseUpdatedAt keeps the old
+  // last-write-wins behavior for callers that don't opt in.
+  if (body.graph !== undefined && body.baseUpdatedAt && existing.updatedAt.toISOString() !== body.baseUpdatedAt) {
+    throw new ApiError('This flow changed since you opened it — reload to get the latest before saving.', 409, 'FLOW_STALE_WRITE')
+  }
   const nextTrigger =
     body.trigger !== undefined
       ? normalizeFlowTrigger(body.trigger)

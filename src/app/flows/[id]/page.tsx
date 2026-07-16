@@ -5,6 +5,8 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText, Users } from 'lucide-react'
 import { JamDialog } from '@/components/flows/jam-dialog'
+import { useSupabase } from '@/components/providers/supabase-provider'
+import { useFlowCollab } from '@/lib/flows/use-flow-collab'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -250,6 +252,8 @@ function FlowBuilder() {
         const flow = (flowsData.flows || []).find((f: { id: string }) => f.id === id)
         if (flow) {
           const g = flow.graph && flow.graph.nodes ? flow.graph : emptyGraph()
+          loadedGraphRef.current = g
+          baseUpdatedAt.current = flow.updatedAt ?? null
           setName(flow.name)
           setDescription(flow.description || '')
           setGraph(g)
@@ -356,6 +360,45 @@ function FlowBuilder() {
     },
     [graph],
   )
+
+  // ── Live collaboration (Jam) ────────────────────────────────────────────────
+  // Presence (who's here) + live graph broadcast/receive via Supabase Realtime.
+  const { user } = useSupabase()
+  const self = useMemo(
+    () => (user ? { userId: user.id, name: (user.user_metadata?.full_name as string) || user.email || 'Teammate' } : null),
+    [user],
+  )
+  // Refs so the collab hook (stable) can read the latest graph without re-subscribing.
+  const graphRef = useRef(graph)
+  graphRef.current = graph
+  // A graph value applied FROM a remote broadcast — the broadcast effect skips it
+  // so a co-editor's change never echoes back.
+  const remoteGraphRef = useRef<FlowGraph | null>(null)
+  // The graph as first loaded — the broadcast effect skips it so opening a flow
+  // never pushes the stale persisted graph over a live editor's unsaved work.
+  const loadedGraphRef = useRef<FlowGraph | null>(null)
+  // The flow's updatedAt when we last loaded/saved it — sent on save so the
+  // server rejects a stale overwrite (optimistic concurrency, FLOW_STALE_WRITE).
+  const baseUpdatedAt = useRef<string | null>(null)
+  const applyRemoteGraph = useCallback((incoming: unknown) => {
+    // Don't disrupt a read-only version view; ignore malformed payloads.
+    if (viewingVersion || !incoming || typeof incoming !== 'object' || !(incoming as FlowGraph).nodes) return
+    const next = incoming as FlowGraph
+    remoteGraphRef.current = next
+    setGraph(next)
+    setSelectedId((current) => (current && !next.nodes.some((n) => n.id === current) ? null : current))
+  }, [viewingVersion])
+  const { participants, broadcastGraph, selfClientId } = useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
+  // Everyone here except me — for the presence avatar stack and the Jam dialog.
+  const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
+  // Broadcast local edits (debounced). Skips the remote-applied graph and the
+  // initial loaded graph so only genuine local edits go out.
+  useEffect(() => {
+    if (graph === remoteGraphRef.current) { remoteGraphRef.current = null; return }
+    if (graph === loadedGraphRef.current) return
+    const t = setTimeout(() => broadcastGraph(graph), 200)
+    return () => clearTimeout(t)
+  }, [graph, broadcastGraph])
 
   const undo = useCallback(() => {
     const prev = undoStack.current.pop()
@@ -577,13 +620,23 @@ function FlowBuilder() {
       const response = await fetch('/api/flows', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name, description, graph, status: status.toUpperCase() }),
+        // baseUpdatedAt lets the server reject a stale overwrite if a co-editor
+        // saved since we loaded (optimistic concurrency).
+        body: JSON.stringify({ id, name, description, graph, status: status.toUpperCase(), ...(baseUpdatedAt.current ? { baseUpdatedAt: baseUpdatedAt.current } : {}) }),
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
+        if (data.code === 'FLOW_STALE_WRITE') {
+          toast.error('A teammate saved changes since you opened this — reloading the latest.', { duration: 5000 })
+          window.setTimeout(() => window.location.reload(), 800)
+          return false
+        }
         toast.error(data.error || 'Could not save the flow.')
         return false
       }
+      const data = await response.json().catch(() => ({}))
+      // Advance our concurrency base to the just-saved version.
+      if (data.flow?.updatedAt) baseUpdatedAt.current = data.flow.updatedAt
       setSavedSnapshot(JSON.stringify({ name, description, graph, status }))
       return true
     } finally {
@@ -1093,8 +1146,28 @@ function FlowBuilder() {
         <Button variant="ghost" size="sm" onClick={() => router.push(`/flows/${id}/activity`)}>
           <ScrollText className="mr-1.5 h-4 w-4" /> Activity
         </Button>
+        {others.length > 0 && (
+          <div className="flex items-center -space-x-1.5" title={`${others.map((p) => p.name).join(', ')} here now`}>
+            {others.slice(0, 4).map((p) => (
+              <span
+                key={p.clientId}
+                className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-background text-[10px] font-semibold text-white"
+                style={{ backgroundColor: p.color }}
+                title={p.name}
+              >
+                {p.name.trim().charAt(0).toUpperCase() || '?'}
+              </span>
+            ))}
+            {others.length > 4 && (
+              <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-background bg-muted text-[10px] font-semibold text-muted-foreground">
+                +{others.length - 4}
+              </span>
+            )}
+          </div>
+        )}
         <Button variant="outline" size="sm" onClick={() => setShowJam(true)}>
           <Users className="mr-1.5 h-4 w-4" /> Jam
+          {others.length > 0 && <span className="ml-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold text-white">{others.length}</span>}
         </Button>
         <Button variant="outline" size="sm" onClick={() => setShowVersions((v) => !v)}>
           <History className="mr-1.5 h-4 w-4" /> History
@@ -1375,6 +1448,7 @@ function FlowBuilder() {
         visibility={visibility as 'shared' | 'view' | 'private'}
         canEdit={canEdit}
         onChangeVisibility={(next) => void updateSharing(next)}
+        presence={others.map((p) => ({ id: p.clientId, name: p.name }))}
       />
 
       {subflowDraft && (() => {
