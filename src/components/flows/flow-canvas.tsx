@@ -141,6 +141,7 @@ export function FlowCanvas({
   onPickTrigger,
   onMoveAfter,
   onReorderContainer,
+  remoteSelections,
 }: {
   graph: FlowGraph
   agentName: (agentId: string) => string
@@ -168,6 +169,8 @@ export function FlowCanvas({
   onPickTrigger?: (triggerType: 'manual' | 'schedule' | 'webhook' | 'signal') => void
   onMoveAfter?: (nodeId: string, afterId: string) => void
   onReorderContainer?: (containerId: string, from: number, to: number, branchIndex?: number) => void
+  /** nodeId → remote collaborators with that node selected (editing ring + name chip). */
+  remoteSelections?: Record<string, { name: string; color: string }[]>
 }) {
   const [dragId, setDragId] = useState<string | null>(null)
   // Branch labels rendered by the canvas itself (outside StepCard) must not
@@ -317,8 +320,22 @@ export function FlowCanvas({
     }
   }
 
-  const card = (node: FlowNode, index?: number) => (
-    <div data-node-id={node.id} className="w-full">
+  const card = (node: FlowNode, index?: number) => {
+    const editors = remoteSelections?.[node.id]
+    return (
+    <div
+      data-node-id={node.id}
+      className="relative w-full rounded-2xl"
+      style={editors?.length ? { boxShadow: `0 0 0 2px ${editors[0].color}` } : undefined}
+    >
+      {editors && editors.length > 0 && (
+        <span
+          className="absolute -top-2.5 right-3 z-10 max-w-[200px] truncate rounded-full px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
+          style={{ backgroundColor: editors[0].color }}
+        >
+          {editors.map((e) => e.name).join(', ')} editing
+        </span>
+      )}
       <StepCard
         node={node}
         index={index}
@@ -347,7 +364,8 @@ export function FlowCanvas({
         onDragEndNode={() => setDragId(null)}
       />
     </div>
-  )
+    )
+  }
 
   const nestedCards = (node: FlowNode) => {
     const ids = node.type === 'loop' ? node.data.body : node.type === 'parallel' ? node.data.branches.flat() : []

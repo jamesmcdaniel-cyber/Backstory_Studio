@@ -1,12 +1,15 @@
 'use client'
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText, Users, FileText } from 'lucide-react'
 import { JamDialog } from '@/components/flows/jam-dialog'
 import { useSupabase } from '@/components/providers/supabase-provider'
 import { useFlowCollab } from '@/lib/flows/use-flow-collab'
+import { toContentSpace } from '@/lib/flows/cursor-space'
+import { CursorLayer } from '@/components/flows/cursor-layer'
 import { flowToN8n } from '@/lib/flows/export/to-n8n'
 import { flowToInstructions } from '@/lib/flows/export/to-instructions'
 import { Button } from '@/components/ui/button'
@@ -241,6 +244,9 @@ function FlowBuilder() {
   }, [])
   const canvasScrollRef = useRef<HTMLDivElement>(null)
   const canvasPan = useCanvasPan(canvasScrollRef)
+  // The zoom-TRANSFORMED content element — cursor math divides its rect by
+  // zoom to get content-space coords (see toContentSpace).
+  const canvasContentRef = useRef<HTMLDivElement>(null)
   const [testInput, setTestInput] = useState('')
   const [runs, setRuns] = useState<{ id: string; status: string; startedAt?: string }[]>([])
   const [selectedRun, setSelectedRun] = useState<FlowRunDetail | null>(null)
@@ -405,9 +411,24 @@ function FlowBuilder() {
   }, [viewingVersion])
   const { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId } =
     useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
-  void roster; void cursors; void sendCursor; void setSelection; void setInHuddle; void bus // consumed by cursors/autosave/huddle tasks
+  void roster; void setInHuddle; void bus // consumed by autosave/huddle tasks
+  // Live cursors: stream our pointer in content space (throttled in the hook).
+  const onCanvasPointerMove = useCallback((event: ReactPointerEvent) => {
+    canvasPan.handlers.onPointerMove(event)
+    const rect = canvasContentRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const point = toContentSpace(event.clientX, event.clientY, rect, zoom)
+    sendCursor(point.x, point.y)
+  }, [canvasPan.handlers, zoom, sendCursor])
   // Everyone here except me — for the presence avatar stack and the Jam dialog.
   const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
+  // Who's-editing ring: publish our selected node; render everyone else's.
+  useEffect(() => { setSelection(selectedId) }, [selectedId, setSelection])
+  const remoteSelections = useMemo(() => {
+    const map: Record<string, { name: string; color: string }[]> = {}
+    for (const p of others) if (p.selection) (map[p.selection] ??= []).push({ name: p.name, color: p.color })
+    return map
+  }, [others])
   // Broadcast local edits (the hook throttles + size-guards internally). Skips
   // the remote-applied graph and the initial loaded graph so only genuine local
   // edits go out — never an echo, never a stale-load clobber.
@@ -1261,12 +1282,18 @@ function FlowBuilder() {
           className={`min-w-0 flex-1 overflow-auto bg-white p-8 ${canvasPan.panning ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
           onClick={() => { if (!canvasPan.consumeMoved()) setSelectedId(null) }}
           {...canvasPan.handlers}
+          onPointerMove={onCanvasPointerMove}
           style={{
             backgroundImage: 'radial-gradient(circle, rgba(15, 23, 42, 0.22) 1px, transparent 1px)',
             backgroundSize: '28px 28px',
           }}
         >
-          <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', width: `${100 / zoom}%`, marginLeft: `${(1 - 1 / zoom) * 50}%` }}>
+          <div
+            ref={canvasContentRef}
+            className="relative"
+            style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', width: `${100 / zoom}%`, marginLeft: `${(1 - 1 / zoom) * 50}%` }}
+          >
+            <CursorLayer cursors={cursors} />
             <FlowCanvas
               graph={canvasGraph}
               agentName={(agentId) => agentsById.get(agentId) ?? ''}
@@ -1282,6 +1309,7 @@ function FlowBuilder() {
               issuesByNode={viewingVersion ? undefined : issuesByNode}
               highlightIds={viewingVersion ? [] : highlightIds}
               selectedId={selectedId}
+              remoteSelections={viewingVersion ? undefined : remoteSelections}
               onSelect={viewingVersion ? () => {} : setSelectedId}
               onBackgroundClick={() => setSelectedId(null)}
               onMakeSubflow={viewingVersion ? undefined : (startId) => setSubflowDraft({ startId, endId: startId, name: '' })}
