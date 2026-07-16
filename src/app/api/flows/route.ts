@@ -55,7 +55,13 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 })
 
 export const PUT = withAuthenticatedApi(async (request, auth) => {
-  const body = z.object({ id: z.string().min(1), baseUpdatedAt: z.string().optional() }).merge(flowSchema.partial()).parse(await request.json())
+  const body = z.object({
+    id: z.string().min(1),
+    baseUpdatedAt: z.string().optional(),
+    // Jam autosaves coalesce audit rows client-side (one per window) instead
+    // of one per debounce tick.
+    suppressAudit: z.boolean().optional(),
+  }).merge(flowSchema.partial()).parse(await request.json())
   const existing = await prisma.flow.findFirst({
     where: { id: body.id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
   })
@@ -90,9 +96,10 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
     },
   })
   // Per-user edit log: record WHO saved a graph change, so the History panel can
-  // show a Jam-style timeline of who edited when. Manual saves only (no
-  // autosave), so this stays low-volume; best-effort, never blocks the save.
-  if (body.graph !== undefined) {
+  // show a Jam-style timeline of who edited when. Jam autosaves coalesce via
+  // suppressAudit (one row per window), so this stays low-volume; best-effort,
+  // never blocks the save.
+  if (body.graph !== undefined && !body.suppressAudit) {
     void recordAudit({
       organizationId: auth.organizationId,
       actorUserId: auth.dbUser.id,

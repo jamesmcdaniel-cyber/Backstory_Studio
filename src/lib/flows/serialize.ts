@@ -30,6 +30,8 @@ export function serializeFlow(flow: {
     visibility: flow.visibility,
     // Whether THIS viewer may edit ('view' flows are owner-editable only).
     canEdit: viewerId === undefined ? true : canEditFlow({ visibility: flow.visibility, userId: flow.userId ?? null }, viewerId),
+    // Flow owner — persister election prefers the owner's client during a jam.
+    ownerId: flow.userId ?? null,
     folder: flow.folder ?? '',
     stepCount,
     version: flow.version ?? 1,

@@ -8,6 +8,7 @@ import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo
 import { JamDialog } from '@/components/flows/jam-dialog'
 import { useSupabase } from '@/components/providers/supabase-provider'
 import { useFlowCollab } from '@/lib/flows/use-flow-collab'
+import { electPersister, shouldRecordJamAudit } from '@/lib/flows/collab-roles'
 import { toContentSpace } from '@/lib/flows/cursor-space'
 import { CursorLayer } from '@/components/flows/cursor-layer'
 import { flowToN8n } from '@/lib/flows/export/to-n8n'
@@ -209,6 +210,7 @@ function FlowBuilder() {
   // Share role: 'view' flows are runnable by the org but editable only by the owner.
   const [canEdit, setCanEdit] = useState(true)
   const [visibility, setVisibility] = useState('shared')
+  const [ownerId, setOwnerId] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [agents, setAgents] = useState<Agent[]>([])
   // Workspace roster for the humanReview "Assign to" select — fetched once per
@@ -283,6 +285,7 @@ function FlowBuilder() {
           setPublished(Boolean(flow.published))
           setCanEdit(flow.canEdit !== false)
           setVisibility(flow.visibility ?? 'shared')
+          setOwnerId(flow.ownerId ?? null)
           setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g, status: flow.status }))
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
@@ -411,7 +414,70 @@ function FlowBuilder() {
   }, [viewingVersion])
   const { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId } =
     useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
-  void roster; void setInHuddle; void bus // consumed by autosave/huddle tasks
+  void setInHuddle // consumed by the huddle task
+  // ── Jam autosave ────────────────────────────────────────────────────────────
+  // All peers share the merged graph via broadcast, so only ONE client needs
+  // to write it to Postgres: the deterministically-elected persister (owner
+  // first, else lowest editor clientId — every peer computes the same answer
+  // from presence). One writer → zero optimistic-lock contention during a
+  // jam; the election self-heals when the persister leaves. Solo editing gets
+  // plain autosave (the sole editor elects itself).
+  const isPersister = useMemo(
+    () => electPersister(roster.map((p) => ({ clientId: p.clientId, userId: p.userId, canEdit: p.canEdit })), ownerId) === selfClientId,
+    [roster, ownerId, selfClientId],
+  )
+  const lastJamAuditAt = useRef(0)
+  const autosave = useCallback(async () => {
+    if (!canEdit || viewingVersion) return
+    const suppressAudit = !shouldRecordJamAudit(lastJamAuditAt.current, Date.now())
+    const response = await fetch('/api/flows', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      // Graph only: name/description/status keep manual save + the dirty dot.
+      body: JSON.stringify({ id, graph: graphRef.current, suppressAudit, ...(baseUpdatedAt.current ? { baseUpdatedAt: baseUpdatedAt.current } : {}) }),
+    })
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}))
+      if (data.code === 'FLOW_STALE_WRITE') {
+        // Someone outside the jam saved over us — same recovery as manual save.
+        toast.error('A teammate saved changes since you opened this — reloading the latest.', { duration: 5000 })
+        window.setTimeout(() => window.location.reload(), 800)
+      }
+      return // transient failures: the next edit re-arms the debounce
+    }
+    const data = await response.json().catch(() => ({}))
+    if (data.flow?.updatedAt) {
+      baseUpdatedAt.current = data.flow.updatedAt
+      if (!suppressAudit) lastJamAuditAt.current = Date.now()
+      // Mark the GRAPH portion saved so the dirty dot reflects only unsaved
+      // name/description/status edits.
+      setSavedSnapshot((prev) => {
+        if (!prev) return prev
+        try { return JSON.stringify({ ...JSON.parse(prev), graph: graphRef.current }) } catch { return prev }
+      })
+      // Everyone advances their optimistic-concurrency base — no stale-write
+      // reloads between jam participants.
+      bus.send('saved', { updatedAt: data.flow.updatedAt })
+    }
+  }, [id, canEdit, viewingVersion, bus])
+  // Debounce: persist 2s after the last graph change (local OR merged remote —
+  // the persister persists the whole room's work).
+  useEffect(() => {
+    if (!canEdit || !isPersister || viewingVersion) return
+    if (graph === loadedGraphRef.current) return
+    const timer = window.setTimeout(() => { void autosave() }, 2000)
+    return () => window.clearTimeout(timer)
+  }, [graph, canEdit, isPersister, viewingVersion, autosave])
+  // A co-editor's autosave advances OUR base + graph-saved marker too.
+  useEffect(() => bus.on('saved', (payload) => {
+    const updatedAt = typeof payload.updatedAt === 'string' ? payload.updatedAt : null
+    if (!updatedAt) return
+    baseUpdatedAt.current = updatedAt
+    setSavedSnapshot((prev) => {
+      if (!prev) return prev
+      try { return JSON.stringify({ ...JSON.parse(prev), graph: graphRef.current }) } catch { return prev }
+    })
+  }), [bus])
   // Live cursors: stream our pointer in content space (throttled in the hook).
   const onCanvasPointerMove = useCallback((event: ReactPointerEvent) => {
     canvasPan.handlers.onPointerMove(event)
