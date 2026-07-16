@@ -43,6 +43,10 @@ export type ToolBinding = {
   provider: string
   serverUrl: string
   toolName: string
+  /** Whether this tool writes/delivers outbound — drives the approval gate.
+   *  Nango provider tools get one group per tool, so this stays per-tool
+   *  accurate rather than collapsing to a per-plane flag. */
+  isWrite: boolean
   client: McpToolClient
 }
 

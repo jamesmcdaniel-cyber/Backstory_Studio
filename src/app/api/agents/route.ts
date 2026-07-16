@@ -54,6 +54,10 @@ const agentSchema = z.object({
   autoAnswerFromMemory: z.boolean().optional(),
   // When true, every run starts with an explicit numbered plan before any tool call.
   alwaysStrategize: z.boolean().optional(),
+  // When true, this agent's outbound writes (Slack/Gmail/Salesforce delivery) are
+  // queued for human approval instead of executing inline. Defaults to off, so
+  // existing agents keep their current behavior.
+  requireApproval: z.boolean().optional(),
   schedule: scheduleSchema.default({ type: 'manual', timezone: 'UTC', isActive: false }),
 })
 
@@ -103,6 +107,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         subagentIds: data.subagentIds ?? [],
         autoAnswerFromMemory: data.autoAnswerFromMemory === true,
         alwaysStrategize: data.alwaysStrategize === true,
+        requireApproval: data.requireApproval === true,
       },
     },
   })
@@ -142,6 +147,7 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ...(body.subagentIds !== undefined && { subagentIds: body.subagentIds }),
         ...(body.autoAnswerFromMemory !== undefined && { autoAnswerFromMemory: body.autoAnswerFromMemory }),
         ...(body.alwaysStrategize !== undefined && { alwaysStrategize: body.alwaysStrategize }),
+        ...(body.requireApproval !== undefined && { requireApproval: body.requireApproval }),
         // A saved NON-EMPTY goal supersedes any prior AI-suggested one; saving
         // other fields with the goal still blank keeps the proposal visible.
         ...(typeof body.goal === 'string' && body.goal.trim() ? { suggestedGoal: undefined } : {}),

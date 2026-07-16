@@ -4,12 +4,28 @@ import crypto from 'node:crypto'
 import { requiresApproval, capabilityFromProvider } from '../approval'
 
 test('requiresApproval only when flag set AND provider is a write plane', () => {
-  assert.equal(requiresApproval({ requireApproval: true }, 'nango:slack'), true)
-  assert.equal(requiresApproval({ requireApproval: true }, 'nango:gmail'), true)
-  assert.equal(requiresApproval({ requireApproval: true }, 'people_ai'), false)
-  assert.equal(requiresApproval({ requireApproval: true }, 'backstory'), false)
-  assert.equal(requiresApproval({ requireApproval: false }, 'nango:slack'), false)
-  assert.equal(requiresApproval({}, 'nango:slack'), false)
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:slack', true), true)
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:gmail', true), true)
+  assert.equal(requiresApproval({ requireApproval: true }, 'people_ai', true), false)
+  assert.equal(requiresApproval({ requireApproval: true }, 'backstory', true), false)
+  assert.equal(requiresApproval({ requireApproval: false }, 'nango:slack', true), false)
+  assert.equal(requiresApproval({}, 'nango:slack', true), false)
+})
+
+test('requiresApproval never gates a READ, even on a write plane', () => {
+  // slack_read_messages shares the nango:slack plane with the send tool. Gating
+  // on the provider alone queued reads for approval — and, worse, approving one
+  // used to run the plane's send tool.
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:slack', false), false)
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:gmail', false), false)
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:salesforce', false), false)
+})
+
+test('requiresApproval defaults to off, so an agent without the flag is never gated', () => {
+  // The flag was unreachable (absent from agentSchema) until it was added to the
+  // API + form; unset must keep meaning "run inline".
+  assert.equal(requiresApproval(undefined, 'nango:slack', true), false)
+  assert.equal(requiresApproval(null, 'nango:slack', true), false)
 })
 
 test('capabilityFromProvider extracts the delivery capability', () => {

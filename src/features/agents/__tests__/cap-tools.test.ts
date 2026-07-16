@@ -8,7 +8,7 @@ function tool(name: string, isWrite: boolean): DiscoveredTool {
     name,
     description: name,
     inputSchema: { type: 'object', properties: {} },
-    binding: { provider: isWrite ? 'nango:slack' : 'read', serverUrl: 'x', toolName: name, client },
+    binding: { provider: isWrite ? 'nango:slack' : 'read', serverUrl: 'x', toolName: name, isWrite, client },
     isWrite,
   }
 }

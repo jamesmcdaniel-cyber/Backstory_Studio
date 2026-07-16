@@ -17,15 +17,30 @@ import {
   type DeliveryCapability,
 } from '@/lib/nango/delivery'
 
-/** Write planes that an approval gate applies to (delivery/outbound). */
+/**
+ * Delivery planes an approval can actually EXECUTE on approve — i.e. the
+ * capabilities `DELIVERY_TOOLS` knows how to run. This is deliberately the
+ * executable set, not "everything that writes": gating a write we cannot later
+ * execute (e.g. `nango:github`) would queue it, let a human approve it, and then
+ * silently do nothing. Widening the gate therefore requires teaching
+ * `decideApproval` to run those tools first.
+ */
 const WRITE_PLANE = /^nango:(slack|gmail|salesforce)$/
 
+/**
+ * Should this tool call be queued for human approval instead of run inline?
+ *
+ * `isWrite` comes from the tool's own binding, so read tools never get gated —
+ * matching on the provider alone used to queue `slack_read_messages` for
+ * approval (it shares the `nango:slack` plane with the send tool).
+ */
 export function requiresApproval(
   agentMetadata: Record<string, unknown> | null | undefined,
   provider: string,
+  isWrite: boolean,
 ): boolean {
   const flag = agentMetadata?.requireApproval
-  return flag === true && WRITE_PLANE.test(provider)
+  return flag === true && isWrite === true && WRITE_PLANE.test(provider)
 }
 
 export function capabilityFromProvider(provider: string): DeliveryCapability | null {
@@ -197,12 +212,25 @@ export async function decideApproval(input: {
   let writeResult: unknown = null
   try {
     if (payload.capability) {
-      const spec = DELIVERY_TOOLS.find((tool) => tool.capability === payload.capability)
-      const connection = await resolveDeliveryConnection(input.organizationId, payload.capability, payload.userId)
-      if (spec && connection) {
-        writeResult = await spec.run(connection, payload.args)
-        executed = true
+      // Dispatch on the RECORDED TOOL NAME — never on the capability alone.
+      // DELIVERY_TOOLS is keyed by capability, so resolving that way ran the
+      // plane's *send* tool for ANY approval on that plane: approving a
+      // `salesforce_update_record` would CREATE a record, and approving a
+      // read-shaped call (`slack_read_messages({channel, text})`) would post
+      // `text` to the channel — the approver authorized one action and a
+      // different one ran. Resolve by name, and require the spec to belong to
+      // the capability whose connection we're about to use.
+      const spec = DELIVERY_TOOLS.find((tool) => tool.name === approval.tool)
+      if (spec && spec.capability === payload.capability) {
+        const connection = await resolveDeliveryConnection(input.organizationId, payload.capability, payload.userId)
+        if (connection) {
+          writeResult = await spec.run(connection, payload.args)
+          executed = true
+        }
       }
+      // No spec for the recorded tool → fail closed: `executed` stays false, so
+      // this is audited as `approval.approved_noexec` and the agent is told the
+      // action did not run, rather than a different action running silently.
     }
   } catch (error) {
     // Delivery failed after we claimed it — mark failed (not back to pending) so

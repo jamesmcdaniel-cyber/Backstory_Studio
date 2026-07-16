@@ -22,6 +22,9 @@ export type AgentMetadata = {
   autoAnswerFromMemory?: boolean
   /** When true, every run starts with an explicit numbered plan before any tool call. */
   alwaysStrategize?: boolean
+  /** When true, outbound write-tool calls are queued for human approval instead
+   *  of executing inline. See @/lib/agents/approval. */
+  requireApproval?: boolean
   /** AI-proposed goal surfaced from a run's reflection pass, pending user confirmation. */
   suggestedGoal?: string
 }

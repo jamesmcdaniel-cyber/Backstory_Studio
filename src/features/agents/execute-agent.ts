@@ -237,7 +237,7 @@ async function loadTools(organizationId: string, providers: string[], ownerUserI
         name: toolName(prefix, tool.name),
         description: tool.description,
         inputSchema: (tool.inputSchema as Record<string, unknown>) || { type: 'object', properties: {} },
-        binding: { provider: group.provider, serverUrl: group.serverUrl, toolName: tool.name, client: group.client },
+        binding: { provider: group.provider, serverUrl: group.serverUrl, toolName: tool.name, isWrite: group.isWrite, client: group.client },
         isWrite: group.isWrite,
       })
     }
@@ -635,7 +635,8 @@ export async function runAgentExecution(
         },
       }
       tools.push(runAgentTool)
-      bindings.set('run_agent', { provider: 'agent', serverUrl: '', toolName: 'run_agent', client: runAgentClient })
+      // Not a write plane: a sub-agent's own writes are gated inside its run.
+      bindings.set('run_agent', { provider: 'agent', serverUrl: '', toolName: 'run_agent', isWrite: false, client: runAgentClient })
     }
 
     // Graph-RAG: give the agent correlated context (Sales AI signals,
@@ -850,7 +851,7 @@ export async function runAgentExecution(
           // decideApproval executes the write and resumes this run with its
           // result injected, so the agent acts on the real outcome (rather than
           // continuing blind on a "queued" placeholder).
-          if (requiresApproval(agentMetadata, binding.provider)) {
+          if (requiresApproval(agentMetadata, binding.provider, binding.isWrite)) {
             // Only ONE suspension per turn: if a question or another approval is
             // already pending, defer this one with a covering result (and do NOT
             // create an approval row, so nothing is orphaned) — the model

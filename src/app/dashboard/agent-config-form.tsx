@@ -96,6 +96,7 @@ export type AgentDraft = {
   autoAnswerFromMemory?: boolean
   /** When true, every run starts with an explicit numbered plan before any tool call. */
   alwaysStrategize?: boolean
+  requireApproval?: boolean
   schedule: {
     type: 'manual' | 'hourly' | 'daily' | 'weekly' | 'cron' | 'once'
     time?: string
@@ -146,6 +147,7 @@ const emptyDraft: AgentDraft = {
   goal: '',
   autoAnswerFromMemory: false,
   alwaysStrategize: false,
+  requireApproval: false,
   schedule: { type: 'manual', time: '09:00', timezone: 'UTC', isActive: false },
 }
 
@@ -436,6 +438,7 @@ export function AgentConfigForm({
       goal: source.goal || '',
       autoAnswerFromMemory: source.autoAnswerFromMemory === true,
       alwaysStrategize: source.alwaysStrategize === true,
+      requireApproval: source.requireApproval === true,
       schedule: normalizeSchedule({ ...emptyDraft.schedule, ...(source.schedule || {}) }),
     } : {
       ...emptyDraft,
@@ -775,6 +778,20 @@ export function AgentConfigForm({
           <Switch
             checked={draft.alwaysStrategize === true}
             onCheckedChange={(on) => setDraft({ ...draft, alwaysStrategize: on })}
+          />
+        </div>
+      </div>
+      <div className="rounded-lg border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>Approve messages before they send</Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Slack messages, emails, and Salesforce records wait for a teammate to approve them instead of going out during the run. Reading is never held up.
+            </p>
+          </div>
+          <Switch
+            checked={draft.requireApproval === true}
+            onCheckedChange={(on) => setDraft({ ...draft, requireApproval: on })}
           />
         </div>
       </div>

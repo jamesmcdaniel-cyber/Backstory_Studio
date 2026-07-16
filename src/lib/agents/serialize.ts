@@ -35,6 +35,7 @@ export function serializeAgent(agent: {
     subagentIds: ((metadata as { subagentIds?: string[] }).subagentIds ?? []).filter((id) => typeof id === 'string'),
     autoAnswerFromMemory: metadata.autoAnswerFromMemory === true,
     alwaysStrategize: metadata.alwaysStrategize === true,
+    requireApproval: metadata.requireApproval === true,
     suggestedGoal: metadata.suggestedGoal || null,
     folder: agent.folder || null,
     visibility: agent.visibility || 'shared',
