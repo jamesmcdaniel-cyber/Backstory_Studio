@@ -369,6 +369,7 @@ model Notification {
   body           String?   @db.Text
   agentTaskId    String?
   executionId    String?
+  link           String?
   readAt         DateTime?
   createdAt      DateTime  @default(now())
 

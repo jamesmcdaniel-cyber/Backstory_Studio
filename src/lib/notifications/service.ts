@@ -32,6 +32,7 @@ export async function notify(input: NotifyInput) {
         body: input.body?.slice(0, 2000),
         agentTaskId: input.agentTaskId,
         executionId: input.executionId,
+        link: input.link,
       },
     })
     if (input.userId) {
