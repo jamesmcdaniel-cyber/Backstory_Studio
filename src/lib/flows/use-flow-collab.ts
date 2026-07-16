@@ -5,8 +5,33 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/client'
 import type { FlowGraph } from '@/lib/flows/graph'
 import { diffGraph, applyGraphOps, isEmptyOps } from '@/lib/flows/graph-ops'
+import { upsertCursor, pruneCursors, type RemoteCursor } from '@/lib/flows/cursor-store'
+import { shouldAnswerBootstrap } from '@/lib/flows/collab-roles'
 
-export type CollabParticipant = { clientId: string; userId: string; name: string; color: string }
+export type { RemoteCursor }
+
+export type CollabParticipant = {
+  clientId: string
+  userId: string
+  name: string
+  color: string
+  /** May this participant edit? Feeds persister election (jam autosave). */
+  canEdit?: boolean
+  /** Node id this participant has selected/open — drives the editing ring. */
+  selection?: string | null
+  /** True while this participant is in the voice huddle. */
+  inHuddle?: boolean
+}
+
+/** Events other features (jam autosave, voice huddle) exchange over the
+ *  flow's ONE channel. Bindings are fixed at subscribe time, so this set is
+ *  a whitelist — add here before using a new event. */
+export type BusEvent = 'saved' | 'huddle'
+export type CollabBus = {
+  send: (event: BusEvent, payload: Record<string, unknown>) => void
+  on: (event: BusEvent, handler: (payload: Record<string, unknown>) => void) => () => void
+}
+const BUS_EVENTS: BusEvent[] = ['saved', 'huddle']
 
 // Coalesce edits to at most one message per interval (leading + trailing) so a
 // 10-person session can't flood the channel while still feeling live.
@@ -15,6 +40,9 @@ const BROADCAST_INTERVAL_MS = 200
 // tiny so they never hit it; only a full-state sync of a huge graph might, and
 // there the newcomer just falls back to the persisted graph they already loaded.
 const MAX_BROADCAST_BYTES = 200_000
+// Cursor stream: ~25 tiny messages/s per client at most; idle cursors fade.
+const CURSOR_INTERVAL_MS = 40
+const CURSOR_PRUNE_INTERVAL_MS = 1_000
 
 // A small, high-contrast palette; a user hashes to a stable color so the same
 // person is the same color across a session (Figma-style presence).
@@ -41,15 +69,16 @@ const isGraph = (v: unknown): v is FlowGraph =>
 const EMPTY_GRAPH: FlowGraph = { nodes: [], edges: [] }
 
 /**
- * Live collaboration on a flow via Supabase Realtime:
- *  - PRESENCE: who else is in this flow right now (feeds the Jam "here now" +
- *    the toolbar avatar stack).
- *  - OP-BASED GRAPH SYNC: a local edit is broadcast as the minimal change-set
- *    (upsert/remove nodes/edges by id), and a co-editor MERGES it into their own
- *    graph rather than replacing it. So two people editing DIFFERENT nodes never
- *    clobber each other; only concurrent edits to the SAME node contend (last op
- *    wins per node). Each op is tiny, so large graphs never blow the message
- *    size. A newcomer gets one FULL-state message on join to bootstrap.
+ * Live collaboration on a flow via Supabase Realtime — ONE channel carrying:
+ *  - PRESENCE: who's here, whether they can edit, which node they have
+ *    selected, and whether they're in the voice huddle.
+ *  - OP-BASED GRAPH SYNC: a local edit broadcasts the minimal change-set
+ *    (upsert/remove nodes/edges by id); co-editors MERGE it (last op wins per
+ *    node). A newcomer gets one FULL-state bootstrap from exactly one elected
+ *    answerer (lowest present clientId).
+ *  - CURSORS: content-space pointer positions, throttled, TTL-pruned.
+ *  - BUS ('saved', 'huddle'): jam-autosave base advancement and WebRTC
+ *    huddle signaling ride the same channel via a tiny event bus.
  *
  * Remote changes are applied via `onRemoteGraph` (which uses setGraph, NOT the
  * undo-history commit path — so a co-editor's change never pollutes your undo
@@ -59,14 +88,27 @@ const EMPTY_GRAPH: FlowGraph = { nodes: [], edges: [] }
  */
 export function useFlowCollab(
   flowId: string,
-  self: { userId: string; name: string } | null,
+  self: { userId: string; name: string; canEdit: boolean } | null,
   onRemoteGraph: (graph: FlowGraph) => void,
   getLocalGraph: () => unknown,
-): { participants: CollabParticipant[]; broadcastGraph: (graph: unknown) => void; selfClientId: string } {
+): {
+  participants: CollabParticipant[]
+  roster: CollabParticipant[]
+  cursors: RemoteCursor[]
+  broadcastGraph: (graph: unknown) => void
+  sendCursor: (x: number, y: number) => void
+  setSelection: (nodeId: string | null) => void
+  setInHuddle: (inHuddle: boolean) => void
+  bus: CollabBus
+  selfClientId: string
+} {
   const [participants, setParticipants] = useState<CollabParticipant[]>([])
+  const [roster, setRoster] = useState<CollabParticipant[]>([])
+  const [cursors, setCursors] = useState<RemoteCursor[]>([])
   const channelRef = useRef<RealtimeChannel | null>(null)
+  const subscribedRef = useRef(false)
   // One id per tab so a user's own broadcasts are ignored and two tabs are one
-  // presence entry.
+  // presence entry (in the deduped list; the roster keeps both for election).
   const clientId = useMemo(
     () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `c-${Date.now()}-${Math.floor(performance.now())}`),
     [],
@@ -79,9 +121,24 @@ export function useFlowCollab(
   // computed against it; merges advance it. This is what keeps ops minimal and
   // convergent.
   const lastGraphRef = useRef<FlowGraph>(EMPTY_GRAPH)
+  // Latest present clientIds — cursor pruning drops departed clients.
+  const presentIdsRef = useRef<Set<string>>(new Set())
+  // Bus listeners, keyed by event. Channel bindings are registered once at
+  // subscribe time and dispatch into this map, so bus.on works before OR
+  // after the channel connects.
+  const busListeners = useRef<Map<BusEvent, Set<(payload: Record<string, unknown>) => void>>>(new Map())
 
   const userId = self?.userId
   const name = self?.name
+  const canEdit = self?.canEdit ?? false
+
+  // Our full presence payload. Mutated + re-tracked by setSelection/setInHuddle.
+  const presenceRef = useRef<CollabParticipant | null>(null)
+  const retrack = useCallback(() => {
+    if (subscribedRef.current && presenceRef.current) {
+      void channelRef.current?.track(presenceRef.current as unknown as Record<string, unknown>)?.catch?.(() => {})
+    }
+  }, [])
 
   // Serialize + size-guard, then send.
   const sendPayload = useCallback((payload: Record<string, unknown>) => {
@@ -102,16 +159,34 @@ export function useFlowCollab(
       return // Supabase not configured — presence simply stays empty.
     }
     const color = presenceColor(userId)
+    presenceRef.current = {
+      clientId,
+      userId,
+      name: name ?? 'Teammate',
+      color,
+      canEdit,
+      selection: presenceRef.current?.selection ?? null,
+      inHuddle: presenceRef.current?.inHuddle ?? false,
+    }
     channelRef.current = channel
     channel
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState<CollabParticipant>()
-        setParticipants(dedupeParticipants(Object.values(state).flat()))
+        const flat = Object.values(state).flat()
+        presentIdsRef.current = new Set(flat.map((p) => p.clientId))
+        setRoster(flat)
+        setParticipants(dedupeParticipants(flat))
+        setCursors((prev) => pruneCursors(prev, Date.now(), presentIdsRef.current))
       })
       .on('presence', { event: 'join' }, ({ key }) => {
-        // Someone joined: send our CURRENT (possibly unsaved) FULL graph so they
-        // adopt the live state, not the stale persisted graph they just loaded.
+        // Someone joined: exactly ONE present client (lowest clientId) sends
+        // the CURRENT (possibly unsaved) FULL graph so the newcomer adopts the
+        // live state, not the stale persisted graph they just loaded. The
+        // same path heals a reconnecting client after a network blip — its
+        // re-join triggers a fresh bootstrap.
         if (key === clientId) return
+        const present = Object.keys(channel.presenceState())
+        if (!shouldAnswerBootstrap(present, key, clientId)) return
         const graph = getLocalRef.current()
         if (isGraph(graph)) sendPayload({ clientId, full: graph })
       })
@@ -134,18 +209,52 @@ export function useFlowCollab(
           onRemoteRef.current(merged)
         }
       })
-      .subscribe((status) => {
-        if (status !== 'SUBSCRIBED') return
-        const graph = getLocalRef.current()
-        if (isGraph(graph)) lastGraphRef.current = graph // baseline = the loaded graph
-        void channel.track({ clientId, userId, name: name ?? 'Teammate', color })
+      .on('broadcast', { event: 'cursor' }, ({ payload }) => {
+        const p = payload as { clientId?: string; x?: number; y?: number; name?: string; color?: string } | undefined
+        if (!p || p.clientId === clientId || typeof p.x !== 'number' || typeof p.y !== 'number') return
+        setCursors((prev) =>
+          upsertCursor(prev, {
+            clientId: p.clientId!,
+            x: p.x!,
+            y: p.y!,
+            name: p.name ?? 'Teammate',
+            color: p.color ?? '#6366f1',
+            ts: Date.now(),
+          }),
+        )
       })
+    for (const event of BUS_EVENTS) {
+      channel.on('broadcast', { event }, ({ payload }) => {
+        const p = payload as Record<string, unknown> | undefined
+        if (!p || p.clientId === clientId) return // bus delivers REMOTE messages only
+        for (const handler of busListeners.current.get(event) ?? []) handler(p)
+      })
+    }
+    channel.subscribe((status) => {
+      if (status !== 'SUBSCRIBED') {
+        subscribedRef.current = false
+        return
+      }
+      subscribedRef.current = true
+      const graph = getLocalRef.current()
+      if (isGraph(graph)) lastGraphRef.current = graph // baseline = the loaded graph
+      retrack()
+    })
     return () => {
+      subscribedRef.current = false
       channelRef.current = null
       void channel.untrack().catch(() => {})
       void supabase.removeChannel(channel)
     }
-  }, [flowId, userId, name, clientId, sendPayload])
+  }, [flowId, userId, name, canEdit, clientId, sendPayload, retrack])
+
+  // Idle cursors fade even without presence churn.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCursors((prev) => pruneCursors(prev, Date.now(), presentIdsRef.current))
+    }, CURSOR_PRUNE_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // Op-based broadcast, throttled at the flush edge: diff the latest graph
   // against the last shared baseline and send only the change-set.
@@ -180,5 +289,44 @@ export function useFlowCollab(
 
   useEffect(() => () => { if (flushTimer.current) clearTimeout(flushTimer.current) }, [])
 
-  return { participants, broadcastGraph, selfClientId: clientId }
+  // Cursor stream: leading-edge throttle; the next move refreshes the tail.
+  const lastCursorAt = useRef(0)
+  const sendCursor = useCallback((x: number, y: number) => {
+    const now = Date.now()
+    if (now - lastCursorAt.current < CURSOR_INTERVAL_MS) return
+    lastCursorAt.current = now
+    const me = presenceRef.current
+    if (!me) return
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'cursor',
+      payload: { clientId, x, y, name: me.name, color: me.color },
+    })
+  }, [clientId])
+
+  const setSelection = useCallback((nodeId: string | null) => {
+    if (!presenceRef.current || presenceRef.current.selection === nodeId) return
+    presenceRef.current = { ...presenceRef.current, selection: nodeId }
+    retrack()
+  }, [retrack])
+
+  const setInHuddle = useCallback((inHuddle: boolean) => {
+    if (!presenceRef.current || presenceRef.current.inHuddle === inHuddle) return
+    presenceRef.current = { ...presenceRef.current, inHuddle }
+    retrack()
+  }, [retrack])
+
+  const bus = useMemo<CollabBus>(() => ({
+    send: (event, payload) => {
+      channelRef.current?.send({ type: 'broadcast', event, payload: { ...payload, clientId } })
+    },
+    on: (event, handler) => {
+      const set = busListeners.current.get(event) ?? new Set()
+      set.add(handler)
+      busListeners.current.set(event, set)
+      return () => { set.delete(handler) }
+    },
+  }), [clientId])
+
+  return { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId: clientId }
 }

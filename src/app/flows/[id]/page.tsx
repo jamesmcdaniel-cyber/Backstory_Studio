@@ -380,8 +380,8 @@ function FlowBuilder() {
   // Presence (who's here) + live graph broadcast/receive via Supabase Realtime.
   const { user } = useSupabase()
   const self = useMemo(
-    () => (user ? { userId: user.id, name: (user.user_metadata?.full_name as string) || user.email || 'Teammate' } : null),
-    [user],
+    () => (user ? { userId: user.id, name: (user.user_metadata?.full_name as string) || user.email || 'Teammate', canEdit } : null),
+    [user, canEdit],
   )
   // Refs so the collab hook (stable) can read the latest graph without re-subscribing.
   const graphRef = useRef(graph)
@@ -403,7 +403,9 @@ function FlowBuilder() {
     setGraph(next)
     setSelectedId((current) => (current && !next.nodes.some((n) => n.id === current) ? null : current))
   }, [viewingVersion])
-  const { participants, broadcastGraph, selfClientId } = useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
+  const { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId } =
+    useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
+  void roster; void cursors; void sendCursor; void setSelection; void setInHuddle; void bus // consumed by cursors/autosave/huddle tasks
   // Everyone here except me — for the presence avatar stack and the Jam dialog.
   const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
   // Broadcast local edits (the hook throttles + size-guards internally). Skips
