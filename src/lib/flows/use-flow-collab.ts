@@ -3,16 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/client'
+import type { FlowGraph } from '@/lib/flows/graph'
+import { diffGraph, applyGraphOps, isEmptyOps } from '@/lib/flows/graph-ops'
 
 export type CollabParticipant = { clientId: string; userId: string; name: string; color: string }
 
-// Broadcast at most one graph per this interval, so continuous editing streams
-// live but a 10-person session can't flood the channel (leading + trailing edge).
-const BROADCAST_INTERVAL_MS = 220
-// Skip live-broadcasting a graph whose JSON exceeds this — a frame that large
-// over Realtime at scale is a bandwidth/limit risk; co-editors pick the change
-// up on the next save/reload instead.
-const MAX_BROADCAST_BYTES = 180_000
+// Coalesce edits to at most one message per interval (leading + trailing) so a
+// 10-person session can't flood the channel while still feeling live.
+const BROADCAST_INTERVAL_MS = 200
+// Never put a single message larger than this on the wire. Incremental OPS are
+// tiny so they never hit it; only a full-state sync of a huge graph might, and
+// there the newcomer just falls back to the persisted graph they already loaded.
+const MAX_BROADCAST_BYTES = 200_000
 
 // A small, high-contrast palette; a user hashes to a stable color so the same
 // person is the same color across a session (Figma-style presence).
@@ -33,25 +35,32 @@ export function dedupeParticipants(list: CollabParticipant[]): CollabParticipant
   return Array.from(byUser.values())
 }
 
+const isGraph = (v: unknown): v is FlowGraph =>
+  Boolean(v && typeof v === 'object' && Array.isArray((v as FlowGraph).nodes) && Array.isArray((v as FlowGraph).edges))
+
+const EMPTY_GRAPH: FlowGraph = { nodes: [], edges: [] }
+
 /**
  * Live collaboration on a flow via Supabase Realtime:
  *  - PRESENCE: who else is in this flow right now (feeds the Jam "here now" +
  *    the toolbar avatar stack).
- *  - BROADCAST: push the local graph to co-editors and receive theirs, so edits
- *    appear live. Own echoes are dropped by clientId. Remote graphs are applied
- *    via the caller's onRemoteGraph (which uses setGraph, NOT the undo-history
- *    commit path — so a co-editor's change never pollutes your undo stack nor
- *    re-broadcasts).
+ *  - OP-BASED GRAPH SYNC: a local edit is broadcast as the minimal change-set
+ *    (upsert/remove nodes/edges by id), and a co-editor MERGES it into their own
+ *    graph rather than replacing it. So two people editing DIFFERENT nodes never
+ *    clobber each other; only concurrent edits to the SAME node contend (last op
+ *    wins per node). Each op is tiny, so large graphs never blow the message
+ *    size. A newcomer gets one FULL-state message on join to bootstrap.
  *
- * Live-sync semantics are last-broadcast-wins at graph granularity; persistence
- * conflicts are caught separately by the save route's optimistic lock
- * (FLOW_STALE_WRITE). No-op (empty participants, no-op broadcast) until `self`
- * and a configured Supabase are available, so it degrades cleanly.
+ * Remote changes are applied via `onRemoteGraph` (which uses setGraph, NOT the
+ * undo-history commit path — so a co-editor's change never pollutes your undo
+ * stack nor re-broadcasts). Persistence conflicts are caught separately by the
+ * save route's optimistic lock (FLOW_STALE_WRITE). Degrades cleanly (empty
+ * presence, no-op broadcast) until `self` and a configured Supabase exist.
  */
 export function useFlowCollab(
   flowId: string,
   self: { userId: string; name: string } | null,
-  onRemoteGraph: (graph: unknown) => void,
+  onRemoteGraph: (graph: FlowGraph) => void,
   getLocalGraph: () => unknown,
 ): { participants: CollabParticipant[]; broadcastGraph: (graph: unknown) => void; selfClientId: string } {
   const [participants, setParticipants] = useState<CollabParticipant[]>([])
@@ -66,9 +75,21 @@ export function useFlowCollab(
   onRemoteRef.current = onRemoteGraph
   const getLocalRef = useRef(getLocalGraph)
   getLocalRef.current = getLocalGraph
+  // The last graph state shared with the room (sent or received). Diffs are
+  // computed against it; merges advance it. This is what keeps ops minimal and
+  // convergent.
+  const lastGraphRef = useRef<FlowGraph>(EMPTY_GRAPH)
 
   const userId = self?.userId
   const name = self?.name
+
+  // Serialize + size-guard, then send.
+  const sendPayload = useCallback((payload: Record<string, unknown>) => {
+    let size: number
+    try { size = JSON.stringify(payload).length } catch { return }
+    if (size > MAX_BROADCAST_BYTES) return
+    channelRef.current?.send({ type: 'broadcast', event: 'graph', payload })
+  }, [])
 
   useEffect(() => {
     if (!userId) return
@@ -88,56 +109,74 @@ export function useFlowCollab(
         setParticipants(dedupeParticipants(Object.values(state).flat()))
       })
       .on('presence', { event: 'join' }, ({ key }) => {
-        // Someone else joined: push our CURRENT (possibly unsaved) graph so the
-        // newcomer adopts the live state instead of overwriting us with the
-        // stale persisted graph they just loaded. The newcomer never broadcasts
-        // its loaded graph (see page.tsx's mount guard), so this is the sync.
+        // Someone joined: send our CURRENT (possibly unsaved) FULL graph so they
+        // adopt the live state, not the stale persisted graph they just loaded.
         if (key === clientId) return
         const graph = getLocalRef.current()
-        if (graph !== undefined) channel.send({ type: 'broadcast', event: 'graph', payload: { clientId, graph } })
+        if (isGraph(graph)) sendPayload({ clientId, full: graph })
       })
       .on('broadcast', { event: 'graph' }, ({ payload }) => {
-        const p = payload as { clientId?: string; graph?: unknown } | undefined
+        const p = payload as { clientId?: string; full?: unknown; ops?: unknown } | undefined
         if (!p || p.clientId === clientId) return // ignore our own echo
-        if (p.graph !== undefined) onRemoteRef.current(p.graph)
+        if (isGraph(p.full)) {
+          // Bootstrap / re-sync: adopt the full state.
+          lastGraphRef.current = p.full
+          onRemoteRef.current(p.full)
+          return
+        }
+        if (p.ops && typeof p.ops === 'object') {
+          // Merge the change-set into OUR current local graph so our unsent
+          // edits survive; advance the shared baseline to the merged result.
+          const local = getLocalRef.current()
+          const base = isGraph(local) ? local : lastGraphRef.current
+          const merged = applyGraphOps(base, p.ops)
+          lastGraphRef.current = merged
+          onRemoteRef.current(merged)
+        }
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') void channel.track({ clientId, userId, name: name ?? 'Teammate', color })
+        if (status !== 'SUBSCRIBED') return
+        const graph = getLocalRef.current()
+        if (isGraph(graph)) lastGraphRef.current = graph // baseline = the loaded graph
+        void channel.track({ clientId, userId, name: name ?? 'Teammate', color })
       })
     return () => {
       channelRef.current = null
       void channel.untrack().catch(() => {})
       void supabase.removeChannel(channel)
     }
-  }, [flowId, userId, name, clientId])
+  }, [flowId, userId, name, clientId, sendPayload])
 
-  // Throttled + size-guarded broadcast: streams live while editing but caps the
-  // rate, and drops payloads too large for a Realtime frame at scale.
+  // Op-based broadcast, throttled at the flush edge: diff the latest graph
+  // against the last shared baseline and send only the change-set.
   const lastSentAt = useRef(0)
-  const pendingGraph = useRef<unknown>(undefined)
+  const pendingGraph = useRef<FlowGraph | null>(null)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const sendNow = useCallback((graph: unknown) => {
-    let size: number
-    try { size = JSON.stringify(graph).length } catch { return }
-    if (size > MAX_BROADCAST_BYTES) return // too big for a live frame; syncs on save
-    channelRef.current?.send({ type: 'broadcast', event: 'graph', payload: { clientId, graph } })
-  }, [clientId])
+  const flush = useCallback(() => {
+    const target = pendingGraph.current
+    pendingGraph.current = null
+    if (!target) return
+    const ops = diffGraph(lastGraphRef.current, target)
+    lastGraphRef.current = target
+    lastSentAt.current = Date.now()
+    if (isEmptyOps(ops)) return
+    sendPayload({ clientId, ops })
+  }, [clientId, sendPayload])
   const broadcastGraph = useCallback((graph: unknown) => {
+    if (!isGraph(graph)) return
+    pendingGraph.current = graph
     const elapsed = Date.now() - lastSentAt.current
     if (elapsed >= BROADCAST_INTERVAL_MS) {
-      lastSentAt.current = Date.now()
-      sendNow(graph)
+      flush()
       return
     }
-    pendingGraph.current = graph
     if (!flushTimer.current) {
       flushTimer.current = setTimeout(() => {
         flushTimer.current = null
-        lastSentAt.current = Date.now()
-        if (pendingGraph.current !== undefined) { sendNow(pendingGraph.current); pendingGraph.current = undefined }
+        flush()
       }, BROADCAST_INTERVAL_MS - elapsed)
     }
-  }, [sendNow])
+  }, [flush])
 
   useEffect(() => () => { if (flushTimer.current) clearTimeout(flushTimer.current) }, [])
 
