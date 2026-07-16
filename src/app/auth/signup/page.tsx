@@ -57,9 +57,12 @@ export default function SignUpPage() {
         setSuccess(successMessage)
         toast.success(successMessage)
         
-        // Optionally redirect to login after a delay
+        // Redirect to login after a delay, preserving any invite deep-link
+        // (return_to) so an invited user still reaches the flow after signing in.
         setTimeout(() => {
-          router.push('/auth/login')
+          const raw = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('return_to') : null
+          const safe = raw && /^\/(?!\/)/.test(raw) && !raw.includes('\\') ? raw : null
+          router.push(safe ? `/auth/login?return_to=${encodeURIComponent(safe)}` : '/auth/login')
         }, 3000)
       }
     } catch (err: any) {

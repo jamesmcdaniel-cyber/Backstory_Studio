@@ -19,6 +19,16 @@ export default function LoginPage() {
   const { signIn, user, loading: authLoading } = useSupabase()
   const router = useRouter()
 
+  // Where to land after sign-in: honor `return_to` from the deep link (e.g. a
+  // flow someone was invited to at /flows/<id>) so invitees reach that page
+  // instead of always being dumped on the dashboard/Agent HQ. Same-origin
+  // relative paths only — never an absolute URL (open-redirect guard).
+  const safeReturnTo = (): string => {
+    if (typeof window === 'undefined') return '/dashboard'
+    const raw = new URLSearchParams(window.location.search).get('return_to')
+    return raw && /^\/(?!\/)/.test(raw) && !raw.includes('\\') ? raw : '/dashboard'
+  }
+
   // Handle Supabase email verification redirected to wrong URL
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -43,9 +53,9 @@ export default function LoginPage() {
       }
     }
     
-    // Redirect if already authenticated
+    // Redirect if already authenticated — to the invited page when present.
     if (!authLoading && user) {
-      router.push('/dashboard')
+      router.push(safeReturnTo())
     }
   }, [user, authLoading, router])
 
@@ -61,8 +71,10 @@ export default function LoginPage() {
         setError(error.message)
         toast.error(error.message)
       } else if (data?.user) {
-        // Force page refresh after successful login to ensure auth state is properly updated
-        window.location.href = '/dashboard?auth=success'
+        // Full-page load so server auth state is fresh; land on the invited
+        // page (return_to) when present, else the dashboard.
+        const dest = safeReturnTo()
+        window.location.href = dest === '/dashboard' ? '/dashboard?auth=success' : dest
       }
     } catch (err: any) {
       const errorMessage = err.message || 'An unexpected error occurred'
