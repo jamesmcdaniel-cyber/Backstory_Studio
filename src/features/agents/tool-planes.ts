@@ -1,9 +1,9 @@
 /**
  * Shared tool-plane loaders + executors.
  *
- * An agent draws tools from five planes — People.ai (Sales AI MCP), Klavis
- * (managed MCP servers), per-org MCP connections, native built-ins (Granola/
- * Slack/HTTP/Email), and Nango delivery (outbound writes). These loaders were
+ * An agent draws tools from four planes — People.ai (Sales AI MCP), per-org MCP
+ * connections, native built-ins (Granola/Slack/HTTP/Email), and Nango-connected
+ * provider tools. These loaders were
  * previously inlined in execute-agent's loadTools; they live here so FLOWS get
  * the exact same tool universe (catalog + execution) without duplicating the
  * gating, scoping, caching, or error-degradation behavior.
@@ -20,23 +20,21 @@
 import { prisma } from '@/lib/prisma'
 import { apiLogger } from '@/lib/logger'
 import { cacheGet, cacheSet } from '@/lib/cache'
-import { KlavisClient } from '@/lib/mcp/klavis-client'
 import { BackstoryMcpClient, backstoryMcpConfigured } from '@/lib/mcp/backstory-mcp'
 import { getPeopleAiClientForUser, getPeopleAiServiceClient } from '@/lib/peopleai/client'
 import { DELIVERY_TOOLS, nangoConfigured, resolveDeliveryConnection, resolveNangoConnection, type DeliveryCapability, type DeliveryConnection } from '@/lib/nango/delivery'
 import { NANGO_PROVIDER_TOOLS, PROVIDER_CONFIG_KEYS } from '@/lib/nango/provider-tools'
 import { McpClient, mcpConfigFromConnection } from '@/lib/mcp/mcp-client'
 import { ensureFreshConnectionToken, persistRefreshedAuthcodeTokens } from '@/lib/mcp/connection-token'
-import { isStrataUrl } from '@/lib/mcp/strata'
 import { GranolaToolClient, getGranolaApiKey, granolaTools } from '@/lib/integrations/granola'
 import { SlackToolClient, slackTools } from '@/lib/integrations/slack'
 import { HttpToolClient, httpTools } from '@/lib/integrations/http'
 import { EmailToolClient, emailTools } from '@/lib/integrations/email'
-import { BUILTIN_CONNECTORS, fromKlavisAgentType, isSelected, nangoConnector, type ConnectorDescriptor } from '@/lib/connectors/registry'
+import { BUILTIN_CONNECTORS, isSelected, nangoConnector, type ConnectorDescriptor } from '@/lib/connectors/registry'
 import { formatFlowToolConnectionId, type FlowToolPlane } from '@/lib/flows/tool-connection-id'
 
-// Minimal interface every plane's execution client satisfies (KlavisClient,
-// McpClient, BackstoryMcpClient, the built-in ToolClients, and adapters).
+// Minimal interface every plane's execution client satisfies (McpClient,
+// BackstoryMcpClient, the built-in ToolClients, and adapters).
 export interface McpToolClient {
   executeTool(serverUrl: string, name: string, args: Record<string, unknown>): Promise<any>
 }
@@ -111,63 +109,6 @@ export async function cachedToolDiscovery<T>(organizationId: string, serverUrl: 
 }
 
 const EMPTY_SCHEMA = { type: 'object', properties: {} }
-
-// ── Klavis-managed MCP servers ────────────────────────────────────────────────
-
-/**
- * Klavis-provisioned MCP servers for this org. `agentTypes` restricts to the
- * given (uppercased) provider types — the agent path passes its selected
- * providers; the flow catalog omits it to surface every active server.
- */
-export async function loadKlavisPlaneGroups(
-  organizationId: string,
-  options: { agentTypes?: string[] } = {},
-): Promise<ToolPlaneGroup[]> {
-  if (!process.env.KLAVIS_API_KEY) return []
-  if (options.agentTypes && options.agentTypes.length === 0) return []
-  const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'backstory' })
-  const agents = await prisma.mCPAgent.findMany({
-    where: {
-      organizationId,
-      isActive: true,
-      ...(options.agentTypes ? { agentType: { in: options.agentTypes } } : {}),
-    },
-  })
-
-  // Discover all Klavis providers in parallel (cached per server URL); a
-  // failing discovery for one provider degrades to empty, never aborts the
-  // run. Order stays deterministic regardless of which discovery resolved first.
-  return Promise.all(agents.map(async (agent): Promise<ToolPlaneGroup> => {
-    const provider = String(agent.agentType).toLowerCase()
-    const group: ToolPlaneGroup = {
-      id: formatFlowToolConnectionId('klavis', agent.id),
-      plane: 'klavis',
-      name: fromKlavisAgentType(String(agent.agentType)).label,
-      provider,
-      serverUrl: agent.mcpServerUrl,
-      isWrite: false,
-      client,
-      tools: [],
-    }
-    try {
-      const available = await cachedToolDiscovery<{ name: string; description?: string; inputSchema?: unknown }>(
-        organizationId,
-        agent.mcpServerUrl,
-        () => client.getServerTools(agent.mcpServerUrl),
-      )
-      group.tools = available.map((tool) => ({
-        name: tool.name,
-        description: tool.description || `${tool.name} via ${provider}`,
-        inputSchema: tool.inputSchema || EMPTY_SCHEMA,
-      }))
-    } catch (error) {
-      apiLogger.warn('loadTools: Klavis tool discovery failed, skipping provider', {
-        provider, organizationId, error: error instanceof Error ? error.message : String(error),
-      })
-    }
-    return group
-  }))
-}
 
 // ── People.ai Sales AI MCP (a.k.a. Backstory MCP) ─────────────────────────────
 
@@ -279,15 +220,13 @@ export async function loadPeopleAiPlaneGroup(
 export const mcpConnectionSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
 
 /**
- * Per-org custom MCP connections. `includeStrata` gates Klavis Strata servers
- * (opt-in per agent — its ~90 meta-tools would otherwise all be live at once);
- * the flow catalog includes them so stored graphs keep validating. A failing/
- * unreachable server degrades to an empty group, never aborts.
+ * Per-org custom MCP connections. A failing or unreachable server degrades to
+ * an empty group and never aborts the remaining tool planes.
  */
 export async function loadMcpConnectionPlaneGroups(
   organizationId: string,
   ownerUserId?: string | null,
-  options: { connectionIds?: string[]; take?: number; includeStrata?: boolean } = {},
+  options: { connectionIds?: string[]; take?: number } = {},
 ): Promise<ToolPlaneGroup[]> {
   const connections = (await prisma.mcpConnection.findMany({
     where: {
@@ -295,7 +234,7 @@ export async function loadMcpConnectionPlaneGroups(
       ...(options.connectionIds?.length ? { id: { in: options.connectionIds } } : {}),
     },
     ...(options.take ? { take: options.take } : {}),
-  })).filter((conn) => (options.includeStrata ?? true) || !isStrataUrl(conn.serverUrl))
+  }))
 
   // Discover all org MCP connections in parallel (cached per server URL); token
   // refresh + client build happen per-connection, discovery is cached. Failures
@@ -475,7 +414,7 @@ export async function loadNangoPlaneGroups(
     }
   }
 
-  // Multi-provider Nango tools (the Klavis replacement): one group PER TOOL so
+  // Multi-provider Nango tools: one group PER TOOL so
   // each carries its own isWrite — read tools (list/search) skip the approval
   // gate, writes (create/update/comment) keep it. Connections resolve once per
   // provider. Selection matches `nango:<provider>` or the bare provider key.
@@ -552,18 +491,6 @@ export async function resolveFlowToolExecutor(params: {
     }
   }
 
-  if (plane === 'klavis') {
-    if (!process.env.KLAVIS_API_KEY) throw new Error('Klavis is not configured for this workspace.')
-    const agent = await prisma.mCPAgent.findFirst({ where: { id: ref, organizationId, isActive: true } })
-    if (!agent) throw new Error('The selected Klavis connection no longer exists — pick another in the step config.')
-    const client = new KlavisClient({ apiKey: process.env.KLAVIS_API_KEY, platformName: 'backstory' })
-    return {
-      provider: String(agent.agentType).toLowerCase(),
-      isWrite: false,
-      execute: (name, args) => client.executeTool(agent.mcpServerUrl, name, args),
-    }
-  }
-
   if (plane === 'people_ai') {
     // Same identity ladder as the agent runtime: acting user's delegated
     // connection, then the org service key, then the legacy env service account.
@@ -596,10 +523,28 @@ export async function resolveFlowToolExecutor(params: {
     throw new Error(`Unknown built-in integration "${ref}" — pick another in the step config.`)
   }
 
-  // nango — outbound delivery as the acting user (write plane; approval-gated).
-  if (!nangoConfigured()) throw new Error('Delivery integrations are not configured for this workspace.')
+  // nango — connected provider tools, with per-tool write classification.
+  if (!nangoConfigured()) throw new Error('Integrations are not configured for this workspace.')
+  const providerTool = NANGO_PROVIDER_TOOLS.find((tool) => tool.name === ref)
+  if (providerTool) {
+    const connection = await resolveNangoConnection(
+      organizationId,
+      PROVIDER_CONFIG_KEYS[providerTool.provider] ?? [providerTool.provider],
+      userId,
+    )
+    if (!connection) throw new Error(`No connected ${providerLabel(providerTool.provider)} account is available — connect one in Integrations.`)
+    return {
+      provider: `nango:${providerTool.provider}`,
+      isWrite: providerTool.isWrite,
+      execute: (name, args) => {
+        if (name !== providerTool.name) throw new Error(`Tool "${name}" is not available on this connection.`)
+        return providerTool.run(connection, args)
+      },
+    }
+  }
+
   const spec = DELIVERY_TOOLS.find((tool) => tool.capability === (ref as DeliveryCapability))
-  if (!spec) throw new Error(`Unknown delivery capability "${ref}" — pick another in the step config.`)
+  if (!spec) throw new Error(`Unknown Nango tool "${ref}" — pick another in the step config.`)
   const connection = await resolveDeliveryConnection(organizationId, spec.capability, userId)
   if (!connection) throw new Error(`No connected ${spec.capability} account is available — connect one in Integrations.`)
   return {

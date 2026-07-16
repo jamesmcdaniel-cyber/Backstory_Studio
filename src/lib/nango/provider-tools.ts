@@ -1,15 +1,13 @@
 /**
  * Nango multi-provider agent tools.
  *
- * Replaces Klavis's hosted per-provider MCP servers: each tool here is a
- * hand-authored adapter that maps tool args → a provider REST/GraphQL call
+ * Each tool is a hand-authored adapter that maps tool args → a provider REST/GraphQL call
  * through Nango's proxy (credentials never touch our process). Unlike the
  * write-only delivery adapters, these carry a per-tool `isWrite` flag so read
  * tools (list/search/get) skip the approval gate while writes (create/update/
  * comment) keep it.
  *
- * Adding a provider = append its read + write specs here (mirroring the tool
- * set the Klavis `provider-capabilities.ts` catalog offered) and map its Nango
+ * Adding a provider = append its read + write specs here and map its Nango
  * connection config key(s) in PROVIDER_CONFIG_KEYS.
  */
 
@@ -48,6 +46,9 @@ export const PROVIDER_CONFIG_KEYS: Record<string, readonly string[]> = {
   gmail: ['google-mail', 'gmail'],
   salesforce: ['salesforce', 'salesforce-sandbox'],
 }
+
+/** Provider keys offered to agent drafting and template generation. */
+export const NANGO_PROVIDERS = Object.keys(PROVIDER_CONFIG_KEYS)
 
 const str = (v: unknown) => (v == null ? '' : String(v))
 const num = (v: unknown, fallback: number) => {
@@ -540,7 +541,7 @@ const GMAIL_READ_TOOLS: NangoToolSpec[] = [
   },
 ]
 
-/** Every authored provider tool. Grows as providers are migrated off Klavis. */
+/** Every authored provider tool. */
 export const NANGO_PROVIDER_TOOLS: NangoToolSpec[] = [
   ...GITHUB_TOOLS,
   ...LINEAR_TOOLS,

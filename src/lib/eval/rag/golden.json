@@ -85,9 +85,9 @@
   },
   {
     "id": "q-integrations-ownership",
-    "query": "Who owns embedded end-user account connections versus agent-facing MCP tool servers?",
+    "query": "Who owns embedded end-user account connections and provider API access for agent tools?",
     "sourceDocIds": ["integrations-catalog"],
-    "referenceAnswer": "Pipedream owns embedded account connections; Klavis owns agent-facing MCP tool servers.",
+    "referenceAnswer": "Nango owns embedded account connections and proxies provider API access for agent tools; organizations can also add custom MCP servers.",
     "unanswerable": false
   },
   {

@@ -21,15 +21,15 @@ test('meetsTemplateGate is false below the threshold, true at or above it', () =
 })
 
 test('distinctProviderKeys dedupes the same provider seen via two planes', () => {
-  // 'slack' via Nango + 'SLACK' via Klavis is one integration.
+  // Provider keys are case-insensitive.
   assert.deepEqual(distinctProviderKeys([{ key: 'slack' }, { key: 'SLACK' }, { key: 'gmail' }]), [
     'slack',
     'gmail',
   ])
 })
 
-test('distinctProviderKeys keeps plane-prefixed servers distinct', () => {
-  const keys = distinctProviderKeys([{ key: 'mcp:a' }, { key: 'mcp:b' }, { key: 'strata:gmail' }])
+test('distinctProviderKeys keeps MCP servers distinct', () => {
+  const keys = distinctProviderKeys([{ key: 'mcp:a' }, { key: 'mcp:b' }, { key: 'mcp:c' }])
   assert.equal(keys.length, 3)
 })
 
@@ -76,28 +76,16 @@ if (TEST_DB) {
       },
     })
 
-  const klavis = (organizationId: string, userId: string, agentType: string) =>
-    prisma.mCPAgent.create({
-      data: {
-        organizationId,
-        userId,
-        name: agentType,
-        agentType,
-        mcpServerUrl: 'https://example.test/mcp',
-        isActive: true,
-      },
-    })
-
   test('0 planes → 0 connected', async () => {
     await withOrg(async ({ organizationId, userId }) => {
       assert.equal(await countConnectedIntegrations(organizationId, userId), 0)
     })
   })
 
-  test('same provider via 2 planes → counts once', async () => {
+  test('same provider via two Nango configurations → counts once', async () => {
     await withOrg(async ({ organizationId, userId }) => {
       await nango(organizationId, 'slack') // → key 'slack'
-      await klavis(organizationId, userId, 'SLACK') // → key 'slack'
+      await nango(organizationId, 'slack-prod') // → key 'slack'
       assert.equal(await countConnectedIntegrations(organizationId, userId), 1)
     })
   })
@@ -106,7 +94,7 @@ if (TEST_DB) {
     await withOrg(async ({ organizationId, userId }) => {
       await nango(organizationId, 'slack')
       await nango(organizationId, 'gmail')
-      await klavis(organizationId, userId, 'GITHUB')
+      await nango(organizationId, 'github')
       const count = await countConnectedIntegrations(organizationId, userId)
       assert.equal(count, 3)
       assert.equal(meetsTemplateGate(count), true)

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
-import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
+import { NANGO_PROVIDERS } from '@/lib/nango/provider-tools'
 import { DEFAULT_AGENT_MODEL, generateStructured } from '@/lib/llm/model-runner'
 import { qwenConfigured } from '@/lib/llm/qwen'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
@@ -19,7 +19,7 @@ const DRAFT_SCHEMA = {
     },
     integrations: {
       type: 'array',
-      items: { type: 'string', enum: [...PROVIDERS] },
+      items: { type: 'string', enum: [...NANGO_PROVIDERS] },
       description: 'Only the integrations the task actually requires.',
     },
     schedule: {
@@ -67,7 +67,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     schema: DRAFT_SCHEMA as unknown as Record<string, unknown>,
     system: [
       'You configure autonomous agents for a team workspace. Turn the user\'s plain-language description into an agent configuration.',
-      `Available integrations: ${PROVIDERS.join(', ')}. Include only the ones the task needs; an agent with no integrations is fine.`,
+      `Available integrations: ${NANGO_PROVIDERS.join(', ')}. Include only the ones the task needs; an agent with no integrations is fine.`,
       'Write instructions the agent can follow without further clarification: the goal, the steps, which tools to use, and what to include in the final report. If anything is genuinely ambiguous, instruct the agent to ask the user via its ask_user tool at run time.',
       'Set a schedule only when the user describes a recurring cadence; otherwise use type "manual" with isActive false.',
     ].join('\n'),

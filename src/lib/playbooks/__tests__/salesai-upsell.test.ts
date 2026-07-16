@@ -47,11 +47,11 @@ test('scorer contract covers all four AI-processing dimensions', () => {
 })
 
 test('playbook agents carry the connector keys their tools need', () => {
-  assert.ok(PLAYBOOK_AGENTS.puller.integrations.includes('strata:salesforce')) // CRM
-  assert.ok(PLAYBOOK_AGENTS.puller.integrations.includes('strata:snowflake')) // usage data
-  assert.ok(PLAYBOOK_AGENTS.scorer.integrations.includes('strata:salesforce'))
-  assert.ok(PLAYBOOK_AGENTS.scorer.integrations.includes('strata:snowflake'))
-  assert.ok(PLAYBOOK_AGENTS.publisher.integrations.includes('strata:slack'))
+  assert.ok(PLAYBOOK_AGENTS.puller.integrations.includes('nango:salesforce')) // CRM
+  assert.ok(PLAYBOOK_AGENTS.puller.integrations.includes('nango:snowflake')) // usage data
+  assert.ok(PLAYBOOK_AGENTS.scorer.integrations.includes('nango:salesforce'))
+  assert.ok(PLAYBOOK_AGENTS.scorer.integrations.includes('nango:snowflake'))
+  assert.ok(PLAYBOOK_AGENTS.publisher.integrations.includes('nango:slack'))
   // every agent can hit external REST APIs via the built-in HTTP tool (Query API)
   for (const def of Object.values(PLAYBOOK_AGENTS)) {
     assert.ok(def.integrations.includes('HTTP API'))

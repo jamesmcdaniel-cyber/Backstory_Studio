@@ -8,4 +8,4 @@ Supported integrations:
 - **Gmail** and **Google Calendar** — email and meeting context for discovery.
 - Any HTTP/Query API can be connected generically via the http tool.
 
-Ownership split: **Pipedream** owns embedded end-user account connections (the OAuth/connect flow customers see). **Klavis** owns agent-facing MCP tool servers (the tool surface agents call).
+**Nango** owns embedded end-user account connections and proxies the provider APIs exposed as agent tools. Organizations can also add custom MCP servers.

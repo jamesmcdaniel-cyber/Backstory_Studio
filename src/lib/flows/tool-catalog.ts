@@ -1,17 +1,15 @@
 /**
  * Flow tool catalog — the connections a flow's tool step can call.
  *
- * Flows draw from the SAME five tool planes as agents (see
- * @/features/agents/tool-planes): People.ai (Sales AI), Klavis-managed MCP
- * servers, per-org MCP connections, native built-ins (Granola/Slack/HTTP/
- * Email), and Nango delivery (outbound writes).
+ * Flows draw from the SAME four tool planes as agents (see
+ * @/features/agents/tool-planes): People.ai (Sales AI), per-org MCP connections,
+ * native built-ins (Granola/Slack/HTTP/Email), and Nango provider tools.
  *
  * Connection id scheme (stored in a tool node's `connectionId`; see
  * @/lib/flows/tool-connection-id for the parser the executor routes on):
  *   - MCP connection rows keep their RAW database id — backward compatible
  *     with graphs stored before multi-plane support.
  *   - people_ai:backstory  — the People.ai / Sales AI plane
- *   - klavis:<mcpAgentId>  — a Klavis-provisioned MCP server row
  *   - native:<providerId>  — a built-in integration (granola|slack|http|email)
  *   - nango:<capability>   — a Nango delivery capability (slack|gmail|salesforce)
  *
@@ -21,7 +19,6 @@
  * ids, names, and tool schemas.
  */
 import {
-  loadKlavisPlaneGroups,
   loadMcpConnectionPlaneGroups,
   loadNangoPlaneGroups,
   loadNativePlaneGroups,
@@ -42,16 +39,14 @@ export async function loadFlowToolCatalog(
   // When the caller only needs specific connections (run/publish validation),
   // load just the planes those ids reference.
   const wanted = options.connectionIds?.length ? planesForConnectionIds(options.connectionIds) : null
-  const wantPlane = (plane: 'people_ai' | 'klavis' | 'mcp' | 'native' | 'nango') => !wanted || wanted.planes.has(plane)
+  const wantPlane = (plane: 'people_ai' | 'mcp' | 'native' | 'nango') => !wanted || wanted.planes.has(plane)
 
-  const [peopleAi, klavis, mcp, native, nango] = await Promise.all([
+  const [peopleAi, mcp, native, nango] = await Promise.all([
     wantPlane('people_ai') ? loadPeopleAiPlaneGroup(organizationId, options.userId).catch(() => null) : null,
-    wantPlane('klavis') ? loadKlavisPlaneGroups(organizationId).catch(() => [] as ToolPlaneGroup[]) : [],
     wantPlane('mcp') && (!wanted || wanted.mcpIds.length)
       ? loadMcpConnectionPlaneGroups(organizationId, options.userId, {
           connectionIds: wanted?.mcpIds,
           take: options.takeConnections ?? 25,
-          includeStrata: true,
         }).catch(() => [] as ToolPlaneGroup[])
       : [],
     wantPlane('native') ? loadNativePlaneGroups(organizationId).catch(() => [] as ToolPlaneGroup[]) : [],
@@ -60,7 +55,7 @@ export async function loadFlowToolCatalog(
 
   // MCP rows stay first so existing pickers/graphs see a stable ordering, then
   // the Sales AI plane, then the remaining planes.
-  const groups = [...mcp, ...(peopleAi ? [peopleAi] : []), ...klavis, ...native, ...nango]
+  const groups = [...mcp, ...(peopleAi ? [peopleAi] : []), ...native, ...nango]
   const wantedIds = wanted ? new Set(options.connectionIds) : null
   return groups
     .filter((group) => !wantedIds || wantedIds.has(group.id))

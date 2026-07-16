@@ -8,7 +8,6 @@
  *     stored before multi-plane support keep working unchanged.
  *   - Every other plane uses a `<plane>:<ref>` synthetic id:
  *       people_ai:backstory   — the People.ai / Sales AI MCP plane
- *       klavis:<mcpAgentId>   — a Klavis-provisioned MCP server row
  *       native:<providerId>   — a built-in integration (granola|slack|http|email)
  *       nango:<capability>    — a Nango delivery capability (slack|gmail|salesforce)
  *
@@ -17,11 +16,11 @@
  * technically legal there), which preserves backward compatibility.
  */
 
-export const FLOW_TOOL_PLANES = ['people_ai', 'klavis', 'mcp', 'native', 'nango'] as const
+export const FLOW_TOOL_PLANES = ['people_ai', 'mcp', 'native', 'nango'] as const
 export type FlowToolPlane = (typeof FLOW_TOOL_PLANES)[number]
 
 /** Planes that use a `<plane>:<ref>` prefix (mcp rows stay raw). */
-const PREFIXED_PLANES = new Set<FlowToolPlane>(['people_ai', 'klavis', 'native', 'nango'])
+const PREFIXED_PLANES = new Set<FlowToolPlane>(['people_ai', 'native', 'nango'])
 
 export type ParsedFlowToolConnectionId = { plane: FlowToolPlane; ref: string }
 

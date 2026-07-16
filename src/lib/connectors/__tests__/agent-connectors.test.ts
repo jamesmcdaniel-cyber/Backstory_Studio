@@ -18,7 +18,7 @@ test('a key naming a per-org MCP connection resolves to an FK', () => {
   assert.deepEqual(classifyConnector('notion', connections), { connectorKey: 'notion', kind: 'mcp', mcpConnectionId: 'conn_notion' })
 })
 
-test('an unknown key (e.g. a Klavis provider) is external, no FK', () => {
+test('an unknown provider key is external with no FK', () => {
   assert.deepEqual(classifyConnector('github', connections), { connectorKey: 'github', kind: 'external', mcpConnectionId: null })
 })
 

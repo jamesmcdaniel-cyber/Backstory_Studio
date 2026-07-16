@@ -30,7 +30,7 @@ import {
 import { buildUsageProfile, type UsageProfile } from '@/lib/templates/usage-profile'
 import { listStoredCatalogue } from '@/lib/templates/catalogue'
 import { listOpenProposals, writeProposals, type ProposalInput } from '@/lib/templates/proposals'
-import { PROVIDERS } from '@/lib/mcp/provider-capabilities'
+import { NANGO_PROVIDERS } from '@/lib/nango/provider-tools'
 import { retrieveContext, renderContext, type RetrievedContext } from '@/lib/rag/retrieve'
 import { getGraphRagStore } from '@/lib/rag/get-store'
 import { readAgentMetadata } from '@/lib/agents/metadata'
@@ -53,7 +53,7 @@ export const PROPOSAL_MAX_TOKENS = 8000
  */
 export const ORG_GATE_USER_ID = ''
 
-const PROVIDER_SET: ReadonlySet<string> = new Set(PROVIDERS as unknown as string[])
+const PROVIDER_SET: ReadonlySet<string> = new Set(NANGO_PROVIDERS)
 
 // Words that carry no intent — stripped when computing the dedupe intent key so
 // "Weekly deal-risk digest" and "The deal risk digest" collide.
@@ -94,7 +94,7 @@ export const PROPOSAL_SCHEMA = {
           },
           integrations: {
             type: 'array',
-            items: { type: 'string', enum: [...PROVIDERS] },
+            items: { type: 'string', enum: [...NANGO_PROVIDERS] },
             description: 'Only integrations the proposal actually uses. Empty array if none.',
           },
           schedule: {
@@ -256,7 +256,7 @@ export interface NormalizeContext {
  *  - kind is one of the three; title is non-empty.
  *  - a process_improvement targets a REAL flow/agent id (targetType-matched) —
  *    else dropped, so accept can never open a non-existent editor.
- *  - integrations are filtered to known PROVIDERS.
+ *  - integrations are filtered to known Nango providers.
  *  - configuration is the blob Task-4 accept consumes (template kinds → the
  *    AgentTemplate.configuration shape; process_improvement → target + notes).
  *  - sourceEvidence ALWAYS carries the server-computed usage signals (the model

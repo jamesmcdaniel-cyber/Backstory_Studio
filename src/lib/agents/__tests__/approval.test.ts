@@ -14,7 +14,6 @@ test('requiresApproval only when flag set AND provider is a write plane', () => 
 
 test('capabilityFromProvider extracts the delivery capability', () => {
   assert.equal(capabilityFromProvider('nango:salesforce'), 'salesforce')
-  assert.equal(capabilityFromProvider('klavis:github'), null)
 })
 
 const TEST_DB = process.env.TEST_DATABASE_URL

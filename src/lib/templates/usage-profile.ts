@@ -16,7 +16,7 @@
  */
 
 import { prisma } from '@/lib/prisma'
-import { PROVIDER_CAPABILITIES } from '@/lib/mcp/provider-capabilities'
+import { NANGO_PROVIDER_TOOLS } from '@/lib/nango/provider-tools'
 import { granolaTools } from '@/lib/integrations/granola'
 import { listConnectedProviders, type ConnectedProvider } from '@/lib/integrations/connected'
 
@@ -30,8 +30,8 @@ export type UsageProfile = {
   runCount: number
   windowDays: number
   /**
-   * Static capability list per CONNECTED provider (from PROVIDER_CAPABILITIES /
-   * Klavis tool lists), independent of whether the org has CALLED the provider —
+   * Static capability list per CONNECTED Nango provider, independent of whether
+   * the org has CALLED the provider —
    * so a freshly-connected integration still contributes signal for a low-run
    * org. Populated by {@link buildUsageProfile}; the pure aggregator leaves it [].
    */
@@ -178,15 +178,13 @@ export function aggregateUsage(rows: UsageRow[], windowDays: number = USAGE_WIND
 
 /**
  * Static capability list for a connected-provider key, or null when we have no
- * catalogued capabilities for it. PROVIDER_CAPABILITIES (the curated Klavis tool
- * lists, which also cover the Nango delivery slugs slack/gmail/salesforce) is the
- * source; Granola is the one built-in with a fixed tool set. Custom MCP servers
- * (`mcp:*`) and Strata servers (`strata:*`) have no static catalogue here, so
- * they contribute no capabilities (they still count toward the gate elsewhere).
+ * catalogued capabilities for it. The Nango provider-tool registry is the source;
+ * Granola is the one built-in with a fixed tool set. Custom MCP servers (`mcp:*`)
+ * have no static catalogue here, so they contribute no capabilities.
  */
 function capabilitiesForKey(key: string): string[] | null {
-  const catalog = (PROVIDER_CAPABILITIES as Record<string, { verbs: string[] }>)[key]
-  if (catalog) return catalog.verbs
+  const catalog = NANGO_PROVIDER_TOOLS.filter((tool) => tool.provider === key).map((tool) => tool.name)
+  if (catalog.length) return catalog
   if (key === 'granola') return granolaTools().map((t) => t.name)
   return null
 }

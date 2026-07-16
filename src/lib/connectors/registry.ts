@@ -5,7 +5,7 @@
  * Before this, plane gating was scattered as fuzzy regexes over the agent's
  * `integrations` JSON (`/slack/i`, `/granola/i`, `new RegExp(capability)`) in
  * loadTools, DUPLICATED again in /api/integrations/available (fromNango /
- * fromKlavis), with write-vs-read classification hard-coded per call site. A
+ * fromNango), with write-vs-read classification hard-coded per call site. A
  * drifting key in one place silently disabled an integration in another.
  *
  * Now every built-in plane is one typed descriptor: its canonical key, how a
@@ -14,9 +14,7 @@
  * available-integrations endpoint, and the approval/audit write classification
  * all derive from here.
  *
- * Dynamic planes (Klavis-provisioned MCP servers, per-org MCP connections) are
- * discovered from DB rows rather than declared here, but their key derivation
- * lives here too (fromKlavisAgentType) so the runtime and the UI agree.
+ * Per-org MCP connections are discovered from DB rows rather than declared here.
  */
 import { slackConfigured } from '@/lib/integrations/slack'
 import { emailConfigured } from '@/lib/integrations/email'
@@ -156,19 +154,11 @@ export function fromNangoProviderKey(providerConfigKey: string): { key: string; 
   if (k.includes('slack')) return { key: 'slack', label: 'Slack', slug: 'slack' }
   if (k.includes('mail') || k.includes('gmail')) return { key: 'gmail', label: 'Gmail', slug: 'gmail' }
   if (k.includes('salesforce')) return { key: 'salesforce', label: 'Salesforce', slug: 'salesforce' }
-  return { key: k, label: titleCase(k), slug: k }
-}
-
-const KLAVIS_LABELS: Record<string, string> = {
-  github: 'GitHub', google_drive: 'Google Drive', google_sheets: 'Google Sheets',
-  hubspot: 'HubSpot', clickup: 'ClickUp',
-}
-const KLAVIS_SLUGS: Record<string, string> = {
-  google_drive: 'googledrive', google_sheets: 'googlesheets', monday: 'mondaydotcom',
-}
-
-/** Klavis agentType (e.g. "GITHUB") → key (lowercased) + display + icon slug. */
-export function fromKlavisAgentType(agentType: string): { key: string; label: string; slug: string } {
-  const key = agentType.toLowerCase()
-  return { key, label: KLAVIS_LABELS[key] ?? titleCase(key), slug: KLAVIS_SLUGS[key] ?? key }
+  if (k === 'atlassian') return { key: 'jira', label: 'Jira', slug: 'jira' }
+  if (k === 'google-drive' || k === 'google_drive') return { key: 'google_drive', label: 'Google Drive', slug: 'googledrive' }
+  if (k === 'google-sheet' || k === 'google-sheets' || k === 'google_sheets') {
+    return { key: 'google_sheets', label: 'Google Sheets', slug: 'googlesheets' }
+  }
+  const key = k.replace(/-/g, '_')
+  return { key, label: titleCase(key), slug: key === 'monday' ? 'mondaydotcom' : key }
 }

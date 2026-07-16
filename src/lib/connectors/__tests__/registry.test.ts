@@ -6,7 +6,6 @@ import {
   isSelected,
   isWriteProvider,
   fromNangoProviderKey,
-  fromKlavisAgentType,
 } from '../registry'
 
 const slackBuiltin = BUILTIN_CONNECTORS.find((c) => c.kind === 'builtin' && c.providerId === 'slack')!
@@ -31,7 +30,7 @@ test('isWriteProvider classifies delivery planes as writes and reads as reads', 
   assert.equal(isWriteProvider('email'), true)
   assert.equal(isWriteProvider('backstory'), false) // People.ai read plane
   assert.equal(isWriteProvider('granola'), false)
-  assert.equal(isWriteProvider('github'), false) // unknown/Klavis read
+  assert.equal(isWriteProvider('github'), false) // unknown provider
 })
 
 test('every write connector is a delivery plane; backstory is read', () => {
@@ -40,9 +39,9 @@ test('every write connector is a delivery plane; backstory is read', () => {
   assert.ok(BUILTIN_CONNECTORS.filter((c) => c.isWrite).every((c) => c.kind === 'builtin' || c.kind === 'nango'))
 })
 
-test('nango + klavis key derivation is stable and runtime-matchable', () => {
+test('nango key derivation is stable and runtime-matchable', () => {
   assert.deepEqual(fromNangoProviderKey('slack-prod'), { key: 'slack', label: 'Slack', slug: 'slack' })
   assert.deepEqual(fromNangoProviderKey('google-mail'), { key: 'gmail', label: 'Gmail', slug: 'gmail' })
-  assert.equal(fromKlavisAgentType('GITHUB').key, 'github')
-  assert.equal(fromKlavisAgentType('GOOGLE_DRIVE').slug, 'googledrive')
+  assert.deepEqual(fromNangoProviderKey('google-drive'), { key: 'google_drive', label: 'Google Drive', slug: 'googledrive' })
+  assert.deepEqual(fromNangoProviderKey('atlassian'), { key: 'jira', label: 'Jira', slug: 'jira' })
 })

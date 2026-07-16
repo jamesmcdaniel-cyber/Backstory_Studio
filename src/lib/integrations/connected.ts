@@ -1,21 +1,18 @@
 import { prisma } from '@/lib/prisma'
 import { granolaConfigured, getGranolaApiKey } from '@/lib/integrations/granola'
-import { getOrgStrataConnection, getStrataServerNames, isStrataUrl, STRATA_KEY_PREFIX } from '@/lib/mcp/strata'
 import {
   BUILTIN_CONNECTORS,
   fromNangoProviderKey,
-  fromKlavisAgentType,
 } from '@/lib/connectors/registry'
 
 /**
  * Single source of "connected" across the org's integration planes.
  *
- * The five-plane merge that /api/integrations/available renders lived inline in
+ * The integration-plane merge that /api/integrations/available renders lived inline in
  * that route; it now lives here so the create-agent picker AND the auto-template
  * gate agree on what "connected" means. Both projections read the SAME planes:
  *  - `getAvailableIntegrations` reproduces the route's payload byte-for-byte
- *    (every attachable tool, connected or not, plus Strata chips + custom
- *    connections).
+ *    (every attachable tool, connected or not, plus custom connections).
  *  - `listConnectedProviders` returns just the providers the ORG has actually
  *    connected — the input the ≥3-integration template gate counts.
  */
@@ -24,7 +21,6 @@ export type ToolChip = { key: string; label: string; slug: string; connected: bo
 
 export type AvailableIntegrations = {
   tools: ToolChip[]
-  strataTools: ToolChip[]
   connections: { id: string; name: string }[]
 }
 
@@ -34,12 +30,10 @@ export type AvailableIntegrations = {
 type PlaneReads = {
   connectionsRaw: { id: string; name: string; serverUrl: string }[]
   nango: { providerConfigKey: string }[]
-  klavis: { agentType: string }[]
-  strataServers: string[]
 }
 
 async function readPlanes(organizationId: string): Promise<PlaneReads> {
-  const [connectionsRaw, nango, klavis, strataConnection] = await Promise.all([
+  const [connectionsRaw, nango] = await Promise.all([
     prisma.mcpConnection.findMany({
       where: { organizationId, isActive: true },
       select: { id: true, name: true, serverUrl: true },
@@ -49,14 +43,8 @@ async function readPlanes(organizationId: string): Promise<PlaneReads> {
       where: { organizationId, status: 'connected' },
       select: { providerConfigKey: true },
     }),
-    prisma.mCPAgent.findMany({
-      where: { organizationId, isActive: true },
-      select: { agentType: true },
-    }),
-    getOrgStrataConnection(organizationId),
   ])
-  const strataServers = strataConnection ? await getStrataServerNames(strataConnection) : []
-  return { connectionsRaw, nango, klavis, strataServers }
+  return { connectionsRaw, nango }
 }
 
 /**
@@ -66,24 +54,10 @@ async function readPlanes(organizationId: string): Promise<PlaneReads> {
  * `success: true`.
  */
 export async function getAvailableIntegrations(organizationId: string): Promise<AvailableIntegrations> {
-  const [{ connectionsRaw, nango, klavis, strataServers }, hasGranola] = await Promise.all([
+  const [{ connectionsRaw, nango }, hasGranola] = await Promise.all([
     readPlanes(organizationId),
     granolaConfigured(organizationId),
   ])
-
-  // The Strata connection is surfaced as individual per-server chips below, not
-  // as one opaque "connection" chip.
-  const connections = connectionsRaw.filter((c) => !isStrataUrl(c.serverUrl))
-
-  // Each Strata server is an attachable tool keyed `strata:<server>`. Selecting
-  // some scopes the agent to only those (see loadTools); selecting none means
-  // the agent gets no Strata tools — so agents no longer carry all 90 at once.
-  const strataTools: ToolChip[] = strataServers.map((name) => ({
-    key: `${STRATA_KEY_PREFIX}${name}`,
-    label: name.replace(/\b\w/g, (ch) => ch.toUpperCase()),
-    slug: name.toLowerCase().replace(/[^a-z0-9]+/g, ''),
-    connected: true,
-  }))
 
   // Merge planes, deduping by lowercased key and OR-ing connected state. Builtins
   // are added first so their canonical labels/keys (Slack/Email/Granola) win.
@@ -110,34 +84,26 @@ export async function getAvailableIntegrations(organizationId: string): Promise<
     const m = fromNangoProviderKey(c.providerConfigKey)
     add({ ...m, connected: true })
   }
-  for (const a of klavis) {
-    const m = fromKlavisAgentType(a.agentType)
-    add({ ...m, connected: true })
-  }
 
   // Connected first, then alphabetical, so the user's real tools lead.
   const tools = [...byKey.values()].sort((a, b) =>
     a.connected === b.connected ? a.label.localeCompare(b.label) : a.connected ? -1 : 1,
   )
 
-  return { tools, strataTools, connections: connections.map((c) => ({ id: c.id, name: c.name })) }
+  return { tools, connections: connectionsRaw.map((c) => ({ id: c.id, name: c.name })) }
 }
 
-export type ConnectedPlane = 'nango' | 'klavis' | 'mcp' | 'strata' | 'builtin'
+export type ConnectedPlane = 'nango' | 'mcp' | 'builtin'
 export type ConnectedProvider = { key: string; label: string; plane: ConnectedPlane }
 
 /**
  * Every provider the ORG has actually connected — the input the template gate
- * counts. One entry PER PLANE a provider is connected through, so a provider
- * reachable via two planes (e.g. Slack via Nango and via Klavis) appears TWICE;
- * collapsing duplicates is countConnectedIntegrations' job, not this function's.
+ * counts. One entry is returned per connected plane.
  *
  * Distinct-provider KEY = the lowercased registry key
- * (fromNangoProviderKey / fromKlavisAgentType), the SAME dedupe key
- * /api/integrations/available uses — so 'slack' via Nango and 'SLACK' via Klavis
- * collapse to one integration. Custom MCP connections and Strata servers get
- * plane-prefixed keys (`mcp:<id>`, `strata:<server>`) because each configured
- * server is its own integration and must not collide with a provider slug.
+ * fromNangoProviderKey, the SAME dedupe key /api/integrations/available uses.
+ * Custom MCP connections get plane-prefixed keys (`mcp:<id>`) because each
+ * configured server is its own integration and must not collide with a provider slug.
  *
  * This is the CONNECTED subset of getAvailableIntegrations, and deliberately
  * NARROWER than "every chip whose `connected` flag is true": the always-on
@@ -159,7 +125,7 @@ export async function listConnectedProviders(
   organizationId: string,
   _userId: string,
 ): Promise<ConnectedProvider[]> {
-  const [{ connectionsRaw, nango, klavis, strataServers }, granolaKey] = await Promise.all([
+  const [{ connectionsRaw, nango }, granolaKey] = await Promise.all([
     readPlanes(organizationId),
     getGranolaApiKey(organizationId),
   ])
@@ -170,23 +136,10 @@ export async function listConnectedProviders(
     const m = fromNangoProviderKey(c.providerConfigKey)
     providers.push({ key: m.key.toLowerCase(), label: m.label, plane: 'nango' })
   }
-  for (const a of klavis) {
-    const m = fromKlavisAgentType(a.agentType)
-    providers.push({ key: m.key.toLowerCase(), label: m.label, plane: 'klavis' })
-  }
-  // Custom (non-Strata) MCP connections — each configured server is its own
+  // Custom MCP connections — each configured server is its own
   // integration, keyed by id so two distinct servers never collapse.
   for (const c of connectionsRaw) {
-    if (isStrataUrl(c.serverUrl)) continue
     providers.push({ key: `mcp:${c.id.toLowerCase()}`, label: c.name, plane: 'mcp' })
-  }
-  // Strata aggregates many servers behind one connection; each server counts.
-  for (const name of strataServers) {
-    providers.push({
-      key: `${STRATA_KEY_PREFIX}${name.toLowerCase()}`,
-      label: name.replace(/\b\w/g, (ch) => ch.toUpperCase()),
-      plane: 'strata',
-    })
   }
   if (granolaKey?.source === 'org') {
     providers.push({ key: 'granola', label: 'Granola', plane: 'builtin' })

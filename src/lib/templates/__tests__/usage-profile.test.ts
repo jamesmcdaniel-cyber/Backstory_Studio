@@ -4,7 +4,7 @@ import { aggregateUsage, capabilitiesForProviders, USAGE_WINDOW_DAYS, type Usage
 import type { ConnectedProvider, ConnectedPlane } from '@/lib/integrations/connected'
 
 const row = (provider: string, tool: string, runId: string | null, at: string): UsageRow => ({ provider, tool, runId, at })
-const cp = (key: string, plane: ConnectedPlane = 'klavis', label = key): ConnectedProvider => ({ key, label, plane })
+const cp = (key: string, plane: ConnectedPlane = 'nango', label = key): ConnectedProvider => ({ key, label, plane })
 
 test('empty rows produce an empty profile with the default window', () => {
   const profile = aggregateUsage([])
@@ -139,13 +139,12 @@ test('capabilitiesForProviders maps a connected provider to its catalogued capab
   const caps = capabilitiesForProviders([cp('github')])
   assert.equal(caps.length, 1)
   assert.equal(caps[0].provider, 'github')
-  // The registry verbs for GitHub (source: PROVIDER_CAPABILITIES / Klavis tools).
-  assert.ok(caps[0].capabilities.includes('create_issue'))
+  assert.ok(caps[0].capabilities.includes('github_create_issue'))
   assert.ok(caps[0].capabilities.length > 0)
 })
 
-test('capabilitiesForProviders dedupes a provider connected via two planes (case-insensitive)', () => {
-  const caps = capabilitiesForProviders([cp('slack', 'nango'), cp('SLACK', 'klavis')])
+test('capabilitiesForProviders dedupes a provider case-insensitively', () => {
+  const caps = capabilitiesForProviders([cp('slack', 'nango'), cp('SLACK', 'nango')])
   assert.equal(caps.length, 1, 'one capability entry per distinct provider')
   assert.equal(caps[0].provider, 'slack')
 })
@@ -155,14 +154,12 @@ test('capabilitiesForProviders covers the Granola built-in from its fixed tool s
   assert.deepEqual(caps, [{ provider: 'granola', capabilities: ['list_notes', 'get_note'] }])
 })
 
-test('capabilitiesForProviders omits providers with no static catalogue (custom MCP / Strata)', () => {
-  // Custom servers and Strata servers still count toward the gate elsewhere, but
-  // have no catalogued capability list, so they contribute nothing here.
-  assert.deepEqual(capabilitiesForProviders([cp('mcp:abc', 'mcp'), cp('strata:foo', 'strata')]), [])
+test('capabilitiesForProviders omits custom MCP servers with no static catalogue', () => {
+  assert.deepEqual(capabilitiesForProviders([cp('mcp:abc', 'mcp')]), [])
 })
 
 test('capabilitiesForProviders is sorted by provider for determinism', () => {
-  const caps = capabilitiesForProviders([cp('slack', 'nango'), cp('github', 'klavis')])
+  const caps = capabilitiesForProviders([cp('slack', 'nango'), cp('github', 'nango')])
   assert.deepEqual(caps.map((c) => c.provider), ['github', 'slack'])
 })
 
