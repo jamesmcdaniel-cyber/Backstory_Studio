@@ -10,6 +10,8 @@ import { useSupabase } from '@/components/providers/supabase-provider'
 import { useFlowCollab } from '@/lib/flows/use-flow-collab'
 import { electPersister, shouldRecordJamAudit } from '@/lib/flows/collab-roles'
 import { toContentSpace } from '@/lib/flows/cursor-space'
+import { useFlowHuddle } from '@/lib/flows/use-flow-huddle'
+import { HuddleBar } from '@/components/flows/huddle-bar'
 import { CursorLayer } from '@/components/flows/cursor-layer'
 import { flowToN8n } from '@/lib/flows/export/to-n8n'
 import { flowToInstructions } from '@/lib/flows/export/to-instructions'
@@ -414,7 +416,6 @@ function FlowBuilder() {
   }, [viewingVersion])
   const { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId } =
     useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
-  void setInHuddle // consumed by the huddle task
   // ── Jam autosave ────────────────────────────────────────────────────────────
   // All peers share the merged graph via broadcast, so only ONE client needs
   // to write it to Postgres: the deterministically-elected persister (owner
@@ -478,6 +479,13 @@ function FlowBuilder() {
       try { return JSON.stringify({ ...JSON.parse(prev), graph: graphRef.current }) } catch { return prev }
     })
   }), [bus])
+  // ── Voice huddle ────────────────────────────────────────────────────────────
+  const huddle = useFlowHuddle(bus, selfClientId, setInHuddle)
+  // Everyone whose presence says they're in the huddle (incl. self once joined).
+  const huddleMembers = useMemo(
+    () => participants.filter((p) => p.inHuddle).map((p) => ({ clientId: p.clientId, name: p.name, color: p.color })),
+    [participants],
+  )
   // Live cursors: stream our pointer in content space (throttled in the hook).
   const onCanvasPointerMove = useCallback((event: ReactPointerEvent) => {
     canvasPan.handlers.onPointerMove(event)
@@ -1343,6 +1351,16 @@ function FlowBuilder() {
 
       {/* Body: canvas + optional drawer + optional copilot */}
       <div className="relative flex min-h-0 flex-1">
+        <HuddleBar
+          joined={huddle.joined}
+          connecting={huddle.connecting}
+          muted={huddle.muted}
+          members={huddleMembers}
+          speakingIds={huddle.speakingIds}
+          onJoin={() => void huddle.join()}
+          onLeave={huddle.leave}
+          onToggleMute={huddle.toggleMute}
+        />
         <div
           ref={canvasScrollRef}
           className={`min-w-0 flex-1 overflow-auto bg-white p-8 ${canvasPan.panning ? 'cursor-grabbing select-none' : 'cursor-grab'}`}
