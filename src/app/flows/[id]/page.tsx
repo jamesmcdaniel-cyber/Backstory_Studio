@@ -3,10 +3,12 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText, Users } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText, Users, FileText } from 'lucide-react'
 import { JamDialog } from '@/components/flows/jam-dialog'
 import { useSupabase } from '@/components/providers/supabase-provider'
 import { useFlowCollab } from '@/lib/flows/use-flow-collab'
+import { flowToN8n } from '@/lib/flows/export/to-n8n'
+import { flowToInstructions } from '@/lib/flows/export/to-instructions'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -173,6 +175,19 @@ function filenameSlug(value: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80) || 'flow'
+}
+
+/** Trigger a client-side file download from an in-memory string. */
+function downloadBlob(content: string, mime: string, filename: string): void {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 function FlowBuilder() {
@@ -947,16 +962,24 @@ function FlowBuilder() {
       graph,
       exportedAt: new Date().toISOString(),
     }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${filenameSlug(flowName)}.json`
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    URL.revokeObjectURL(url)
+    downloadBlob(JSON.stringify(payload, null, 2), 'application/json', `${filenameSlug(flowName)}.json`)
   }, [name, description, status, version, graph])
+
+  // Export for n8n: an importable workflow JSON (structural nodes run; agent/
+  // tool steps import as flagged No-Op placeholders — see @/lib/flows/export).
+  const exportN8n = useCallback(() => {
+    const flowName = name.trim() || 'Untitled flow'
+    downloadBlob(JSON.stringify(flowToN8n({ name: flowName, graph }), null, 2), 'application/json', `${filenameSlug(flowName)}.n8n.json`)
+    toast.success('Exported for n8n — import it under Workflows → Import.')
+  }, [name, graph])
+
+  // Export as copilot-ready instructions (Markdown): paste into Zapier/Workato/
+  // Make/n8n AI builders, or follow by hand.
+  const exportInstructions = useCallback(() => {
+    const flowName = name.trim() || 'Untitled flow'
+    downloadBlob(flowToInstructions({ name: flowName, description, graph }, agents), 'text/markdown', `${filenameSlug(flowName)}.md`)
+    toast.success('Exported instructions — paste them into your platform’s AI builder.')
+  }, [name, description, graph, agents])
 
   const deleteFlow = useCallback(async () => {
     const flowName = name.trim() || 'this flow'
@@ -1109,8 +1132,16 @@ function FlowBuilder() {
             <DropdownMenuItem onSelect={duplicateFlow}>
               <Copy className="h-4 w-4" /> Duplicate
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Export</DropdownMenuLabel>
             <DropdownMenuItem onSelect={downloadFlow}>
-              <Download className="h-4 w-4" /> Download JSON
+              <Download className="h-4 w-4" /> Backstory JSON
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={exportN8n}>
+              <Download className="h-4 w-4" /> For n8n (importable JSON)
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={exportInstructions}>
+              <FileText className="h-4 w-4" /> As instructions (Markdown)
             </DropdownMenuItem>
             {canEdit && (
               <>
