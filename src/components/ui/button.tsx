@@ -6,12 +6,16 @@ import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all duration-fast ease-out-quart focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  // `relative overflow-hidden` scopes the sheen sweep on the primary variant.
+  // The focus ring is a box-shadow, so overflow-hidden never clips it.
+  "relative overflow-hidden inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all duration-fast ease-out-quart focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:relative [&_svg]:z-10 [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
+        // A light sheen sweeps across on hover, so the primary CTA feels lit and
+        // alive. Pure CSS (pseudo-element), so the button stays a server component.
         default:
-          "bg-primary text-primary-foreground shadow-1 hover:bg-horizon-600 hover:shadow-2",
+          "bg-primary text-primary-foreground shadow-1 hover:bg-horizon-600 hover:shadow-2 before:pointer-events-none before:absolute before:inset-0 before:-translate-x-full before:bg-gradient-to-r before:from-transparent before:via-white/25 before:to-transparent before:transition-transform before:duration-slow before:ease-out-quart hover:before:translate-x-full",
         destructive:
           "bg-destructive text-destructive-foreground shadow-1 hover:bg-destructive/90",
         outline:

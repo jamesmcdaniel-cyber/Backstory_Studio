@@ -8,8 +8,12 @@ const cardVariants = cva("rounded-xl border bg-card text-card-foreground", {
     variant: {
       flat: "",
       raised: "shadow-1",
+      // Richer hover: a real lift with a shadow bloom and a faint Horizon ring,
+      // so cards feel raised and reactive rather than nudged 1px. The ring uses
+      // ring-inset color-mix-free tokens; motion respects prefers-reduced-motion
+      // via the global rule in globals.css.
       interactive:
-        "shadow-1 transition-all duration-base ease-out-quart hover:-translate-y-px hover:border-graphite-300 hover:shadow-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        "shadow-2 transition-[transform,box-shadow,border-color] duration-base ease-out-quart hover:-translate-y-1 hover:border-horizon-200 hover:shadow-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
     },
   },
   defaultVariants: { variant: "raised" },

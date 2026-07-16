@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { Bot, Cable, ScrollText } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
+import { HorizonHero } from '@/components/landing/horizon-hero'
 import './landing.css'
 
 // Rendered per-request: the try/catch around the Supabase auth check would
@@ -135,8 +136,11 @@ export default async function Home() {
         </Link>
       </header>
 
-      <section className="bs-l-wrap bs-l-hero">
-        <div>
+      <section className="bs-l-wrap bs-l-hero relative overflow-hidden">
+        {/* WebGL horizon centerpiece — a glowing brand form the product shot
+            floats in front of. Behind all copy (z-0); readable copy sits at z-10. */}
+        <HorizonHero className="pointer-events-none absolute right-[-8%] top-1/2 z-0 hidden h-[120%] w-[58%] -translate-y-1/2 md:block" />
+        <div className="relative z-10">
           <div className="bs-l-eyebrow bs-l-rise">— the AI agent workspace</div>
           <h1 className="bs-l-h1 bs-l-rise">
             Agents that <em>show their work</em>.
@@ -160,7 +164,9 @@ export default async function Home() {
             <span>know what to do</span>
           </div>
         </div>
-        <ProductShot />
+        <div className="relative z-10">
+          <ProductShot />
+        </div>
       </section>
 
       <section id="features" className="bs-l-section">
