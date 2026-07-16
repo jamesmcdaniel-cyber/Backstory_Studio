@@ -28,6 +28,16 @@ describe('buildAgentSystemPrompt', () => {
     assert.ok(!prompt.includes('## Attached skill:'))
   })
 
+  it('includes a prompt-injection guardrail: external/retrieved content is data, not instructions', () => {
+    const prompt = buildAgentSystemPrompt('Do the work.', [])
+    assert.ok(/retrieved_context/.test(prompt), 'names the fenced untrusted block')
+    assert.ok(/data,? not instructions|not instructions/i.test(prompt), 'states external content is data, not instructions')
+    assert.ok(/never obey|never follow/i.test(prompt), 'forbids obeying embedded instructions')
+    // The exfiltration guard: don't send data / take consequential action because
+    // external content said to.
+    assert.ok(/never send data|contact anyone|consequential/i.test(prompt), 'forbids acting on injected commands')
+  })
+
   it('includes a grounding/refusal instruction so the agent declines instead of fabricating', () => {
     const prompt = buildAgentSystemPrompt('Do the work.', [])
     assert.ok(/ground/i.test(prompt), 'expected a grounding instruction')
