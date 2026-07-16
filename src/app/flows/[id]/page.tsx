@@ -3,7 +3,8 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText } from 'lucide-react'
+import { ArrowLeft, Play, Save, Sparkles, Loader2, ListChecks, ShieldCheck, Undo2, Redo2, MoreHorizontal, Copy, Download, Trash2, FlaskConical, History, ScrollText, Users } from 'lucide-react'
+import { JamDialog } from '@/components/flows/jam-dialog'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
@@ -204,6 +205,7 @@ function FlowBuilder() {
   const [showChecker, setShowChecker] = useState(false)
   const [showTest, setShowTest] = useState(false)
   const [showVersions, setShowVersions] = useState(false)
+  const [showJam, setShowJam] = useState(false)
   const [viewingVersion, setViewingVersion] = useState<{ version: number; graph: FlowGraph } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [statusByNode, setStatusByNode] = useState<Record<string, StepStatus>>({})
@@ -1091,6 +1093,9 @@ function FlowBuilder() {
         <Button variant="ghost" size="sm" onClick={() => router.push(`/flows/${id}/activity`)}>
           <ScrollText className="mr-1.5 h-4 w-4" /> Activity
         </Button>
+        <Button variant="outline" size="sm" onClick={() => setShowJam(true)}>
+          <Users className="mr-1.5 h-4 w-4" /> Jam
+        </Button>
         <Button variant="outline" size="sm" onClick={() => setShowVersions((v) => !v)}>
           <History className="mr-1.5 h-4 w-4" /> History
         </Button>
@@ -1361,6 +1366,16 @@ function FlowBuilder() {
           </ResizablePanel>
         )}
       </div>
+
+      <JamDialog
+        open={showJam}
+        onOpenChange={setShowJam}
+        flowId={id}
+        flowName={name}
+        visibility={visibility as 'shared' | 'view' | 'private'}
+        canEdit={canEdit}
+        onChangeVisibility={(next) => void updateSharing(next)}
+      />
 
       {subflowDraft && (() => {
         // Every main-chain step from the picked start downward is a legal end.

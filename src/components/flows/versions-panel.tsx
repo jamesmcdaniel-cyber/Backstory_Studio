@@ -12,6 +12,7 @@ type VersionRow = {
   note?: string | null
   publishedAt: string
   publishedBy?: string | null
+  publishedByName?: string | null
 }
 
 export function VersionsPanel({
@@ -74,6 +75,7 @@ export function VersionsPanel({
                   </div>
                   <p className="truncate text-xs text-muted-foreground">
                     {new Date(row.publishedAt).toLocaleString()}
+                    {row.publishedByName ? ` · by ${row.publishedByName}` : ''}
                     {row.note ? ` · ${row.note}` : ''}
                   </p>
                 </div>

@@ -39,7 +39,18 @@ export const GET = withAuthenticatedApi(async (request, auth) => {
     take: 50,
     select: { id: true, version: true, note: true, publishedAt: true, publishedBy: true },
   })
-  return { success: true, versions }
+  // Resolve publisher ids → display names so the History panel can show WHO
+  // shipped each version (a collaborator's changes at a glance). One batched
+  // lookup, org-scoped; unknown ids just show no name.
+  const publisherIds = Array.from(new Set(versions.map((v) => v.publishedBy).filter((id): id is string => Boolean(id))))
+  const publishers = publisherIds.length
+    ? await prisma.user.findMany({ where: { id: { in: publisherIds }, organizationId: auth.organizationId }, select: { id: true, name: true, email: true } })
+    : []
+  const nameById = new Map(publishers.map((u) => [u.id, u.name || u.email || null]))
+  return {
+    success: true,
+    versions: versions.map((v) => ({ ...v, publishedByName: v.publishedBy ? nameById.get(v.publishedBy) ?? null : null })),
+  }
 })
 
 const restoreSchema = z.object({ version: z.number().int().positive(), action: z.literal('restore') })
