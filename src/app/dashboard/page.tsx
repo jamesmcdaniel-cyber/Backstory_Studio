@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
 import { useAuth } from '@/hooks/use-auth'
 import { getSnapshot, SnapshotError } from '@/lib/client/snapshot'
+import { TemplatesView } from '@/components/templates/templates-view'
+import { ViewToggle, type DashboardView } from './view-toggle'
 import { cn } from '@/lib/utils'
 
 import type { Agent, Activity } from '@/lib/types'
@@ -69,6 +71,23 @@ function AgentHQ() {
     return saved ? clampAssistantWidth(saved) : ASSISTANT_WIDTH_DEFAULT
   })
   const assistantWidthRef = useRef(assistantWidth)
+
+  // Agents / Templates view, driven by the URL (?view=templates) so it's
+  // linkable and the old /templates route can redirect straight into it.
+  const view: DashboardView = searchParams.get('view') === 'templates' ? 'templates' : 'agents'
+  const setView = useCallback(
+    (next: DashboardView) => router.replace(next === 'templates' ? '/dashboard?view=templates' : '/dashboard', { scroll: false }),
+    [router],
+  )
+  // Count for the toggle's Templates badge — fetched up front, then kept in sync
+  // by the embedded TemplatesView as templates are created/removed.
+  const [templateCount, setTemplateCount] = useState<number | null>(null)
+  useEffect(() => {
+    fetch('/api/agent-templates', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => { if (data?.templates) setTemplateCount(data.templates.length) })
+      .catch(() => undefined)
+  }, [])
 
   // Drag-to-resize for the assistant pane's left edge. Grid layout (not the
   // flex row `ResizablePanel` assumes), so the drag math is inlined here and
@@ -379,12 +398,22 @@ function AgentHQ() {
   }
 
   return (
-    <>
-      {/* lg: rows locked to the viewport (minmax(0,1fr)) — an implicit auto row
-          would grow with content and clip each pane's bottom (form buttons,
-          chat composer) behind the grid's overflow-hidden. */}
+    <div className="flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:overflow-hidden">
+      {/* Agents / Templates toggle — folds the former Templates page into Home. */}
+      <div className="flex shrink-0 items-center justify-center border-b bg-white/80 px-4 py-2.5 backdrop-blur-md supports-[backdrop-filter]:bg-white/70">
+        <ViewToggle view={view} onChange={setView} templateCount={templateCount} />
+      </div>
+
+      {view === 'templates' ? (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <TemplatesView embedded onCount={setTemplateCount} />
+        </div>
+      ) : (
+      /* lg: rows locked to the viewport (minmax(0,1fr)) — an implicit auto row
+         would grow with content and clip each pane's bottom (form buttons,
+         chat composer) behind the grid's overflow-hidden. */
       <div
-        className="flex flex-col lg:grid lg:h-screen lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden"
+        className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden"
         style={{ gridTemplateColumns: `minmax(420px,1fr) ${assistantWidth}px` }}
       >
         {/* ── Left pane: activity for the selected agent, or the setup flow ── */}
@@ -609,7 +638,8 @@ function AgentHQ() {
           />
         </section>
       </div>
-    </>
+      )}
+    </div>
   )
 }
 

@@ -83,7 +83,7 @@ export default function TemplateDetails() {
           </div>
         ) : (
           <>
-            <Link href="/templates" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+            <Link href="/dashboard?view=templates" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
               <ArrowLeft className="h-4 w-4" /> Back to templates
             </Link>
 

@@ -9,7 +9,6 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
-  FileText,
   Folder,
   ImagePlus,
   Loader2,
@@ -89,7 +88,6 @@ const navigation = [
   { name: 'Home', href: '/dashboard', icon: Brain },
   { name: 'Integrations', href: '/integrations', icon: Plug },
   { name: 'Flows', href: '/flows', icon: Workflow },
-  { name: 'Templates', href: '/templates', icon: FileText },
 ]
 
 function planLabel(plan: string) {

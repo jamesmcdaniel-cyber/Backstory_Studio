@@ -20,7 +20,7 @@ type Result =
 const NAV_ITEMS: NavResult[] = [
   { label: 'Home', href: '/dashboard', icon: Brain },
   { label: 'Integrations', href: '/integrations', icon: Plug },
-  { label: 'Templates', href: '/templates', icon: FileText },
+  { label: 'Templates', href: '/dashboard?view=templates', icon: FileText },
 ]
 
 function runStatusIcon(status: string) {
