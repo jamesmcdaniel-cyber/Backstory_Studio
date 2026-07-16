@@ -33,6 +33,12 @@ export const TIER_MONTHLY_TOKEN_LIMITS: Record<string, number> = {
   sales_ai: 20_000_000,
 }
 
+// Runaway backstop for orgs with no explicit tier or env limit. Sized well above
+// normal use (~50 full 2M-token runs/month) but far below the ~482M a recursive
+// sub-agent fan-out could burn from a single click. Set AGENT_MONTHLY_TOKEN_LIMIT
+// (incl. an explicit 0 = unlimited) to override.
+const DEFAULT_MONTHLY_TOKEN_LIMIT = 100_000_000
+
 // Accounts exempt from the monthly token ceiling (internal admins). The default
 // covers the platform admin; add more via USAGE_EXEMPT_EMAILS (comma-separated).
 const DEFAULT_EXEMPT_EMAILS = ['james.mcdaniel@people.ai']
@@ -49,20 +55,30 @@ export function isUsageExemptEmail(email: string | null | undefined): boolean {
 }
 
 export function tokenLimitForTier(tier: string | null | undefined): number {
-  const envLimit = Number(process.env.AGENT_MONTHLY_TOKEN_LIMIT) || 0
   const tierLimit = tier ? (TIER_MONTHLY_TOKEN_LIMITS[tier] ?? 0) : 0
-  // If both are set, the more permissive ceiling wins (env acts as an override);
-  // if only one is set, use it; if neither, unlimited.
-  if (envLimit > 0 && tierLimit > 0) return Math.max(envLimit, tierLimit)
-  return envLimit || tierLimit || 0
+  const raw = process.env.AGENT_MONTHLY_TOKEN_LIMIT
+  // An explicitly set env var wins — including an explicit 0, which is the
+  // documented way to opt back into unlimited. (Distinguished from "unset" so
+  // the default floor below can't silently override an operator's `=0`.)
+  if (raw !== undefined && raw.trim() !== '') {
+    const envLimit = Number(raw)
+    if (Number.isFinite(envLimit) && envLimit >= 0) {
+      if (envLimit > 0 && tierLimit > 0) return Math.max(envLimit, tierLimit) // both set → more permissive
+      return envLimit // includes explicit 0 = unlimited
+    }
+  }
+  // No env override: the tier limit if any, else the runaway backstop (never 0,
+  // so enforcement is on by default rather than opt-in).
+  return tierLimit > 0 ? tierLimit : DEFAULT_MONTHLY_TOKEN_LIMIT
 }
 
 /**
  * Month-to-date token budget for an organization. Enforced at the start of every
  * agent run so a runaway agent (or an expired trial) can't burn unbounded spend.
  *
- * The ceiling is the workspace's entitlement-tier limit, overridable by
- * AGENT_MONTHLY_TOKEN_LIMIT. Unset/0 means unlimited — enforcement is opt-in.
+ * The ceiling is the workspace's entitlement-tier limit, or a generous default
+ * backstop when there's no tier; AGENT_MONTHLY_TOKEN_LIMIT overrides it (set it
+ * to 0 to opt back into unlimited). Enforcement is ON by default.
  */
 export async function checkMonthlyTokenBudget(
   organizationId: string,

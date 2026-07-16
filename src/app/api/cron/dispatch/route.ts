@@ -79,16 +79,20 @@ export async function GET(request: Request) {
     // I5 — reap stuck runs: any execution still "running" past the time limit
     // is marked failed so it doesn't pin resources or block reporting.
     // systemPrisma: global reaper sweep — runs across all orgs by design (CRON_SECRET-gated).
+    // Reap 'running' AND the two other non-terminal states a killed process can
+    // strand: 'cancelling' (user hit cancel, then the process died — the run is
+    // un-cancellable and un-deletable, since neither predicate treats it as
+    // cancellable or terminal) and 'pending' (queued but never claimed by a
+    // worker). All three carry a `startedAt` (defaults to now()), so the age
+    // filter applies uniformly. A stranded cancel resolves to 'cancelled'.
+    const stranded = new Date(Date.now() - STUCK_RUN_TIMEOUT_MS)
     await systemPrisma.agentExecution.updateMany({
-      where: {
-        status: 'running',
-        startedAt: { lt: new Date(Date.now() - STUCK_RUN_TIMEOUT_MS) },
-      },
-      data: {
-        status: 'failed',
-        error: 'Run exceeded time limit',
-        completedAt: new Date(),
-      },
+      where: { status: { in: ['running', 'pending'] }, startedAt: { lt: stranded } },
+      data: { status: 'failed', error: 'Run exceeded time limit', completedAt: new Date() },
+    })
+    await systemPrisma.agentExecution.updateMany({
+      where: { status: 'cancelling', startedAt: { lt: stranded } },
+      data: { status: 'cancelled', error: 'Cancelled (run did not stop in time)', completedAt: new Date() },
     })
 
     // Same recovery for flows: a crashed inline flow execution leaves its run

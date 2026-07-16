@@ -58,6 +58,22 @@ export type AgentExecutionJob = {
 const MAX_SUBAGENT_DEPTH = 2
 const MAX_SUBAGENTS_PER_RUN = 15
 
+// Ceiling on a single tool result appended to the transcript. Without it, one
+// large payload (a CRM list, a big web page) can push the accumulating,
+// re-sent-every-turn transcript past the model's context window — the API then
+// returns 400, which is NOT retryable, so the run fails; worse, the oversized
+// transcript is already checkpointed, so the retry resumes and re-fails
+// identically. Mirrors the http tool's own 50k cap.
+const MAX_TOOL_RESULT_CHARS = 48_000
+
+/** Serialize a tool result, truncating with a visible marker so the model knows
+ *  the output was cut rather than silently seeing partial JSON. */
+function serializeToolResult(result: unknown): string {
+  const raw = JSON.stringify(result ?? null) ?? 'null'
+  if (raw.length <= MAX_TOOL_RESULT_CHARS) return raw
+  return `${raw.slice(0, MAX_TOOL_RESULT_CHARS)}\n…[truncated ${raw.length - MAX_TOOL_RESULT_CHARS} characters — refine the call (filter/paginate) for the full result]`
+}
+
 type PendingQuestion = {
   toolCallId: string
   question: string
@@ -734,7 +750,9 @@ export async function runAgentExecution(
 
     if (pendingResults) runner.appendToolResults(transcript, pendingResults)
 
-    const maxTurns = Number(agentMetadata.maxTurns) || Number(process.env.AGENT_MAX_TURNS) || 16
+    // Clamp: metadata is user-writable, and an unbounded maxTurns (e.g. 100000)
+    // would let a single run grind against only the token cap.
+    const maxTurns = Math.min(Math.max(1, Number(agentMetadata.maxTurns) || Number(process.env.AGENT_MAX_TURNS) || 16), 64)
     // Per-run token backstop against a pathological loop (independent of the
     // monthly ceiling). Generous by default; tune via AGENT_MAX_RUN_TOKENS.
     const perRunTokenCap = Number(process.env.AGENT_MAX_RUN_TOKENS) || 2_000_000
@@ -904,7 +922,7 @@ export async function runAgentExecution(
             resourceType: binding.provider,
             payload: call.input,
           })
-          results.push({ toolCallId: call.id, content: JSON.stringify(result) })
+          results.push({ toolCallId: call.id, content: serializeToolResult(result) })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           await prisma.workflowStep.update({

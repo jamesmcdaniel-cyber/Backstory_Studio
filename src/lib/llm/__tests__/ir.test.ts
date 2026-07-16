@@ -144,6 +144,14 @@ test('routeModel orders the requested provider first, then the fallback', () => 
     delete process.env.QWEN_API_KEY
     delete process.env.QWEN_BASE_URL
     assert.deepEqual(routeModel('qwen-3.7'), [{ target: 'claude', model: 'claude-opus-4-8' }])
+    // Anthropic-only + a primary that ISN'T the fallback model → a second Claude
+    // step is appended, so a 529 of the primary has somewhere to fall back.
+    assert.deepEqual(routeModel('claude-sonnet-5'), [
+      { target: 'claude', model: 'claude-sonnet-5' },
+      { target: 'claude', model: 'claude-opus-4-8' },
+    ])
+    // …but not duplicated when the primary already IS the fallback model.
+    assert.deepEqual(routeModel('claude-opus-4-8'), [{ target: 'claude', model: 'claude-opus-4-8' }])
   } finally {
     if (prevA === undefined) delete process.env.ANTHROPIC_API_KEY
     else process.env.ANTHROPIC_API_KEY = prevA
