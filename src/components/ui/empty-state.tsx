@@ -27,8 +27,13 @@ function EmptyState({
       {...props}
     >
       {Icon && (
-        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-horizon-50 text-horizon-600">
-          <Icon className="h-5 w-5" aria-hidden="true" />
+        <div className="relative">
+          {/* Soft ambient glow so the empty state reads as a lit focal point,
+              not a flat placeholder. Purely decorative. */}
+          <div aria-hidden="true" className="absolute inset-0 -z-10 scale-[1.8] rounded-full bg-horizon-200/40 blur-2xl" />
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-horizon-50 text-horizon-600 ring-1 ring-horizon-100">
+            <Icon className="h-5 w-5" aria-hidden="true" />
+          </div>
         </div>
       )}
       <div className="space-y-1">
