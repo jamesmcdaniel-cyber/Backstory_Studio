@@ -213,6 +213,10 @@ function FlowBuilder() {
   const [canEdit, setCanEdit] = useState(true)
   const [visibility, setVisibility] = useState('shared')
   const [ownerId, setOwnerId] = useState<string | null>(null)
+  // Cross-workspace guest? (UI hides run/publish/settings; server enforces.)
+  const [external, setExternal] = useState(false)
+  const [shareToken, setShareToken] = useState<string | null>(null)
+  const [shareRole, setShareRole] = useState<'view' | 'edit'>('view')
   const [publishing, setPublishing] = useState(false)
   const [agents, setAgents] = useState<Agent[]>([])
   // Workspace roster for the humanReview "Assign to" select — fetched once per
@@ -272,9 +276,19 @@ function FlowBuilder() {
       fetch('/api/flows', { cache: 'no-store' }).then((r) => r.json()),
       fetch('/api/agents', { cache: 'no-store' }).then((r) => r.json()),
     ])
-      .then(([flowsData, agentsData]) => {
+      .then(async ([flowsData, agentsData]) => {
         if (cancelled) return
-        const flow = (flowsData.flows || []).find((f: { id: string }) => f.id === id)
+        let flow = (flowsData.flows || []).find((f: { id: string }) => f.id === id)
+        if (!flow) {
+          // Not in our list: a share-link open (token in URL) or a flow we can
+          // access but haven't accepted yet — the single-flow endpoint
+          // resolves both and performs token acceptance.
+          const shareParam = searchParams.get('share')
+          const res = await fetch(`/api/flows/${id}${shareParam ? `?share=${encodeURIComponent(shareParam)}` : ''}`, { cache: 'no-store' }).catch(() => null)
+          const data = res && res.ok ? await res.json().catch(() => null) : null
+          if (data?.flow) flow = data.flow
+        }
+        if (cancelled) return
         if (flow) {
           const g = flow.graph && flow.graph.nodes ? flow.graph : emptyGraph()
           loadedGraphRef.current = g
@@ -288,6 +302,9 @@ function FlowBuilder() {
           setCanEdit(flow.canEdit !== false)
           setVisibility(flow.visibility ?? 'shared')
           setOwnerId(flow.ownerId ?? null)
+          setExternal(Boolean(flow.external))
+          setShareToken(flow.shareToken ?? null)
+          setShareRole(flow.shareRole === 'edit' ? 'edit' : 'view')
           setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g, status: flow.status }))
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
@@ -315,7 +332,7 @@ function FlowBuilder() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, searchParams])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
@@ -743,6 +760,7 @@ function FlowBuilder() {
   }, [validation])
 
   const save = useCallback(async (): Promise<boolean> => {
+    if (external) return false // guests autosave the canvas; settings saves are org-only
     if (!canEdit) {
       toast.error('This flow is view-only — ask its owner to make changes.')
       return false
@@ -774,7 +792,7 @@ function FlowBuilder() {
     } finally {
       setSaving(false)
     }
-  }, [id, name, description, graph, status, canEdit])
+  }, [id, name, description, graph, status, canEdit, external])
 
   const publish = useCallback(
     async (revert = false) => {
@@ -1260,7 +1278,7 @@ function FlowBuilder() {
             <DropdownMenuItem onSelect={exportInstructions}>
               <FileText className="h-4 w-4" /> As instructions (Markdown)
             </DropdownMenuItem>
-            {canEdit && (
+            {canEdit && !external && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel>Sharing</DropdownMenuLabel>
@@ -1279,21 +1297,29 @@ function FlowBuilder() {
                 ))}
               </>
             )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={deleteFlow} className="text-red-600 focus:text-red-700">
-              <Trash2 className="h-4 w-4" /> Delete flow
-            </DropdownMenuItem>
+            {!external && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={deleteFlow} className="text-red-600 focus:text-red-700">
+                  <Trash2 className="h-4 w-4" /> Delete flow
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button variant="outline" size="sm" onClick={() => setShowTest((v) => !v)}>
-          <FlaskConical className="mr-1.5 h-4 w-4" /> Test
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
-          <ListChecks className="mr-1.5 h-4 w-4" /> Runs
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => router.push(`/flows/${id}/activity`)}>
-          <ScrollText className="mr-1.5 h-4 w-4" /> Activity
-        </Button>
+        {!external && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setShowTest((v) => !v)}>
+              <FlaskConical className="mr-1.5 h-4 w-4" /> Test
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowRuns((v) => !v)}>
+              <ListChecks className="mr-1.5 h-4 w-4" /> Runs
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => router.push(`/flows/${id}/activity`)}>
+              <ScrollText className="mr-1.5 h-4 w-4" /> Activity
+            </Button>
+          </>
+        )}
         {others.length > 0 && (
           <div className="flex items-center -space-x-1.5" title={`${others.map((p) => p.name).join(', ')} here now`}>
             {others.slice(0, 4).map((p) => (
@@ -1317,12 +1343,16 @@ function FlowBuilder() {
           <Users className="mr-1.5 h-4 w-4" /> Jam
           {others.length > 0 && <span className="ml-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-indigo-600 px-1 text-[10px] font-semibold text-white">{others.length}</span>}
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setShowVersions((v) => !v)}>
-          <History className="mr-1.5 h-4 w-4" /> History
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setShowCopilot((v) => !v)}>
-          <Sparkles className="mr-1.5 h-4 w-4" /> Copilot
-        </Button>
+        {!external && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setShowVersions((v) => !v)}>
+              <History className="mr-1.5 h-4 w-4" /> History
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowCopilot((v) => !v)}>
+              <Sparkles className="mr-1.5 h-4 w-4" /> Copilot
+            </Button>
+          </>
+        )}
         <Button variant="outline" size="sm" onClick={() => setShowChecker((v) => !v)}>
           <ShieldCheck className="mr-1.5 h-4 w-4" /> Checker
           {validation.errors.length > 0 && (
@@ -1332,21 +1362,25 @@ function FlowBuilder() {
             <Badge variant="warn" className="ml-1.5">{validation.warnings.length}</Badge>
           )}
         </Button>
-        <Button variant="outline" size="sm" onClick={save} loading={saving} className="relative">
-          <Save className="mr-1.5 h-4 w-4" /> Save
-          {dirty && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-400" title="Unsaved changes" />}
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => publish(false)} loading={publishing} title={published ? `Published v${version}` : 'Not yet published'}>
-          {published ? `Publish v${version + 1}` : 'Publish'}
-        </Button>
-        {published && (
-          <Button variant="ghost" size="sm" onClick={() => publish(true)} title="Discard draft changes and restore the published version">
-            Revert
-          </Button>
+        {!external && (
+          <>
+            <Button variant="outline" size="sm" onClick={save} loading={saving} className="relative">
+              <Save className="mr-1.5 h-4 w-4" /> Save
+              {dirty && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-400" title="Unsaved changes" />}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => publish(false)} loading={publishing} title={published ? `Published v${version}` : 'Not yet published'}>
+              {published ? `Publish v${version + 1}` : 'Publish'}
+            </Button>
+            {published && (
+              <Button variant="ghost" size="sm" onClick={() => publish(true)} title="Discard draft changes and restore the published version">
+                Revert
+              </Button>
+            )}
+            <Button size="sm" onClick={run} disabled={running}>
+              {running ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />} Run
+            </Button>
+          </>
         )}
-        <Button size="sm" onClick={run} disabled={running}>
-          {running ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />} Run
-        </Button>
       </div>
 
       {viewingVersion && (
@@ -1363,7 +1397,12 @@ function FlowBuilder() {
         </div>
       )}
 
-      {!canEdit && (
+      {external && (
+        <div className="flex items-center justify-center gap-2 border-b border-indigo-200 bg-indigo-50 px-4 py-1.5 text-xs font-medium text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+          Guest access — you’re jamming on another workspace’s flow. Running and publishing stay with the owning workspace.
+        </div>
+      )}
+      {!canEdit && !external && (
         <div className="flex items-center justify-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs font-medium text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
           View only — you can run this flow, but only its owner can edit it.
         </div>
@@ -1611,11 +1650,14 @@ function FlowBuilder() {
         flowId={id}
         flowName={name}
         visibility={visibility as 'shared' | 'view' | 'private'}
-        canEdit={canEdit}
+        canEdit={canEdit && !external}
         onChangeVisibility={(next) => void updateSharing(next)}
         presence={others.map((p) => ({ id: p.clientId, name: p.name, color: p.color, inHuddle: p.inHuddle }))}
         onJoinHuddle={() => { setShowJam(false); void huddle.join() }}
         huddleJoined={huddle.joined}
+        shareToken={shareToken}
+        shareRole={shareRole}
+        onShareChanged={(token, role) => { setShareToken(token); setShareRole(role) }}
       />
 
       {subflowDraft && (() => {

@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Check, Copy, Link2, Mic, Send, Users } from 'lucide-react'
+import { Check, Copy, Link2, Mic, RefreshCw, Send, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 
 type Visibility = 'shared' | 'view' | 'private'
@@ -33,6 +34,9 @@ export function JamDialog({
   presence,
   onJoinHuddle,
   huddleJoined,
+  shareToken,
+  shareRole,
+  onShareChanged,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -46,12 +50,18 @@ export function JamDialog({
   /** Starts/joins the voice huddle (closes the dialog first at the call site). */
   onJoinHuddle?: () => void
   huddleJoined?: boolean
+  /** Cross-workspace share link state (same-org editors only). */
+  shareToken?: string | null
+  shareRole?: 'view' | 'edit'
+  onShareChanged?: (token: string | null, role: 'view' | 'edit') => void
 }) {
   const [copied, setCopied] = useState(false)
   const [members, setMembers] = useState<Member[]>([])
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [sending, setSending] = useState(false)
-  const inviteLink = typeof window !== 'undefined' ? `${window.location.origin}/flows/${flowId}` : `/flows/${flowId}`
+  const inviteLink = typeof window !== 'undefined'
+    ? `${window.location.origin}/flows/${flowId}${shareToken ? `?share=${shareToken}` : ''}`
+    : `/flows/${flowId}`
   const shareable = visibility !== 'private'
   const canInvite = canEdit && shareable
   const here = presence ?? []
@@ -95,6 +105,31 @@ export function JamDialog({
       setSelected(new Set())
     } finally {
       setSending(false)
+    }
+  }
+
+  const [shareBusy, setShareBusy] = useState(false)
+  const updateShare = async (enabled: boolean, role: 'view' | 'edit', rotate = false) => {
+    setShareBusy(true)
+    try {
+      const res = await fetch(`/api/flows/${flowId}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled, role, rotate }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(data.error || 'Could not update the share link.')
+        return
+      }
+      onShareChanged?.(data.shareToken ?? null, data.shareRole === 'edit' ? 'edit' : 'view')
+      toast.success(!enabled
+        ? 'Share link turned off.'
+        : rotate
+          ? 'Link rotated — old links no longer work.'
+          : 'Share link ready — anyone with it can open this flow after signing in.')
+    } finally {
+      setShareBusy(false)
     }
   }
 
@@ -212,6 +247,51 @@ export function JamDialog({
             <p className="rounded-lg border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
               This flow is private. Set it to “Everyone can view” or “edit” below to invite teammates.
             </p>
+          )}
+
+          {canEdit && shareable && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">Anyone with the link</p>
+                <Switch
+                  checked={Boolean(shareToken)}
+                  disabled={shareBusy}
+                  onCheckedChange={(on) => void updateShare(on, shareRole ?? 'view')}
+                  aria-label="Share with people outside your workspace"
+                />
+              </div>
+              {shareToken ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    {(['view', 'edit'] as const).map((r) => (
+                      <button
+                        key={r}
+                        type="button"
+                        disabled={shareBusy}
+                        onClick={() => void updateShare(true, r)}
+                        className={cn(
+                          'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                          (shareRole ?? 'view') === r
+                            ? 'border-indigo-300 bg-indigo-50/60 text-indigo-800 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-200'
+                            : 'border-border/70 text-muted-foreground hover:bg-accent',
+                        )}
+                      >
+                        {r === 'view' ? 'Can view' : 'Can edit'}
+                      </button>
+                    ))}
+                    <Button variant="ghost" size="sm" className="ml-auto h-7 px-2 text-xs" disabled={shareBusy} onClick={() => void updateShare(true, shareRole ?? 'view', true)}>
+                      <RefreshCw className="mr-1 h-3 w-3" /> Rotate
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    People outside your workspace can open this flow with the link above after signing in.
+                    Rotating makes old links stop working; people who already accepted keep access.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Off — only your workspace can open this flow.</p>
+              )}
+            </div>
           )}
 
           <div className="space-y-2">
