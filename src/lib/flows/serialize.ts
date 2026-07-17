@@ -1,6 +1,10 @@
 import type { FlowGraph } from '@/lib/flows/graph'
 import { canEditFlow } from '@/lib/flows/access'
 
+/** How a role-aware caller describes THIS viewer's relationship to the flow.
+ *  `includeShare` exposes the share token/role — same-org editors only. */
+export type FlowViewerAccess = { role: 'edit' | 'view'; external: boolean; includeShare?: boolean }
+
 /** Wire shape for a flow, shared by the list page and the builder. */
 export function serializeFlow(flow: {
   id: string
@@ -12,11 +16,13 @@ export function serializeFlow(flow: {
   publishedGraph?: unknown
   version?: number
   visibility: string
+  shareToken?: string | null
+  shareRole?: string
   folder?: string
   userId?: string | null
   createdAt: Date
   updatedAt: Date
-}, viewerId?: string) {
+}, viewerId?: string, access?: FlowViewerAccess) {
   const graph = (flow.graph && typeof flow.graph === 'object' ? flow.graph : { nodes: [], edges: [] }) as FlowGraph
   const stepCount = (graph.nodes || []).filter((node) => node.type === 'agent').length
   const published = flow.publishedGraph != null
@@ -28,10 +34,23 @@ export function serializeFlow(flow: {
     trigger: flow.trigger ?? { type: 'manual' },
     graph,
     visibility: flow.visibility,
-    // Whether THIS viewer may edit ('view' flows are owner-editable only).
-    canEdit: viewerId === undefined ? true : canEditFlow({ visibility: flow.visibility, userId: flow.userId ?? null }, viewerId),
+    // Whether THIS viewer may edit. Role-aware callers (share/single-flow/list
+    // routes) pass `access`; legacy org-only callers keep the v1 derivation.
+    canEdit: access
+      ? access.role === 'edit'
+      : viewerId === undefined
+        ? true
+        : canEditFlow({ visibility: flow.visibility, userId: flow.userId ?? null }, viewerId),
     // Flow owner — persister election prefers the owner's client during a jam.
     ownerId: flow.userId ?? null,
+    ...(access && {
+      role: access.role,
+      // Cross-workspace guest: UI hides run/publish/settings; PUT enforces graph-only.
+      external: access.external,
+      ...(access.includeShare
+        ? { shareToken: flow.shareToken ?? null, shareRole: flow.shareRole === 'edit' ? 'edit' : 'view' }
+        : {}),
+    }),
     folder: flow.folder ?? '',
     stepCount,
     version: flow.version ?? 1,

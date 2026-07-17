@@ -19,3 +19,37 @@ export function assertFlowEditable(flow: { visibility: string; userId: string | 
   if (canEditFlow(flow, userId)) return
   throw new ApiError('This flow is view-only — ask its owner to make changes.', 403, 'FLOW_VIEW_ONLY')
 }
+
+export type FlowRoleInput = {
+  organizationId: string
+  visibility: string
+  userId: string | null
+  shareToken?: string | null
+  shareRole?: string | null
+  collaboratorRole?: string | null
+}
+
+/**
+ * The viewer's role on a flow, across workspace boundaries:
+ *  1. Owner → edit, always.
+ *  2. Same org → v1 semantics verbatim (shared=edit, view=view [legacy
+ *     ownerless stays editable], private=owner-only).
+ *  3. Cross-org: an accepted collaborator row's role wins; else a presented
+ *     share token that matches grants the flow's shareRole.
+ *  4. Otherwise null — the flow does not exist for this viewer.
+ */
+export function resolveFlowRole(
+  flow: FlowRoleInput,
+  viewer: { userId: string; organizationId: string },
+  shareToken?: string | null,
+): 'edit' | 'view' | null {
+  if (flow.userId && flow.userId === viewer.userId) return 'edit'
+  if (flow.organizationId === viewer.organizationId) {
+    if (flow.visibility === 'private') return null
+    if (flow.visibility === 'view') return flow.userId ? 'view' : 'edit'
+    return 'edit'
+  }
+  if (flow.collaboratorRole === 'edit' || flow.collaboratorRole === 'view') return flow.collaboratorRole
+  if (shareToken && flow.shareToken && shareToken === flow.shareToken) return flow.shareRole === 'edit' ? 'edit' : 'view'
+  return null
+}

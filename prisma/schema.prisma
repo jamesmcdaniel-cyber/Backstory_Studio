@@ -637,18 +637,37 @@ model Flow {
   publishedGraph Json? // the live version scheduled/triggered runs execute
   version        Int      @default(1) // bumped on each publish
   visibility     String   @default("shared")
+  shareToken     String?  @unique // rotatable cross-workspace share-link token
+  shareRole      String   @default("view") // role a share-link grants: 'view' | 'edit'
   folder         String   @default("") // workbook-style grouping ('' = ungrouped)
   organizationId String   @db.Uuid
   userId         String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  runs         FlowRun[]
-  versions     FlowVersion[]
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  runs          FlowRun[]
+  versions      FlowVersion[]
+  collaborators FlowCollaborator[]
 
   @@index([organizationId, updatedAt])
   @@map("flows")
+}
+
+// Cross-workspace jam grants: a user outside the flow's org who accepted a
+// share link. Durable — rotating the link revokes future opens, not rows.
+model FlowCollaborator {
+  id        String   @id @default(cuid())
+  flowId    String
+  userId    String
+  role      String   @default("edit") // 'edit' | 'view'
+  createdAt DateTime @default(now())
+
+  flow Flow @relation(fields: [flowId], references: [id], onDelete: Cascade)
+
+  @@unique([flowId, userId])
+  @@index([userId])
+  @@map("flow_collaborators")
 }
 
 // Binary/original file uploads (run-form file inputs, future step outputs).
