@@ -32,6 +32,9 @@ export function useFlowHuddle(
   const audioCtx = useRef<AudioContext | null>(null)
   const localAnalyser = useRef<AnalyserNode | null>(null)
   const joinedRef = useRef(false)
+  // ICE config from the auth-gated endpoint (env-driven TURN); fetched once
+  // per mount on first join. Any failure falls back to baked-in STUN.
+  const iceServersRef = useRef<RTCIceServer[] | null>(null)
 
   const send = useCallback((signal: Omit<HuddleSignal, 'from'>) => {
     bus.send('huddle', { ...signal, from: selfClientId })
@@ -59,7 +62,7 @@ export function useFlowHuddle(
   }, [])
 
   const createPeer = useCallback((peerId: string): RTCPeerConnection => {
-    const pc = new RTCPeerConnection(RTC_CONFIG)
+    const pc = new RTCPeerConnection({ iceServers: iceServersRef.current ?? RTC_CONFIG.iceServers })
     for (const track of localStream.current?.getTracks() ?? []) pc.addTrack(track, localStream.current!)
     pc.onicecandidate = (event) => {
       if (event.candidate) send({ kind: 'ice', to: peerId, candidate: event.candidate.toJSON() })
@@ -122,6 +125,14 @@ export function useFlowHuddle(
     if (joinedRef.current) return
     setConnecting(true)
     try {
+      if (!iceServersRef.current) {
+        try {
+          const res = await fetch('/api/flows/huddle-ice', { cache: 'no-store' })
+          const data = await res.json().catch(() => null)
+          if (res.ok && Array.isArray(data?.iceServers) && data.iceServers.length) iceServersRef.current = data.iceServers
+        } catch { /* STUN fallback via createPeer */ }
+        iceServersRef.current ??= (RTC_CONFIG.iceServers as RTCIceServer[] | undefined) ?? null
+      }
       localStream.current = await navigator.mediaDevices.getUserMedia({ audio: true })
       localAnalyser.current = attachAnalyser(localStream.current)
       joinedRef.current = true
