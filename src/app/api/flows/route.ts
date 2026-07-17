@@ -1,11 +1,11 @@
 import { z } from 'zod'
-import { prisma } from '@/lib/prisma'
+import { prisma, systemPrisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
 import { flowGraphSchema, emptyGraph } from '@/lib/flows/graph'
 import { serializeFlow } from '@/lib/flows/serialize'
 import { normalizeFlowTrigger, preserveWebhookSecretHash, triggerFromGraph } from '@/lib/flows/trigger'
-import { assertFlowEditable } from '@/lib/flows/access'
+import { assertFlowEditable, resolveFlowRole } from '@/lib/flows/access'
 import { recordAudit } from '@/lib/audit'
 
 // Strip undefined + narrow to plain JSON so Prisma's InputJsonValue accepts the
@@ -26,12 +26,28 @@ const flowSchema = z.object({
 })
 
 export const GET = withAuthenticatedApi(async (_request, auth) => {
+  // Org flows (v1 visibility rules) PLUS flows shared with this user across
+  // workspaces (accepted collaborator rows).
   const flows = await prisma.flow.findMany({
-    where: { organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
+    where: {
+      OR: [
+        { organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
+        { collaborators: { some: { userId: auth.dbUser.id } } },
+      ],
+    },
+    include: { collaborators: { where: { userId: auth.dbUser.id } } },
     orderBy: { updatedAt: 'desc' },
     take: 200,
   })
-  return { success: true, flows: flows.map((flow) => serializeFlow(flow, auth.dbUser.id)) }
+  const viewer = { userId: auth.dbUser.id, organizationId: auth.organizationId }
+  return {
+    success: true,
+    flows: flows.map((flow) => {
+      const role = resolveFlowRole({ ...flow, collaboratorRole: flow.collaborators[0]?.role ?? null }, viewer)
+      const external = flow.organizationId !== auth.organizationId
+      return serializeFlow(flow, auth.dbUser.id, role ? { role, external, includeShare: !external && role === 'edit' } : undefined)
+    }),
+  }
 })
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
@@ -62,11 +78,29 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
     // of one per debounce tick.
     suppressAudit: z.boolean().optional(),
   }).merge(flowSchema.partial()).parse(await request.json())
-  const existing = await prisma.flow.findFirst({
-    where: { id: body.id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
+  // systemPrisma: deliberately cross-tenant — an external collaborator's save
+  // must find the flow outside their org; resolveFlowRole below is the access
+  // boundary, and the update itself re-scopes to the OWNING org.
+  const existing = await systemPrisma.flow.findUnique({
+    where: { id: body.id },
+    include: { collaborators: { where: { userId: auth.dbUser.id } } },
   })
   if (!existing) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
-  assertFlowEditable(existing, auth.dbUser.id)
+  const role = resolveFlowRole(
+    { ...existing, collaboratorRole: existing.collaborators[0]?.role ?? null },
+    { userId: auth.dbUser.id, organizationId: auth.organizationId },
+  )
+  if (!role) throw new ApiError('Flow not found', 404, 'NOT_FOUND')
+  if (role !== 'edit') throw new ApiError('This flow is view-only for you — ask its owner for edit access.', 403, 'FLOW_VIEW_ONLY')
+  // Guests (cross-workspace collaborators) may write the CANVAS only — name,
+  // sharing, and settings stay with the owning workspace.
+  if (existing.organizationId !== auth.organizationId) {
+    const allowed = new Set(['id', 'graph', 'baseUpdatedAt', 'suppressAudit'])
+    const blocked = Object.keys(body).filter((key) => (body as Record<string, unknown>)[key] !== undefined && !allowed.has(key))
+    if (blocked.length) {
+      throw new ApiError('Guests can edit the canvas only — name, sharing, and settings stay with the owning workspace.', 403, 'GUEST_GRAPH_ONLY')
+    }
+  }
   // Optimistic concurrency: when a graph write carries the baseUpdatedAt the
   // client last loaded, reject if the flow has moved on since (a co-editor
   // saved) so a stale full-graph PUT can't silently clobber their work. The
@@ -82,7 +116,8 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
         ? triggerFromGraph(body.graph, existing.trigger)
         : undefined
   const flow = await prisma.flow.update({
-    where: { id: body.id, organizationId: auth.organizationId },
+    // Scoped to the OWNING org (which for a guest differs from the caller's).
+    where: { id: body.id, organizationId: existing.organizationId },
     data: {
       ...(body.name !== undefined && { name: body.name }),
       ...(body.description !== undefined && { description: body.description }),
@@ -101,7 +136,8 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
   // never blocks the save.
   if (body.graph !== undefined && !body.suppressAudit) {
     void recordAudit({
-      organizationId: auth.organizationId,
+      // Edits audit into the OWNING org's timeline — including guest edits.
+      organizationId: existing.organizationId,
       actorUserId: auth.dbUser.id,
       action: 'flow.edited',
       resourceType: 'flow',

@@ -1,0 +1,79 @@
+import { test, before } from 'node:test'
+import assert from 'node:assert/strict'
+import { NextRequest } from 'next/server'
+
+// DB-gated: runs only under TEST_DATABASE_URL (CI-mode), like sibling DB tests.
+const TEST_DB = process.env.TEST_DATABASE_URL
+if (TEST_DB) {
+  process.env.DATABASE_URL = TEST_DB
+  process.env.DIRECT_URL = TEST_DB
+  process.env.ENTITLEMENT_GATE = 'off'
+
+  let prisma: any
+  let seedTestOrg: any
+  let installTestAuth: any
+  let shareRoute: any
+  let flowRoute: any
+
+  before(async () => {
+    ;({ prisma } = await import('@/lib/prisma'))
+    ;({ seedTestOrg, installTestAuth } = await import('@/lib/server/__tests__/test-auth'))
+    shareRoute = await import('../[id]/share/route')
+    flowRoute = await import('../[id]/route')
+  })
+
+  const share = (flowId: string, body: Record<string, unknown>) =>
+    shareRoute.POST(new NextRequest(new URL(`http://test/api/flows/${flowId}/share`), { method: 'POST', body: JSON.stringify(body) }))
+  const open = (flowId: string, token?: string | null) =>
+    flowRoute.GET(new NextRequest(new URL(`http://test/api/flows/${flowId}${token ? `?share=${token}` : ''}`)))
+  const mkFlow = (organizationId: string, userId: string) =>
+    prisma.flow.create({ data: { organizationId, userId, name: 'Shared flow', graph: { nodes: [], edges: [] } } })
+
+  test('share lifecycle: mint → role change keeps token → rotate mints fresh → disable clears', async () => {
+    const s = await seedTestOrg(prisma)
+    try {
+      installTestAuth(s.auth)
+      const flow = await mkFlow(s.organizationId, s.userId)
+      const minted = await (await share(flow.id, { enabled: true, role: 'edit' })).json()
+      assert.ok(minted.shareToken, 'mint returns a token')
+      assert.equal(minted.shareRole, 'edit')
+      const roleChanged = await (await share(flow.id, { enabled: true, role: 'view' })).json()
+      assert.equal(roleChanged.shareToken, minted.shareToken, 'role change keeps the token — sent links stay valid')
+      assert.equal(roleChanged.shareRole, 'view')
+      const rotated = await (await share(flow.id, { enabled: true, role: 'view', rotate: true })).json()
+      assert.ok(rotated.shareToken && rotated.shareToken !== minted.shareToken, 'rotate mints a fresh token')
+      const disabled = await (await share(flow.id, { enabled: false, role: 'view' })).json()
+      assert.equal(disabled.shareToken, null)
+    } finally {
+      await s.cleanup()
+      await prisma.organization.delete({ where: { id: s.organizationId } }).catch(() => {})
+    }
+  })
+
+  test('token acceptance upserts exactly one collaborator row (idempotent) and grants durable access; guests never see the token', async () => {
+    const ownerOrg = await seedTestOrg(prisma)
+    const guestOrg = await seedTestOrg(prisma)
+    try {
+      installTestAuth(ownerOrg.auth)
+      const flow = await mkFlow(ownerOrg.organizationId, ownerOrg.userId)
+      const { shareToken } = await (await share(flow.id, { enabled: true, role: 'edit' })).json()
+      installTestAuth(guestOrg.auth)
+      assert.equal((await open(flow.id)).status, 404, 'no token, no row → invisible')
+      assert.equal((await open(flow.id, 'wrong-token')).status, 404, 'bad token → invisible')
+      const first = await open(flow.id, shareToken)
+      assert.equal(first.status, 200)
+      const body = await first.json()
+      assert.equal(body.flow.role, 'edit')
+      assert.equal(body.flow.external, true)
+      assert.ok(!('shareToken' in body.flow), 'guests never receive the token')
+      await open(flow.id, shareToken) // idempotent re-open
+      const rows = await prisma.flowCollaborator.findMany({ where: { flowId: flow.id, userId: guestOrg.userId } })
+      assert.equal(rows.length, 1, 'exactly one collaborator row')
+      assert.equal((await open(flow.id)).status, 200, 'the row grants access without the token')
+    } finally {
+      await ownerOrg.cleanup(); await guestOrg.cleanup()
+      await prisma.organization.delete({ where: { id: ownerOrg.organizationId } }).catch(() => {})
+      await prisma.organization.delete({ where: { id: guestOrg.organizationId } }).catch(() => {})
+    }
+  })
+}
