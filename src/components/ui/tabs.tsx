@@ -73,7 +73,9 @@ const TabsTrigger = React.forwardRef<
           aria-hidden="true"
         />
       )}
-      <span className="relative z-10">{children}</span>
+      {/* inline-flex so icon children (block-level svgs under preflight) sit
+          on the label's row instead of stacking above it */}
+      <span className="relative z-10 inline-flex items-center">{children}</span>
     </TabsPrimitive.Trigger>
   )
 })

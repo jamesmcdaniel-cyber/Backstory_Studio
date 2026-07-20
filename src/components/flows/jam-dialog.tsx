@@ -74,7 +74,11 @@ export function JamDialog({
     let cancelled = false
     fetch('/api/organizations/members', { cache: 'no-store' })
       .then((r) => r.json())
-      .then((data) => { if (!cancelled && data.success) setMembers(data.members ?? []) })
+      .then((data) => {
+        if (cancelled || !data.success) return
+        // You can't invite yourself — drop the caller from the list.
+        setMembers(((data.members ?? []) as Member[]).filter((m) => m.id !== data.selfId))
+      })
       .catch(() => undefined)
     return () => { cancelled = true }
   }, [open, canInvite])
@@ -154,7 +158,10 @@ export function JamDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5">
+        {/* min-w-0: DialogContent is a grid, so without it the unbroken mono
+            invite URL sets this item's min-content width and pushes every row
+            past the card edge. */}
+        <div className="min-w-0 space-y-5">
           {here.length > 0 && (
             <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/50 p-3 dark:border-indigo-500/25 dark:bg-indigo-500/10">
               <div className="flex items-center justify-between gap-2">
@@ -231,16 +238,12 @@ export function JamDialog({
                   )
                 })}
               </div>
-              {selected.size > 0 ? (
-                <Button size="sm" className="w-full" onClick={sendInvites} loading={sending}>
-                  <Send className="mr-1.5 h-4 w-4" />
-                  Send invite to {selected.size} {selected.size === 1 ? 'teammate' : 'teammates'}
-                </Button>
-              ) : (
-                <p className="rounded-md border border-dashed border-border/70 px-3 py-2 text-center text-xs text-muted-foreground">
-                  Select teammates above to send invites.
-                </p>
-              )}
+              <Button size="sm" className="w-full" onClick={sendInvites} loading={sending} disabled={selected.size === 0}>
+                <Send className="mr-1.5 h-4 w-4" />
+                {selected.size === 0
+                  ? 'Select teammates to invite'
+                  : `Send invite to ${selected.size} ${selected.size === 1 ? 'teammate' : 'teammates'}`}
+              </Button>
             </div>
           )}
           {canEdit && !shareable && (
