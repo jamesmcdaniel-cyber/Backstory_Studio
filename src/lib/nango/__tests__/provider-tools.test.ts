@@ -155,3 +155,26 @@ test('monday_create_item embeds a GraphQL mutation with the item name JSON-escap
   const q = (c.data as { query: string }).query
   assert.ok(q.includes('create_item') && q.includes('board_id: 123') && q.includes('"Say \\"hi\\""'))
 })
+
+test('toolCountForConfigKey counts provider + delivery tools; 0 for unknown keys', async () => {
+  const { NANGO_TOOL_COUNT_BY_CONFIG_KEY, toolCountForConfigKey } = await import('../provider-tools')
+
+  // Unknown dashboard slug → 0 (connectable but no agent tool resolves it).
+  assert.equal(toolCountForConfigKey('definitely-not-a-provider'), 0)
+
+  // Every canonical config key resolves to a positive count.
+  for (const keys of Object.values(PROVIDER_CONFIG_KEYS)) {
+    assert.ok(toolCountForConfigKey(keys[0]) > 0, `${keys[0]} has ≥1 agent tool`)
+  }
+
+  // Slack's write tool lives in delivery.ts, so its count must exceed the
+  // provider-tools-only read count — proving delivery tools are included.
+  assert.ok(
+    toolCountForConfigKey('slack') > toolsForProvider('slack').length,
+    'slack count includes the delivery write tool',
+  )
+
+  // Aliased keys map to the same count as their canonical key.
+  assert.equal(toolCountForConfigKey('atlassian'), toolCountForConfigKey('jira'))
+  assert.equal(NANGO_TOOL_COUNT_BY_CONFIG_KEY['gmail'], NANGO_TOOL_COUNT_BY_CONFIG_KEY['google-mail'])
+})
