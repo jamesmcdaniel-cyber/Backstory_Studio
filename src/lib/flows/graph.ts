@@ -389,7 +389,16 @@ export const flowEdgeSchema = z.object({
   // 'true'/'false' for a condition; a switch case id or 'default' for a switch.
   branch: z.string().optional(),
 })
-export const flowGraphSchema = z.object({ nodes: z.array(flowNodeSchema), edges: z.array(flowEdgeSchema) })
+// Hard caps on graph size. Far above any real flow (hundreds of steps is already
+// extreme), but low enough that a crafted multi-MB payload can't be stored and
+// then re-validated in memory on every open. The App Router doesn't inherit the
+// old 1MB body limit, so this schema is the effective bound on a graph PUT.
+export const MAX_GRAPH_NODES = 1000
+export const MAX_GRAPH_EDGES = 2000
+export const flowGraphSchema = z.object({
+  nodes: z.array(flowNodeSchema).max(MAX_GRAPH_NODES, `A flow can have at most ${MAX_GRAPH_NODES} steps.`),
+  edges: z.array(flowEdgeSchema).max(MAX_GRAPH_EDGES, `A flow can have at most ${MAX_GRAPH_EDGES} connections.`),
+})
 
 export type FlowNode = z.infer<typeof flowNodeSchema>
 export type FlowEdge = z.infer<typeof flowEdgeSchema>

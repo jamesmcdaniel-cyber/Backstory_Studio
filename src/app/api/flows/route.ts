@@ -115,21 +115,37 @@ export const PUT = withAuthenticatedApi(async (request, auth) => {
       : body.graph !== undefined
         ? triggerFromGraph(body.graph, existing.trigger)
         : undefined
-  const flow = await prisma.flow.update({
-    // Scoped to the OWNING org (which for a guest differs from the caller's).
-    where: { id: body.id, organizationId: existing.organizationId },
-    data: {
-      ...(body.name !== undefined && { name: body.name }),
-      ...(body.description !== undefined && { description: body.description }),
-      ...(body.status !== undefined && { status: body.status }),
-      ...(body.visibility !== undefined && { visibility: body.visibility }),
-      ...(body.folder !== undefined && { folder: body.folder }),
-      // Preserve the webhook secret hash across trigger edits — the client
-      // never sees it, so a plain PUT would silently wipe it.
-      ...(nextTrigger !== undefined && { trigger: jsonValue(preserveWebhookSecretHash(nextTrigger, existing.trigger)) }),
-      ...(body.graph !== undefined && { graph: jsonValue(body.graph) }),
-    },
-  })
+  const data = {
+    ...(body.name !== undefined && { name: body.name }),
+    ...(body.description !== undefined && { description: body.description }),
+    ...(body.status !== undefined && { status: body.status }),
+    ...(body.visibility !== undefined && { visibility: body.visibility }),
+    ...(body.folder !== undefined && { folder: body.folder }),
+    // Preserve the webhook secret hash across trigger edits — the client
+    // never sees it, so a plain PUT would silently wipe it.
+    ...(nextTrigger !== undefined && { trigger: jsonValue(preserveWebhookSecretHash(nextTrigger, existing.trigger)) }),
+    ...(body.graph !== undefined && { graph: jsonValue(body.graph) }),
+  }
+  // Scoped to the OWNING org (which for a guest differs from the caller's).
+  let flow
+  if (body.baseUpdatedAt) {
+    // Atomic optimistic-concurrency guard. The stale-CLIENT check above compares
+    // our fresh read to what the client loaded; this closes the TOCTOU between
+    // that read and this write by making the update CONDITIONAL on updatedAt not
+    // having moved since — so two persisters that both passed the check above
+    // can't both commit a full-graph replace (the loser matches 0 rows).
+    const result = await prisma.flow.updateMany({
+      where: { id: body.id, organizationId: existing.organizationId, updatedAt: existing.updatedAt },
+      data,
+    })
+    if (result.count === 0) {
+      throw new ApiError('This flow changed since you opened it — reload to get the latest before saving.', 409, 'FLOW_STALE_WRITE')
+    }
+    flow = await prisma.flow.findFirstOrThrow({ where: { id: body.id, organizationId: existing.organizationId } })
+  } else {
+    // No baseUpdatedAt: documented last-write-wins for callers that don't opt in.
+    flow = await prisma.flow.update({ where: { id: body.id, organizationId: existing.organizationId }, data })
+  }
   // Per-user edit log: record WHO saved a graph change, so the History panel can
   // show a Jam-style timeline of who edited when. Jam autosaves coalesce via
   // suppressAudit (one row per window), so this stays low-volume; best-effort,

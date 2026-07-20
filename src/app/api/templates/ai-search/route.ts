@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { generateStructured } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { parseMatches, sanitizeMatches, type CatalogItem } from '@/lib/templates/ai-search'
+import { assertAiCallAllowed, recordEstimatedUsage } from '@/lib/usage/ai-guard'
 
 const ItemSchema = z.object({
   id: z.string(),
@@ -57,8 +58,10 @@ function formatCatalog(items: z.infer<typeof ItemSchema>[]): string {
 // skills), so this route needs no extra DB access and works for either tab.
 // The model only ranks/reasons — sanitizeMatches is the source of truth for
 // which ids are real, so a hallucinated id can never reach the UI.
-export const POST = withAuthenticatedApi(async (request) => {
+export const POST = withAuthenticatedApi(async (request, auth) => {
   const { query, items } = BodySchema.parse(await request.json())
+  // Gate before model spend: provider, per-user rate limit, monthly ceiling.
+  await assertAiCallAllowed({ organizationId: auth.organizationId, rateKey: `ai-search:${auth.dbUser.id}`, limit: 20 })
 
   let raw: string
   try {
@@ -73,6 +76,7 @@ export const POST = withAuthenticatedApi(async (request) => {
   } catch (error) {
     throw new ApiError('AI search is not configured for this workspace.', 503, 'AI_SEARCH_UNAVAILABLE', error)
   }
+  recordEstimatedUsage(auth.organizationId, query, formatCatalog(items), raw)
 
   const matches = sanitizeMatches(parseMatches(raw), items as CatalogItem[])
   return { success: true, matches }

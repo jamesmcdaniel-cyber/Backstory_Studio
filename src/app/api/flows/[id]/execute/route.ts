@@ -5,15 +5,21 @@ import { agentVisibilityScope } from '@/lib/server/visibility'
 import { dispatchDetachedFlowExecution, startFlowExecution } from '@/features/flows/execute-flow'
 import { parseFlowInput } from '@/lib/flows/input'
 import { deriveRunWaiting } from '@/lib/flows/run-waiting'
+import { rateLimit } from '@/lib/ratelimit'
 
 export const runtime = 'nodejs'
-export const maxDuration = 1200
+export const maxDuration = 800
 
 // POST /api/flows/[id]/execute — run a flow manually. id is the path segment
 // before "execute".
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-2)
   if (!id) throw new ApiError('Flow id is required')
+  // Throttle interactive runs per org (mirrors the agent-execute limiter) — a
+  // flow can contain AI steps and loops, so unbounded concurrent runs are a
+  // cost vector. The webhook trigger route has its own per-flow limit.
+  const limited = await rateLimit(`flow-execute:${auth.organizationId}`, { limit: 30, windowMs: 60_000 })
+  if (!limited.ok) throw new ApiError('Too many runs — wait a moment before running this flow again.', 429, 'RATE_LIMITED')
   // Visibility gate: a private flow may only be run by its owner.
   const flow = await prisma.flow.findFirst({
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },

@@ -6,6 +6,7 @@ import { validateFlowGraph } from '@/lib/flows/validate'
 import { buildCopilotGrounding } from '@/lib/flows/copilot-grounding'
 import { applyCopilotOps } from '@/lib/flows/copilot-ops'
 import { parseCopilotChatReply, sanitizeCopilotOps, discardNotice } from '@/lib/flows/copilot-chat'
+import { assertAiCallAllowed, recordEstimatedUsage } from '@/lib/usage/ai-guard'
 
 // Anthropic strict structured outputs can't express free-form objects (a
 // {type:'object'} with no declared properties — see strictifySchema and the
@@ -58,6 +59,8 @@ const requestSchema = z.object({
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const { messages, graph: rawGraph } = requestSchema.parse(await request.json())
+  // Gate before any model spend: provider, per-user rate limit, monthly ceiling.
+  await assertAiCallAllowed({ organizationId: auth.organizationId, rateKey: `flow-copilot-chat:${auth.dbUser.id}`, limit: 20 })
   const { roster, toolCatalog, contextBlock, graphRules } = await buildCopilotGrounding(auth.organizationId, auth.dbUser.id)
 
   // An invalid/missing graph means we're chatting over a blank canvas.
@@ -76,6 +79,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
 
   try {
     const raw = await generateStructured({ system, user, schema: OPS_JSON_SCHEMA, schemaName: 'flow_edit_ops', maxTokens: 3500 })
+    recordEstimatedUsage(auth.organizationId, system, user, raw)
     const reply = parseCopilotChatReply(raw)
     const { ops, discarded } = sanitizeCopilotOps(reply.candidates, { agents: roster, toolCatalog })
     const totalDiscarded = discarded + (reply.opsUnreadable ? 1 : 0)

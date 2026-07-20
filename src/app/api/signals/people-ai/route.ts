@@ -11,7 +11,7 @@ import { captureError } from '@/lib/observability/sentry'
 import { decryptSecret } from '@/lib/crypto/secrets'
 
 export const runtime = 'nodejs'
-export const maxDuration = 1200
+export const maxDuration = 800
 
 /**
  * People.ai SalesAI webhook receiver (registered via POST /v1/salesai/webhooks).

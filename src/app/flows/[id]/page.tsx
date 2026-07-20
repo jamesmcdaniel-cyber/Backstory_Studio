@@ -223,6 +223,11 @@ function FlowBuilder() {
   // builder session and passed down like agents/toolCatalog.
   const [members, setMembers] = useState<OrgMember[]>([])
   const [loading, setLoading] = useState(true)
+  // Set when the flow could not be loaded (transient failure OR gone). While
+  // set, the builder shows an explicit error state instead of a blank canvas,
+  // and every save path short-circuits so a failed load can never autosave an
+  // empty graph over the stored flow. See loadedOkRef.
+  const [loadError, setLoadError] = useState(false)
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [fixing, setFixing] = useState(false)
@@ -306,10 +311,21 @@ function FlowBuilder() {
           setShareToken(flow.shareToken ?? null)
           setShareRole(flow.shareRole === 'edit' ? 'edit' : 'view')
           setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g, status: flow.status }))
+          // Only now is it safe to persist — every save path checks this flag.
+          loadedOkRef.current = true
+        } else {
+          // Flow not in the list AND the single-flow fetch didn't resolve it:
+          // deleted, inaccessible, or a transient failure. Show the error state
+          // rather than a blank builder that would autosave over the real flow.
+          setLoadError(true)
         }
         setAgents(agentsData.success ? agentsData.agents.map((a: Agent) => ({ id: a.id, title: a.title })) : [])
       })
-      .catch(() => undefined)
+      .catch(() => {
+        // Network/parse failure loading the flow — same guard: never render an
+        // editable-but-empty canvas that could clobber the stored graph.
+        if (!cancelled) setLoadError(true)
+      })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
@@ -420,6 +436,12 @@ function FlowBuilder() {
   // The graph as first loaded — the broadcast effect skips it so opening a flow
   // never pushes the stale persisted graph over a live editor's unsaved work.
   const loadedGraphRef = useRef<FlowGraph | null>(null)
+  // Authoritative "we loaded a real graph" flag for the save/autosave closures
+  // (a ref so the debounced timer reads the live value, not a stale capture).
+  // Flips true only after a successful load populates state; guards the
+  // data-loss path where a failed load would let the persister autosave PUT an
+  // empty graph over the stored flow.
+  const loadedOkRef = useRef(false)
   // The flow's updatedAt when we last loaded/saved it — sent on save so the
   // server rejects a stale overwrite (optimistic concurrency, FLOW_STALE_WRITE).
   const baseUpdatedAt = useRef<string | null>(null)
@@ -448,7 +470,11 @@ function FlowBuilder() {
   )
   const lastJamAuditAt = useRef(0)
   const autosave = useCallback(async () => {
-    if (!canEdit || viewingVersion) return
+    // Never autosave before a successful load — a transient load failure leaves
+    // defaults in place, and a PUT here would overwrite the stored flow with an
+    // empty graph (the server skips the stale-write guard when baseUpdatedAt is
+    // absent, which it is until we've loaded).
+    if (!loadedOkRef.current || !canEdit || viewingVersion) return
     const suppressAudit = !shouldRecordJamAudit(lastJamAuditAt.current, Date.now())
     const response = await fetch('/api/flows', {
       method: 'PUT',
@@ -483,7 +509,7 @@ function FlowBuilder() {
   // Debounce: persist 2s after the last graph change (local OR merged remote —
   // the persister persists the whole room's work).
   useEffect(() => {
-    if (!canEdit || !isPersister || viewingVersion) return
+    if (!loadedOkRef.current || !canEdit || !isPersister || viewingVersion) return
     if (graph === loadedGraphRef.current) return
     const timer = window.setTimeout(() => { void autosave() }, 2000)
     return () => window.clearTimeout(timer)
@@ -760,6 +786,7 @@ function FlowBuilder() {
   }, [validation])
 
   const save = useCallback(async (): Promise<boolean> => {
+    if (!loadedOkRef.current) return false // never overwrite a flow we failed to load
     if (external) return false // guests autosave the canvas; settings saves are org-only
     if (!canEdit) {
       toast.error('This flow is view-only — ask its owner to make changes.')
@@ -1223,6 +1250,23 @@ function FlowBuilder() {
     )
   }
 
+  if (loadError) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
+        <div className="max-w-sm space-y-2">
+          <h2 className="text-lg font-semibold">Couldn’t load this flow</h2>
+          <p className="text-sm text-muted-foreground">
+            It may have been deleted, or the connection dropped. Nothing was changed — your flow is safe.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button onClick={() => window.location.reload()}>Try again</Button>
+          <Button variant="outline" onClick={() => router.push('/flows')}>Back to flows</Button>
+        </div>
+      </div>
+    )
+  }
+
   // While viewing a historical snapshot, the canvas renders that version's
   // graph and every mutation path is inert — the live draft (`graph` state)
   // is untouched underneath, so Save/Publish/Run still act on the real draft.
@@ -1565,7 +1609,7 @@ function FlowBuilder() {
           </ResizablePanel>
         )}
 
-        {showCopilot && (
+        {showCopilot && !external && (
           <ResizablePanel storageKey="flow.copilotWidth">
             <CopilotPanel
               graph={graph}

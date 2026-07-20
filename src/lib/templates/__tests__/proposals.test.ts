@@ -7,6 +7,8 @@ import {
   writeProposals,
   markAccepted,
   markDismissed,
+  stampCreatedTemplate,
+  reopenUnfulfilled,
 } from '../proposals'
 
 // --- Pure (no DB): the open-queue filter shape. Runs in every environment. ---
@@ -122,6 +124,56 @@ if (TEST_DB) {
       assert.equal((await listOpenProposals(org.id)).length, 0)
 
       assert.equal((await markDismissed(p.id, org.id)).count, 0, 'terminal: second dismiss is a no-op')
+    } finally {
+      await prisma.organization.delete({ where: { id: org.id } }).catch(() => {})
+    }
+  })
+
+  test('claim-first accept: a concurrent second claim is a no-op, so no duplicate template', async () => {
+    // Mirrors the accept route's atomic claim (markAccepted with no template id
+    // BEFORE createTemplate). Two racing accepts must not both proceed to create.
+    const org = await mkOrg('prop-claim')
+    try {
+      await writeProposals(org.id, [{ title: 'T', rationale: 'r', kind: 'agent_template', configuration: {}, sourceEvidence: {} }])
+      const [p] = await listOpenProposals(org.id)
+
+      const first = await markAccepted(p.id, org.id) // claim, id stamped later
+      const second = await markAccepted(p.id, org.id) // racing accept
+      assert.equal(first.count, 1, 'first claim wins')
+      assert.equal(second.count, 0, 'second claim is a no-op — the duplicate-create guard')
+
+      // Winner stamps the created id; the loser would return this idempotently.
+      await stampCreatedTemplate(p.id, org.id, 'tmpl-abc')
+      const got = await getProposal(p.id, org.id)
+      assert.equal(got?.status, 'accepted')
+      assert.equal(got?.createdTemplateId, 'tmpl-abc')
+    } finally {
+      await prisma.organization.delete({ where: { id: org.id } }).catch(() => {})
+    }
+  })
+
+  test('reopenUnfulfilled returns a claimed-but-unstamped proposal to the queue; never a fulfilled one', async () => {
+    const org = await mkOrg('prop-reopen')
+    try {
+      await writeProposals(org.id, [
+        { title: 'Unfulfilled', rationale: 'r', kind: 'agent_template', configuration: {}, sourceEvidence: {} },
+        { title: 'Fulfilled', rationale: 'r', kind: 'agent_template', configuration: {}, sourceEvidence: {} },
+      ])
+      const open = await listOpenProposals(org.id)
+      const unfulfilled = open.find((p) => p.title === 'Unfulfilled')!
+      const fulfilled = open.find((p) => p.title === 'Fulfilled')!
+
+      // Unfulfilled: claimed (accepted) but template creation "threw" before stamping.
+      await markAccepted(unfulfilled.id, org.id)
+      // Fulfilled: claimed AND stamped.
+      await markAccepted(fulfilled.id, org.id)
+      await stampCreatedTemplate(fulfilled.id, org.id, 'tmpl-xyz')
+
+      assert.equal((await reopenUnfulfilled(unfulfilled.id, org.id)).count, 1, 'unstamped accept reopens')
+      assert.equal((await getProposal(unfulfilled.id, org.id))?.status, 'open')
+
+      assert.equal((await reopenUnfulfilled(fulfilled.id, org.id)).count, 0, 'a stamped accept never reopens')
+      assert.equal((await getProposal(fulfilled.id, org.id))?.status, 'accepted')
     } finally {
       await prisma.organization.delete({ where: { id: org.id } }).catch(() => {})
     }

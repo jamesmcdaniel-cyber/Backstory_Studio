@@ -97,6 +97,39 @@ export async function markAccepted(
 }
 
 /**
+ * Stamp the created template id onto an already-accepted proposal. Best-effort
+ * second step of the accept flow: the proposal is claimed (markAccepted) BEFORE
+ * the template is created so a retry can't double-create, then this records the
+ * resulting id for the idempotent-return path.
+ */
+export async function stampCreatedTemplate(
+  id: string,
+  organizationId: string,
+  createdTemplateId: string,
+): Promise<Prisma.BatchPayload> {
+  return prisma.templateProposal.updateMany({
+    where: { id, organizationId },
+    data: { createdTemplateId },
+  })
+}
+
+/**
+ * Reopen a proposal that was claimed (accepted) but whose template creation then
+ * failed, so a retry can create it cleanly instead of leaving a stuck 'accepted'
+ * row with no template. Guarded to accepted-but-unstamped rows so it can never
+ * reopen a genuinely fulfilled proposal.
+ */
+export async function reopenUnfulfilled(
+  id: string,
+  organizationId: string,
+): Promise<Prisma.BatchPayload> {
+  return prisma.templateProposal.updateMany({
+    where: { id, organizationId, status: 'accepted', createdTemplateId: null },
+    data: { status: 'open' },
+  })
+}
+
+/**
  * Dismiss a proposal (terminal). Idempotent-safe via the `status: 'open'`
  * guard — dismissing an already-terminal proposal is a no-op (count 0).
  */

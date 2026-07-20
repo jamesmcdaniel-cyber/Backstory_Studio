@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { generateStructured } from '@/lib/llm/model-runner'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { parseMatches } from '@/lib/templates/ai-search'
+import { assertAiCallAllowed, recordEstimatedUsage } from '@/lib/usage/ai-guard'
 
 const ItemSchema = z.object({
   id: z.string(),
@@ -45,8 +46,10 @@ const MAX_MATCHES = 6
 // its already-loaded integration catalog, so no extra DB access is needed. The
 // model only ranks/reasons; the id filter below is the source of truth, so a
 // hallucinated id can never reach the UI.
-export const POST = withAuthenticatedApi(async (request) => {
+export const POST = withAuthenticatedApi(async (request, auth) => {
   const { query, items } = BodySchema.parse(await request.json())
+  // Gate before model spend: provider, per-user rate limit, monthly ceiling.
+  await assertAiCallAllowed({ organizationId: auth.organizationId, rateKey: `ai-search:${auth.dbUser.id}`, limit: 20 })
 
   let raw: string
   try {
@@ -61,6 +64,7 @@ export const POST = withAuthenticatedApi(async (request) => {
   } catch (error) {
     throw new ApiError('AI search is not configured for this workspace.', 503, 'AI_SEARCH_UNAVAILABLE', error)
   }
+  recordEstimatedUsage(auth.organizationId, query, formatCatalog(items), raw)
 
   // Keep only ids the client actually sent; dedupe; cap. (parseMatches tolerates
   // whatever shape the model returns.)

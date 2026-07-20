@@ -8,7 +8,7 @@ import { agentVisibilityScope } from '@/lib/server/visibility'
 import { rateLimit } from '@/lib/ratelimit'
 
 export const runtime = 'nodejs'
-export const maxDuration = 1200
+export const maxDuration = 800
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-2)

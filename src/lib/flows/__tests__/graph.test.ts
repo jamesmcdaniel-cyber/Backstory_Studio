@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { flowGraphSchema, emptyGraph, triggerInputFieldSchema, AI_OPS } from '../graph'
+import { flowGraphSchema, emptyGraph, triggerInputFieldSchema, AI_OPS, MAX_GRAPH_NODES, MAX_GRAPH_EDGES } from '../graph'
 
 test('emptyGraph has a single manual trigger node and no edges', () => {
   const g = emptyGraph()
@@ -189,4 +189,34 @@ test('node schema accepts an optional canvas position and round-trips it', () =>
     const a = withPos.data.nodes.find((n) => n.id === 'a')!
     if (a.type === 'agent') assert.equal(a.data.agentId, 'x')
   }
+})
+
+test('flowGraphSchema caps node and edge counts (multi-MB payload guard)', () => {
+  const node = (id: string) => ({ id, type: 'agent', data: { agentId: 'a1', input: 'x' } })
+  const edge = (id: string) => ({ id, source: 'trigger', target: 'trigger' })
+
+  // At the cap: accepted.
+  assert.equal(
+    flowGraphSchema.parse({
+      nodes: Array.from({ length: MAX_GRAPH_NODES }, (_, i) => node(`n${i}`)),
+      edges: [],
+    }).nodes.length,
+    MAX_GRAPH_NODES,
+  )
+
+  // One over the node cap: rejected.
+  assert.throws(() =>
+    flowGraphSchema.parse({
+      nodes: Array.from({ length: MAX_GRAPH_NODES + 1 }, (_, i) => node(`n${i}`)),
+      edges: [],
+    }),
+  )
+
+  // One over the edge cap: rejected.
+  assert.throws(() =>
+    flowGraphSchema.parse({
+      nodes: [{ id: 'trigger', type: 'trigger', data: {} }],
+      edges: Array.from({ length: MAX_GRAPH_EDGES + 1 }, (_, i) => edge(`e${i}`)),
+    }),
+  )
 })

@@ -2,21 +2,22 @@ import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { DEFAULT_SUMMARY_MODEL } from '@/lib/llm/model-runner'
-import { qwenClient, qwenConfigured, qwenModel } from '@/lib/llm/qwen'
+import { qwenClient, qwenModel } from '@/lib/llm/qwen'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { executionVisibilityScope } from '@/lib/server/visibility'
+import { assertAiCallAllowed } from '@/lib/usage/ai-guard'
+import { recordTokenUsage } from '@/lib/usage/budget'
 
 const SYSTEM_PROMPT =
   'Answer questions about an AI agent run. Be precise about its output, tool calls, and errors. Do not claim actions not present in the run data.'
 
 export const POST = withAuthenticatedApi(async (request, auth) => {
-  if (!process.env.ANTHROPIC_API_KEY && !qwenConfigured()) {
-    throw new ApiError('No model provider is configured', 503, 'AI_UNAVAILABLE')
-  }
   const { executionId, question } = z.object({
     executionId: z.string().min(1),
     question: z.string().min(1).max(4000),
   }).parse(await request.json())
+  // Gate before model spend: provider, per-user rate limit, monthly ceiling.
+  await assertAiCallAllowed({ organizationId: auth.organizationId, rateKey: `run-chat:${auth.dbUser.id}`, limit: 20 })
 
   const execution = await prisma.agentExecution.findFirst({
     where: { id: executionId, organizationId: auth.organizationId, ...executionVisibilityScope(auth.dbUser.id) },
@@ -42,6 +43,11 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: prompt }],
   })
+  // Real usage counts here (the SDK returns them) — record against the ceiling.
+  void recordTokenUsage(
+    auth.organizationId,
+    (response.usage?.input_tokens ?? 0) + (response.usage?.output_tokens ?? 0),
+  ).catch(() => undefined)
   const answer = response.content
     .filter((block): block is Anthropic.TextBlock => block.type === 'text')
     .map((block) => block.text)

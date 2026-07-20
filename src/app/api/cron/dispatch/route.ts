@@ -30,7 +30,7 @@ import { blocksSchedule } from '@/lib/flows/schedule-blocking'
 import { captureError } from '@/lib/observability/sentry'
 
 export const runtime = 'nodejs'
-export const maxDuration = 1200
+export const maxDuration = 800
 export const dynamic = 'force-dynamic'
 
 const MAX_AGENTS_PER_TICK = 25

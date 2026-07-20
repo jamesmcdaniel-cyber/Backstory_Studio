@@ -5,6 +5,7 @@ import { agentVisibilityScope } from '@/lib/server/visibility'
 import { assertFlowEditable } from '@/lib/flows/access'
 import { notify } from '@/lib/notifications/service'
 import { recordAudit } from '@/lib/audit'
+import { rateLimit } from '@/lib/ratelimit'
 
 const bodySchema = z.object({ userIds: z.array(z.string().min(1)).min(1).max(50) })
 
@@ -17,6 +18,10 @@ const bodySchema = z.object({ userIds: z.array(z.string().min(1)).min(1).max(50)
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-2)
   if (!id) throw new ApiError('Flow id is required')
+  // Each invite fires an in-app notification + web push. Throttle per inviter so
+  // the endpoint can't be looped to flood colleagues with notifications.
+  const limited = await rateLimit(`flow-invite:${auth.dbUser.id}`, { limit: 10, windowMs: 60_000 })
+  if (!limited.ok) throw new ApiError('You’re inviting too quickly — try again in a moment.', 429, 'RATE_LIMITED')
   const flow = await prisma.flow.findFirst({
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
     select: { id: true, name: true, visibility: true, userId: true },

@@ -9,7 +9,7 @@ import { ApiError } from '@/lib/server/api-handler'
 import { triggerConditionPasses } from '@/lib/flows/trigger-condition'
 
 export const runtime = 'nodejs'
-export const maxDuration = 1200
+export const maxDuration = 800
 
 // External webhook trigger for flows. Authenticated by the per-flow secret
 // (hash stored in flow.trigger.webhookSecretHash) instead of a session — mirrors

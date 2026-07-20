@@ -33,6 +33,7 @@ import { createModelRunner, DEFAULT_AGENT_MODEL, DEFAULT_SUMMARY_MODEL } from '@
 import { subflowChildInput, subflowGuard } from '@/lib/flows/subflow'
 import { retrieveKnowledge } from '@/lib/knowledge/retrieve'
 import { AGENT_RUN_TIMEOUT_MS } from '@/lib/agents/timeouts'
+import { recordTokenUsage } from '@/lib/usage/budget'
 
 export type FlowExecutionJob = {
   flowId: string
@@ -699,6 +700,14 @@ export async function runFlowExecution(
               : undefined,
           },
         )
+        // Meter the AI step against the workspace monthly ceiling. Agent steps
+        // record their own spend inside runAgentExecution; a bare 'ai' step calls
+        // the model directly, so without this a loop of ai steps would spend
+        // unmetered and never trip the ceiling.
+        void recordTokenUsage(
+          job.organizationId,
+          (turn.usage?.inputTokens ?? 0) + (turn.usage?.outputTokens ?? 0),
+        ).catch(() => undefined)
 
         if (!prompt.structuredFields) {
           await finish({ status: 'succeeded', output: turn.text })
