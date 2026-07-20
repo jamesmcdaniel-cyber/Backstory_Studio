@@ -668,7 +668,7 @@ const FIGMA_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'GET',
-        endpoint: `/v1/files/${str(args.fileKey)}`,
+        endpoint: `/v1/files/${encodeURIComponent(str(args.fileKey))}`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
         ...(num(args.depth, 0) > 0 ? { params: { depth: num(args.depth, 1) } } : {}),
@@ -689,7 +689,7 @@ const FIGMA_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'GET',
-        endpoint: `/v1/projects/${str(args.projectId)}/files`,
+        endpoint: `/v1/projects/${encodeURIComponent(str(args.projectId))}/files`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
       }).then((r) => r.data),
@@ -709,7 +709,7 @@ const FIGMA_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'GET',
-        endpoint: `/v1/files/${str(args.fileKey)}/comments`,
+        endpoint: `/v1/files/${encodeURIComponent(str(args.fileKey))}/comments`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
       }).then((r) => r.data),
@@ -730,7 +730,7 @@ const FIGMA_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'POST',
-        endpoint: `/v1/files/${str(args.fileKey)}/comments`,
+        endpoint: `/v1/files/${encodeURIComponent(str(args.fileKey))}/comments`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
         data: { message: str(args.message) },

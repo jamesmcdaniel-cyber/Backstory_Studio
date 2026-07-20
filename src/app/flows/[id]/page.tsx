@@ -454,7 +454,11 @@ function FlowBuilder() {
     setSelectedId((current) => (current && !next.nodes.some((n) => n.id === current) ? null : current))
   }, [viewingVersion])
   const { participants, roster, cursors, broadcastGraph, sendCursor, setSelection, setInHuddle, bus, selfClientId } =
-    useFlowCollab(id, self, applyRemoteGraph, () => graphRef.current)
+    // Return null until our own load succeeded — otherwise a failed-load client
+    // (graph = emptyGraph) would answer a newcomer's realtime bootstrap with an
+    // empty graph, which the newcomer adopts and its persister autosaves over
+    // the real flow. The hook skips broadcasting when this yields a non-graph.
+    useFlowCollab(id, self, applyRemoteGraph, () => (loadedOkRef.current ? graphRef.current : null))
   // Everyone here except me — for the presence avatar stack and the Jam dialog.
   const others = useMemo(() => participants.filter((p) => p.clientId !== selfClientId), [participants, selfClientId])
   // ── Jam autosave ────────────────────────────────────────────────────────────
@@ -570,10 +574,14 @@ function FlowBuilder() {
   // the remote-applied graph and the initial loaded graph so only genuine local
   // edits go out — never an echo, never a stale-load clobber.
   useEffect(() => {
+    // Never broadcast before our own load succeeded (would push an empty graph)
+    // or as a view-only participant (their local changes must not reach the
+    // room or the elected persister).
+    if (!loadedOkRef.current || !canEdit) return
     if (graph === remoteGraphRef.current) { remoteGraphRef.current = null; return }
     if (graph === loadedGraphRef.current) return
     broadcastGraph(graph)
-  }, [graph, broadcastGraph])
+  }, [graph, broadcastGraph, canEdit])
 
   const undo = useCallback(() => {
     const prev = undoStack.current.pop()
@@ -1042,6 +1050,14 @@ function FlowBuilder() {
   }, [id, save, pollRuns, testInput, validation, inputFields, viewingVersion])
 
   const fixWithCopilot = useCallback(async () => {
+    // Copilot generation grounds on the CALLER's workspace, so an external guest
+    // would inject their org's agent/tool ids into another org's flow; and a
+    // view-only user must not edit at all. Gate the action (the button is also
+    // hidden for these users — this is the server-of-truth guard).
+    if (external || !canEdit) {
+      toast.error(external ? 'Copilot isn’t available on flows shared with you.' : 'This flow is view-only — ask its owner to make changes.')
+      return
+    }
     if (viewingVersion) {
       toast.error('Close the version view before applying fixes.')
       return
@@ -1073,7 +1089,7 @@ function FlowBuilder() {
     } finally {
       setFixing(false)
     }
-  }, [graph, validation, commitGraph, viewingVersion])
+  }, [graph, validation, commitGraph, viewingVersion, external, canEdit])
 
   const onCopilotOps = useCallback(
     (ops: CopilotOp[]) => {
@@ -1609,7 +1625,7 @@ function FlowBuilder() {
           </ResizablePanel>
         )}
 
-        {showCopilot && !external && (
+        {showCopilot && !external && canEdit && (
           <ResizablePanel storageKey="flow.copilotWidth">
             <CopilotPanel
               graph={graph}
@@ -1669,6 +1685,7 @@ function FlowBuilder() {
               validation={validation}
               fixing={fixing}
               onFixWithCopilot={fixWithCopilot}
+              canFix={canEdit && !external}
               onClose={() => setShowChecker(false)}
               onJump={jumpToNode}
             />

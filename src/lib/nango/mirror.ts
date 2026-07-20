@@ -27,6 +27,10 @@ export async function syncOrgNangoConnections(
 ): Promise<Record<string, NangoConnectionStatus>> {
   const response = await getNangoClient().listConnections({
     tags: { [NANGO_ORG_TAG]: organizationId },
+    // Explicit high limit: a capped/partial first page would make `seen` a
+    // subset and the reconcile below over-delete. Workspaces have far fewer
+    // than this many connections.
+    limit: 1000,
   })
 
   const connections: Record<string, NangoConnectionStatus> = {}
@@ -86,10 +90,19 @@ export async function syncOrgNangoConnections(
     })
   }
 
-  // Drop mirror rows for connections that no longer exist in Nango.
-  await prisma.nangoConnection.deleteMany({
-    where: { organizationId, connectionId: { notIn: seen } },
-  })
+  // Drop mirror rows for connections that no longer exist in Nango — but ONLY
+  // against a non-empty snapshot. A transient empty/partial listConnections
+  // (Nango tag-index eventual consistency right after a connect, or a backend
+  // hiccup) would otherwise wipe the org's whole mirror via `notIn: []`,
+  // silently disconnecting every integration until the next full sync. Better
+  // to leave a stale row (a dead connection resolves and the tool call 404s
+  // once) than to disconnect everything. Genuine single-connection removals are
+  // handled directly by the DELETE /api/nango/connections route.
+  if (seen.length > 0) {
+    await prisma.nangoConnection.deleteMany({
+      where: { organizationId, connectionId: { notIn: seen } },
+    })
+  }
 
   return connections
 }

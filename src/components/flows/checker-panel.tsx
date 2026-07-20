@@ -33,12 +33,15 @@ export function CheckerPanel({
   onJump,
   onFixWithCopilot,
   fixing,
+  canFix = true,
   onClose,
 }: {
   validation: FlowValidationResult
   onJump: (nodeId: string) => void
   onFixWithCopilot: () => void
   fixing: boolean
+  /** Copilot fixes edit the flow — hidden for view-only + external guests. */
+  canFix?: boolean
   onClose: () => void
 }) {
   const hasIssues = validation.errors.length > 0 || validation.warnings.length > 0
@@ -85,7 +88,7 @@ export function CheckerPanel({
           </>
         )}
       </div>
-      {hasIssues && (
+      {hasIssues && canFix && (
         <div className="border-t border-border p-3">
           <Button variant="outline" size="sm" className="w-full" onClick={onFixWithCopilot} loading={fixing} disabled={fixing}>
             <Sparkles className="mr-1.5 h-4 w-4" /> Fix with Copilot
