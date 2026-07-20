@@ -35,8 +35,20 @@ export function integrationSlug(name: string): string | null {
   return null
 }
 
+/**
+ * Display label for a requirement chip. Strips internal plane prefixes
+ * (nango:, native:, people_ai:) that leak into stored connector keys — users
+ * see "Snowflake", not "nango:snowflake". A bare provider slug is title-cased;
+ * branded/multi-word names (Backstory MCP, HTTP API, Email) are left untouched.
+ */
+export function integrationLabel(name: string): string {
+  const stripped = name.replace(/^(?:nango|native|people_ai):/i, '')
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(stripped)) return stripped
+  return stripped.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
 export function IntegrationChip({ name }: { name: string }) {
-  const label = name
+  const label = integrationLabel(name)
   const isHttp = label.toLowerCase().includes('http')
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 py-1 pl-1 pr-2.5 text-xs font-medium text-foreground/80">
