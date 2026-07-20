@@ -11,7 +11,7 @@
  * connection config key(s) in PROVIDER_CONFIG_KEYS.
  */
 
-import { type DeliveryConnection, type NangoProxy, defaultProxy } from './delivery'
+import { type DeliveryConnection, type NangoProxy, defaultProxy, DELIVERY_TOOLS, DELIVERY_PROVIDERS } from './delivery'
 
 export type NangoToolSpec = {
   /** Capability/provider key, e.g. 'github'. Runtime provider id is `nango:<provider>`. */
@@ -562,4 +562,28 @@ export const NANGO_PROVIDER_TOOLS: NangoToolSpec[] = [
 /** Tools for one provider (or [] if none authored yet). */
 export function toolsForProvider(provider: string): NangoToolSpec[] {
   return NANGO_PROVIDER_TOOLS.filter((tool) => tool.provider === provider)
+}
+
+/**
+ * Number of agent tools (read + write, including the delivery adapters) wired
+ * for a given Nango connection config key. 0 means the provider can be connected
+ * in the Nango dashboard but no agent tool will ever resolve that connection —
+ * the one thing linking the dashboard catalog to this code registry is exact
+ * config-key equality, so this lets the integrations UI and ops see the match.
+ */
+export const NANGO_TOOL_COUNT_BY_CONFIG_KEY: Record<string, number> = (() => {
+  const counts: Record<string, number> = {}
+  for (const [provider, keys] of Object.entries(PROVIDER_CONFIG_KEYS)) {
+    const n = NANGO_PROVIDER_TOOLS.filter((tool) => tool.provider === provider).length
+    for (const key of keys) counts[key] = (counts[key] ?? 0) + n
+  }
+  for (const tool of DELIVERY_TOOLS) {
+    for (const key of DELIVERY_PROVIDERS[tool.capability]) counts[key] = (counts[key] ?? 0) + 1
+  }
+  return counts
+})()
+
+/** Agent-tool count for a Nango config key (0 = connectable but yields no tools). */
+export function toolCountForConfigKey(configKey: string): number {
+  return NANGO_TOOL_COUNT_BY_CONFIG_KEY[configKey] ?? 0
 }

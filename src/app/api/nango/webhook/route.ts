@@ -1,0 +1,87 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getNangoClient, nangoConfigured } from '@/lib/nango/client'
+import { syncOrgNangoConnections } from '@/lib/nango/mirror'
+import { apiLogger } from '@/lib/logger'
+
+export const runtime = 'nodejs'
+
+/**
+ * Nango connection-lifecycle webhook. Nango calls this when an account is
+ * connected, refreshed, or errors. It keeps the `nango_connections` mirror the
+ * agent runtime reads in sync WITHOUT waiting for a user to reopen the
+ * integrations page — so a scheduled/headless run can resolve a freshly
+ * connected account immediately.
+ *
+ * Authenticated by the Nango webhook signature (verifyIncomingWebhookRequest,
+ * keyed by NANGO_SECRET_KEY) rather than a session — same "verify then act"
+ * shape as the People.ai and flow-trigger webhooks. Configure the endpoint URL
+ * in the Nango dashboard (Environment Settings → Webhooks); Nango signs it with
+ * the same environment secret key the backend client already uses.
+ *
+ * Always returns 200 on a verified request (even when we choose not to act), so
+ * transient errors on our side don't trigger Nango's retry/backoff — the next
+ * event or a page-view sync will reconcile.
+ */
+export async function POST(request: NextRequest) {
+  // No secret key configured → nothing can be verified or mirrored; ack so Nango
+  // doesn't retry against a deployment that isn't wired up yet.
+  if (!nangoConfigured()) {
+    return NextResponse.json({ ok: true, skipped: 'nango-unconfigured' })
+  }
+
+  const raw = await request.text()
+  const headers: Record<string, string> = {}
+  request.headers.forEach((value, key) => {
+    headers[key] = value
+  })
+
+  let verified = false
+  try {
+    verified = getNangoClient().verifyIncomingWebhookRequest(raw, headers)
+  } catch (error) {
+    apiLogger.error('nango webhook verification threw', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    verified = false
+  }
+  if (!verified) {
+    return NextResponse.json({ ok: false, error: 'Invalid webhook signature' }, { status: 401 })
+  }
+
+  let body: Record<string, unknown>
+  try {
+    body = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    // Verified but unparseable — ack and move on.
+    return NextResponse.json({ ok: true, skipped: 'unparseable' })
+  }
+
+  // Only auth (connection lifecycle) events touch the mirror. sync/forward/
+  // async_action events are ignored.
+  if (body.type === 'auth') {
+    const endUser = (body.endUser ?? null) as { organizationId?: string } | null
+    const tags = (body.tags ?? null) as Record<string, string> | null
+    // The connect session sets organization + tags.org_id, so the org is on the
+    // payload — no extra Nango round-trip needed to scope the sync.
+    const organizationId = endUser?.organizationId || tags?.org_id
+    if (organizationId) {
+      try {
+        // Re-sync the whole org: upserts every current connection and reconciles
+        // deletions, so this one handler covers creation, refresh, and removal.
+        await syncOrgNangoConnections(organizationId)
+      } catch (error) {
+        apiLogger.error('nango webhook mirror sync failed', {
+          organizationId,
+          connectionId: typeof body.connectionId === 'string' ? body.connectionId : undefined,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    } else {
+      apiLogger.warn('nango auth webhook without an org tag — skipping mirror sync', {
+        connectionId: typeof body.connectionId === 'string' ? body.connectionId : undefined,
+      })
+    }
+  }
+
+  return NextResponse.json({ ok: true })
+}

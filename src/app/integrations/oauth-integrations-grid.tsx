@@ -21,6 +21,9 @@ type Integration = {
   provider: string
   name: string
   logo?: string
+  // Agent tools wired for this integration's Nango config key. 0 = connectable
+  // but no agent tool resolves it; undefined only from a pre-upgrade cache.
+  toolCount?: number
 }
 
 type AiMatch = { id: string; reason: string }
@@ -266,9 +269,18 @@ export function OAuthIntegrationsGrid() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="line-clamp-2 min-h-10 text-sm text-gray-500">
-                  Connect your {integration.name} account so agents can act on your behalf.
-                </p>
+                {integration.toolCount === 0 ? (
+                  <p className="line-clamp-2 min-h-10 text-sm text-amber-600 dark:text-amber-400">
+                    Connectable, but no agent tools are wired for this integration yet.
+                  </p>
+                ) : (
+                  <p className="line-clamp-2 min-h-10 text-sm text-gray-500">
+                    Connect your {integration.name} account so agents can act on your behalf.
+                    {integration.toolCount
+                      ? ` ${integration.toolCount} agent tool${integration.toolCount === 1 ? '' : 's'} available.`
+                      : ''}
+                  </p>
+                )}
                 {connection?.error && <p className="text-sm text-red-600">{connection.error}</p>}
                 {connection?.connected
                   ? <Button className="w-full" variant="outline" onClick={() => disconnect(integration)} loading={busy === integration.id}>Disconnect</Button>

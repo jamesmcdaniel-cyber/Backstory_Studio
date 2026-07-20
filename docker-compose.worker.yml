@@ -7,8 +7,11 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      KLAVIS_API_KEY: ${KLAVIS_API_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      # Model provider (runs execute here) — Anthropic (Claude), not OpenAI.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Integrations: OAuth + tool proxy via Nango (replaced Klavis).
+      NANGO_SECRET_KEY: ${NANGO_SECRET_KEY}
     ports:
       - "3002:3002"
     restart: unless-stopped

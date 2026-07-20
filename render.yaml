@@ -33,18 +33,14 @@ services:
         sync: false
       - key: ENCRYPTION_KEY
         sync: false
-      # Model providers (runs execute here, so the worker needs both).
+      # Model provider (runs execute here) — Anthropic (Claude).
       - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: OPENAI_API_KEY
         sync: false
       - key: AGENT_MODEL
         value: claude-opus-4-8
       - key: SUMMARY_MODEL
         value: claude-haiku-4-5
-      # Tool planes + RAG (the worker loads tools and retrieves context).
-      - key: KLAVIS_API_KEY
-        sync: false
+      # Integrations (OAuth + tool proxy via Nango) + RAG. Nango replaced Klavis.
       - key: NANGO_SECRET_KEY
         sync: false
       - key: VOYAGE_API_KEY
