@@ -45,6 +45,8 @@ export const PROVIDER_CONFIG_KEYS: Record<string, readonly string[]> = {
   slack: ['slack'],
   gmail: ['google-mail', 'gmail'],
   salesforce: ['salesforce', 'salesforce-sandbox'],
+  airtable: ['airtable'],
+  figma: ['figma'],
 }
 
 /** Provider keys offered to agent drafting and template generation. */
@@ -541,6 +543,201 @@ const GMAIL_READ_TOOLS: NangoToolSpec[] = [
   },
 ]
 
+// ── Airtable (REST API v0) ────────────────────────────────────────────────────
+// Path segments are URL-encoded: a table can be referenced by its human name
+// (spaces/punctuation), unlike the id-like keys the other providers use.
+const airtablePath = (baseId: string, table: string, recordId?: string) =>
+  `/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(table)}${recordId ? `/${encodeURIComponent(recordId)}` : ''}`
+
+const AIRTABLE_TOOLS: NangoToolSpec[] = [
+  {
+    provider: 'airtable',
+    name: 'airtable_list_records',
+    description: 'List records from an Airtable table, optionally filtered by a formula.',
+    isWrite: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseId: { type: 'string', description: 'Airtable base id (starts with app…).' },
+        table: { type: 'string', description: 'Table id or name.' },
+        maxRecords: { type: 'number', description: 'Max records to return (default 100).' },
+        view: { type: 'string', description: 'Optional view name/id to read from.' },
+        filterByFormula: { type: 'string', description: 'Optional Airtable formula to filter rows.' },
+      },
+      required: ['baseId', 'table'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'GET',
+        endpoint: airtablePath(str(args.baseId), str(args.table)),
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+        params: {
+          maxRecords: num(args.maxRecords, 100),
+          ...(str(args.view) ? { view: str(args.view) } : {}),
+          ...(str(args.filterByFormula) ? { filterByFormula: str(args.filterByFormula) } : {}),
+        },
+      }).then((r) => r.data),
+  },
+  {
+    provider: 'airtable',
+    name: 'airtable_get_record',
+    description: 'Fetch a single Airtable record by id.',
+    isWrite: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseId: { type: 'string' },
+        table: { type: 'string' },
+        recordId: { type: 'string', description: 'Record id (starts with rec…).' },
+      },
+      required: ['baseId', 'table', 'recordId'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'GET',
+        endpoint: airtablePath(str(args.baseId), str(args.table), str(args.recordId)),
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+      }).then((r) => r.data),
+  },
+  {
+    provider: 'airtable',
+    name: 'airtable_create_record',
+    description: 'Create a record in an Airtable table from a field name/value map.',
+    isWrite: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseId: { type: 'string' },
+        table: { type: 'string' },
+        fields: { type: 'object', description: 'Field name → value map for the new record.' },
+      },
+      required: ['baseId', 'table', 'fields'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'POST',
+        endpoint: airtablePath(str(args.baseId), str(args.table)),
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+        data: { fields: (args.fields as Record<string, unknown>) ?? {} },
+      }).then((r) => r.data),
+  },
+  {
+    provider: 'airtable',
+    name: 'airtable_update_record',
+    description: 'Update fields on an existing Airtable record (PATCH leaves unspecified fields as-is).',
+    isWrite: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        baseId: { type: 'string' },
+        table: { type: 'string' },
+        recordId: { type: 'string' },
+        fields: { type: 'object', description: 'Field name → value map to merge.' },
+      },
+      required: ['baseId', 'table', 'recordId', 'fields'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'PATCH',
+        endpoint: airtablePath(str(args.baseId), str(args.table), str(args.recordId)),
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+        data: { fields: (args.fields as Record<string, unknown>) ?? {} },
+      }).then((r) => r.data),
+  },
+]
+
+// ── Figma (REST API v1) ───────────────────────────────────────────────────────
+const FIGMA_TOOLS: NangoToolSpec[] = [
+  {
+    provider: 'figma',
+    name: 'figma_get_file',
+    description: 'Fetch a Figma file’s document tree and metadata by file key.',
+    isWrite: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string', description: 'File key from the Figma URL (…/file/<key>/…).' },
+        depth: { type: 'number', description: 'Optional tree depth to limit the response.' },
+      },
+      required: ['fileKey'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'GET',
+        endpoint: `/v1/files/${str(args.fileKey)}`,
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+        ...(num(args.depth, 0) > 0 ? { params: { depth: num(args.depth, 1) } } : {}),
+      }).then((r) => r.data),
+  },
+  {
+    provider: 'figma',
+    name: 'figma_list_project_files',
+    description: 'List the files in a Figma project.',
+    isWrite: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'Figma project id.' },
+      },
+      required: ['projectId'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'GET',
+        endpoint: `/v1/projects/${str(args.projectId)}/files`,
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+      }).then((r) => r.data),
+  },
+  {
+    provider: 'figma',
+    name: 'figma_get_comments',
+    description: 'Read the comments on a Figma file.',
+    isWrite: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string' },
+      },
+      required: ['fileKey'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'GET',
+        endpoint: `/v1/files/${str(args.fileKey)}/comments`,
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+      }).then((r) => r.data),
+  },
+  {
+    provider: 'figma',
+    name: 'figma_post_comment',
+    description: 'Post a comment on a Figma file.',
+    isWrite: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fileKey: { type: 'string' },
+        message: { type: 'string', description: 'Comment text.' },
+      },
+      required: ['fileKey', 'message'],
+    },
+    run: (connection, args, proxy = defaultProxy()) =>
+      proxy({
+        method: 'POST',
+        endpoint: `/v1/files/${str(args.fileKey)}/comments`,
+        connectionId: connection.connectionId,
+        providerConfigKey: connection.providerConfigKey,
+        data: { message: str(args.message) },
+      }).then((r) => r.data),
+  },
+]
+
 /** Every authored provider tool. */
 export const NANGO_PROVIDER_TOOLS: NangoToolSpec[] = [
   ...GITHUB_TOOLS,
@@ -557,6 +754,8 @@ export const NANGO_PROVIDER_TOOLS: NangoToolSpec[] = [
   ...SLACK_READ_TOOLS,
   ...SALESFORCE_TOOLS,
   ...GMAIL_READ_TOOLS,
+  ...AIRTABLE_TOOLS,
+  ...FIGMA_TOOLS,
 ]
 
 /** Tools for one provider (or [] if none authored yet). */

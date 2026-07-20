@@ -178,3 +178,34 @@ test('toolCountForConfigKey counts provider + delivery tools; 0 for unknown keys
   assert.equal(toolCountForConfigKey('atlassian'), toolCountForConfigKey('jira'))
   assert.equal(NANGO_TOOL_COUNT_BY_CONFIG_KEY['gmail'], NANGO_TOOL_COUNT_BY_CONFIG_KEY['google-mail'])
 })
+
+test('airtable_list_records → GET /v0/{base}/{table} (table name URL-encoded) with maxRecords', async () => {
+  const c = await run('airtable_list_records', { baseId: 'app123', table: 'My Table', maxRecords: 5, view: 'Grid' })
+  assert.equal(c.method, 'GET')
+  assert.equal(c.endpoint, '/v0/app123/My%20Table')
+  assert.equal((c.params as { maxRecords: number }).maxRecords, 5)
+  assert.equal((c.params as { view: string }).view, 'Grid')
+})
+
+test('airtable_create_record → POST with fields; update_record → PATCH on the record path', async () => {
+  const created = await run('airtable_create_record', { baseId: 'app1', table: 'T', fields: { Name: 'Acme' } })
+  assert.equal(created.method, 'POST')
+  assert.equal(created.endpoint, '/v0/app1/T')
+  assert.deepEqual((created.data as { fields: unknown }).fields, { Name: 'Acme' })
+
+  const updated = await run('airtable_update_record', { baseId: 'app1', table: 'T', recordId: 'rec9', fields: { Stage: 'Won' } })
+  assert.equal(updated.method, 'PATCH')
+  assert.equal(updated.endpoint, '/v0/app1/T/rec9')
+  assert.deepEqual((updated.data as { fields: unknown }).fields, { Stage: 'Won' })
+})
+
+test('figma_get_file → GET /v1/files/{key}; post_comment → POST comments with message', async () => {
+  const file = await run('figma_get_file', { fileKey: 'abc' })
+  assert.equal(file.method, 'GET')
+  assert.equal(file.endpoint, '/v1/files/abc')
+
+  const comment = await run('figma_post_comment', { fileKey: 'abc', message: 'ship it' })
+  assert.equal(comment.method, 'POST')
+  assert.equal(comment.endpoint, '/v1/files/abc/comments')
+  assert.equal((comment.data as { message: string }).message, 'ship it')
+})
