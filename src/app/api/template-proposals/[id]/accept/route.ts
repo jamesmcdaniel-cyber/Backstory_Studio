@@ -1,4 +1,5 @@
 import { withAuthenticatedApi, ApiError } from '@/lib/server/api-handler'
+import { prisma } from '@/lib/prisma'
 import { getProposal, markAccepted, stampCreatedTemplate, reopenUnfulfilled } from '@/lib/templates/proposals'
 import { createTemplate } from '@/lib/templates/create-template'
 import {
@@ -6,6 +7,20 @@ import {
   proposalImprovementTarget,
 } from '@/lib/templates/accept-proposal'
 import { provisionAgentFromConfig } from '@/lib/templates/instantiate'
+import { generateFlowGraph } from '@/lib/flows/generate-flow-graph'
+import { triggerFromGraph } from '@/lib/flows/trigger'
+import { recordEstimatedUsage } from '@/lib/usage/ai-guard'
+
+export const runtime = 'nodejs'
+// Accepting a flow_template generates a wired graph via the model (up to 3 calls
+// + repair rounds), so give the request room beyond the default.
+export const maxDuration = 120
+
+const asObj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+const asStr = (v: unknown): string => (typeof v === 'string' ? v : '')
+/** Deep-clone to plain JSON so Prisma's InputJsonValue accepts the graph/trigger. */
+const jsonValue = (v: unknown) => JSON.parse(JSON.stringify(v ?? null))
 
 // POST /api/template-proposals/[id]/accept — promote an open proposal.
 //   agent_template | flow_template → create a real org-scoped, AI-generated
