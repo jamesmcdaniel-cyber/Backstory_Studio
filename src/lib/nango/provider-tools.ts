@@ -57,6 +57,10 @@ const num = (v: unknown, fallback: number) => {
   const n = Number(v)
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
 }
+// URL-encode a path segment built from tool args. Args originate from the LLM
+// (steerable by prompt-injected content), so a raw '/', '..', '?', or '#' could
+// traverse to another resource or inject query params on the authenticated host.
+const seg = (v: unknown) => encodeURIComponent(str(v))
 
 // ── GitHub (REST v3) ──────────────────────────────────────────────────────────
 
@@ -75,7 +79,7 @@ const GITHUB_TOOLS: NangoToolSpec[] = [
     },
     run: (connection, args, proxy = defaultProxy()) => {
       const owner = str(args.owner).trim()
-      const endpoint = owner ? `/users/${owner}/repos` : '/user/repos'
+      const endpoint = owner ? `/users/${encodeURIComponent(owner)}/repos` : '/user/repos'
       return proxy({
         method: 'GET',
         endpoint,
@@ -102,7 +106,7 @@ const GITHUB_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'GET',
-        endpoint: `/repos/${str(args.owner)}/${str(args.repo)}/pulls`,
+        endpoint: `/repos/${seg(args.owner)}/${seg(args.repo)}/pulls`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
         params: { state: str(args.state) || 'open', per_page: num(args.per_page, 30) },
@@ -126,7 +130,7 @@ const GITHUB_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'POST',
-        endpoint: `/repos/${str(args.owner)}/${str(args.repo)}/issues`,
+        endpoint: `/repos/${seg(args.owner)}/${seg(args.repo)}/issues`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
         data: { title: str(args.title), ...(args.body != null ? { body: str(args.body) } : {}) },
@@ -150,7 +154,7 @@ const GITHUB_TOOLS: NangoToolSpec[] = [
     run: (connection, args, proxy = defaultProxy()) =>
       proxy({
         method: 'POST',
-        endpoint: `/repos/${str(args.owner)}/${str(args.repo)}/issues/${num(args.issue_number, 0)}/comments`,
+        endpoint: `/repos/${seg(args.owner)}/${seg(args.repo)}/issues/${num(args.issue_number, 0)}/comments`,
         connectionId: connection.connectionId,
         providerConfigKey: connection.providerConfigKey,
         data: { body: str(args.body) },
@@ -255,7 +259,9 @@ const JIRA_TOOLS: NangoToolSpec[] = [
     inputSchema: { type: 'object', properties: { jql: { type: 'string', description: 'JQL query.' }, project: { type: 'string', description: 'Project key (used when jql is omitted).' } } },
     run: (c, a, proxy = defaultProxy()) => {
       const jql = str(a.jql).trim() || (str(a.project) ? `project = ${str(a.project)} ORDER BY updated DESC` : 'ORDER BY updated DESC')
-      return proxy({ method: 'GET', endpoint: '/rest/api/3/search', connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { jql, maxResults: num(a.maxResults, 25) } }).then((r) => r.data)
+      // /rest/api/3/search was removed (May 2025); the enhanced-search endpoint
+      // is /search/jql and requires an explicit fields list.
+      return proxy({ method: 'GET', endpoint: '/rest/api/3/search/jql', connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { jql, maxResults: num(a.maxResults, 25), fields: 'summary,status,assignee,updated,issuetype' } }).then((r) => r.data)
     },
   },
   {
@@ -264,7 +270,9 @@ const JIRA_TOOLS: NangoToolSpec[] = [
     inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'Project key.' }, summary: { type: 'string' }, issueType: { type: 'string', description: 'e.g. Task, Bug (default Task).' }, description: { type: 'string' } }, required: ['project', 'summary'] },
     run: (c, a, proxy = defaultProxy()) => proxy({
       method: 'POST', endpoint: '/rest/api/3/issue', connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
-      data: { fields: { project: { key: str(a.project) }, summary: str(a.summary), issuetype: { name: str(a.issueType) || 'Task' }, ...(a.description != null ? { description: str(a.description) } : {}) } },
+      // Jira Cloud v3 requires `description` in Atlassian Document Format (a
+      // string returns 400), so wrap the plain text in a minimal ADF doc.
+      data: { fields: { project: { key: str(a.project) }, summary: str(a.summary), issuetype: { name: str(a.issueType) || 'Task' }, ...(a.description != null ? { description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: str(a.description) }] }] } } : {}) } },
     }).then((r) => r.data),
   },
   {
@@ -272,7 +280,7 @@ const JIRA_TOOLS: NangoToolSpec[] = [
     description: 'Edit fields on an existing Jira issue.',
     inputSchema: { type: 'object', properties: { issueKey: { type: 'string' }, fields: { type: 'object', description: 'Jira field map to set.' } }, required: ['issueKey', 'fields'] },
     run: (c, a, proxy = defaultProxy()) => proxy({
-      method: 'PUT', endpoint: `/rest/api/3/issue/${str(a.issueKey)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
+      method: 'PUT', endpoint: `/rest/api/3/issue/${seg(a.issueKey)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
       data: { fields: (a.fields as Record<string, unknown>) ?? {} },
     }).then((r) => r.data),
   },
@@ -300,7 +308,7 @@ const ASANA_TOOLS: NangoToolSpec[] = [
     provider: 'asana', name: 'asana_update_task', isWrite: true,
     description: 'Update an Asana task’s fields or completion state.',
     inputSchema: { type: 'object', properties: { taskGid: { type: 'string' }, fields: { type: 'object', description: 'Fields to set, e.g. {completed:true}.' } }, required: ['taskGid', 'fields'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PUT', endpoint: `/api/1.0/tasks/${str(a.taskGid)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { data: (a.fields as Record<string, unknown>) ?? {} } }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PUT', endpoint: `/api/1.0/tasks/${seg(a.taskGid)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { data: (a.fields as Record<string, unknown>) ?? {} } }).then((r) => r.data),
   },
 ]
 
@@ -320,7 +328,7 @@ const NOTION_TOOLS: NangoToolSpec[] = [
     provider: 'notion', name: 'notion_read_page', isWrite: false,
     description: 'Read a Notion page’s block content.',
     inputSchema: { type: 'object', properties: { pageId: { type: 'string' } }, required: ['pageId'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/v1/blocks/${str(a.pageId)}/children`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, headers: notionHeaders }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/v1/blocks/${seg(a.pageId)}/children`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, headers: notionHeaders }).then((r) => r.data),
   },
   {
     provider: 'notion', name: 'notion_create_page', isWrite: true,
@@ -336,7 +344,7 @@ const NOTION_TOOLS: NangoToolSpec[] = [
     description: 'Append text blocks to a Notion page.',
     inputSchema: { type: 'object', properties: { pageId: { type: 'string' }, text: { type: 'string' } }, required: ['pageId', 'text'] },
     run: (c, a, proxy = defaultProxy()) => proxy({
-      method: 'PATCH', endpoint: `/v1/blocks/${str(a.pageId)}/children`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, headers: notionHeaders,
+      method: 'PATCH', endpoint: `/v1/blocks/${seg(a.pageId)}/children`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, headers: notionHeaders,
       data: { children: [{ paragraph: { rich_text: [{ text: { content: str(a.text) } }] } }] },
     }).then((r) => r.data),
   },
@@ -367,7 +375,7 @@ const HUBSPOT_TOOLS: NangoToolSpec[] = [
     provider: 'hubspot', name: 'hubspot_update_deal', isWrite: true,
     description: 'Update a deal’s stage or properties.',
     inputSchema: { type: 'object', properties: { dealId: { type: 'string' }, properties: { type: 'object' } }, required: ['dealId', 'properties'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PATCH', endpoint: `/crm/v3/objects/deals/${str(a.dealId)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { properties: (a.properties as Record<string, unknown>) ?? {} } }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PATCH', endpoint: `/crm/v3/objects/deals/${seg(a.dealId)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { properties: (a.properties as Record<string, unknown>) ?? {} } }).then((r) => r.data),
   },
 ]
 
@@ -384,7 +392,7 @@ const CONFLUENCE_TOOLS: NangoToolSpec[] = [
     provider: 'confluence', name: 'confluence_read_page', isWrite: false,
     description: 'Read a Confluence page’s content.',
     inputSchema: { type: 'object', properties: { pageId: { type: 'string' } }, required: ['pageId'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/wiki/rest/api/content/${str(a.pageId)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { expand: 'body.storage' } }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/wiki/rest/api/content/${seg(a.pageId)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { expand: 'body.storage' } }).then((r) => r.data),
   },
   {
     provider: 'confluence', name: 'confluence_create_page', isWrite: true,
@@ -410,7 +418,7 @@ const GDRIVE_TOOLS: NangoToolSpec[] = [
     provider: 'google_drive', name: 'google_drive_read_file', isWrite: false,
     description: 'Read a Google Drive file’s metadata (and text when exportable).',
     inputSchema: { type: 'object', properties: { fileId: { type: 'string' } }, required: ['fileId'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/drive/v3/files/${str(a.fileId)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { fields: 'id,name,mimeType,webViewLink' } }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/drive/v3/files/${seg(a.fileId)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { fields: 'id,name,mimeType,webViewLink' } }).then((r) => r.data),
   },
 ]
 
@@ -421,14 +429,14 @@ const GSHEETS_TOOLS: NangoToolSpec[] = [
     provider: 'google_sheets', name: 'google_sheets_read_range', isWrite: false,
     description: 'Read values from a Google Sheets range (A1 notation).',
     inputSchema: { type: 'object', properties: { spreadsheetId: { type: 'string' }, range: { type: 'string', description: 'e.g. Sheet1!A1:D10.' } }, required: ['spreadsheetId', 'range'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/v4/spreadsheets/${str(a.spreadsheetId)}/values/${encodeURIComponent(str(a.range))}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/v4/spreadsheets/${seg(a.spreadsheetId)}/values/${encodeURIComponent(str(a.range))}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey }).then((r) => r.data),
   },
   {
     provider: 'google_sheets', name: 'google_sheets_append_row', isWrite: true,
     description: 'Append a row of values to a Google Sheet.',
     inputSchema: { type: 'object', properties: { spreadsheetId: { type: 'string' }, range: { type: 'string' }, values: { type: 'array', description: 'One row: array of cell values.' } }, required: ['spreadsheetId', 'range', 'values'] },
     run: (c, a, proxy = defaultProxy()) => proxy({
-      method: 'POST', endpoint: `/v4/spreadsheets/${str(a.spreadsheetId)}/values/${encodeURIComponent(str(a.range))}:append`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
+      method: 'POST', endpoint: `/v4/spreadsheets/${seg(a.spreadsheetId)}/values/${encodeURIComponent(str(a.range))}:append`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
       params: { valueInputOption: 'USER_ENTERED' }, data: { values: [Array.isArray(a.values) ? a.values : [a.values]] },
     }).then((r) => r.data),
   },
@@ -437,7 +445,7 @@ const GSHEETS_TOOLS: NangoToolSpec[] = [
     description: 'Write values into a Google Sheets range.',
     inputSchema: { type: 'object', properties: { spreadsheetId: { type: 'string' }, range: { type: 'string' }, values: { type: 'array', description: 'Rows: array of arrays.' } }, required: ['spreadsheetId', 'range', 'values'] },
     run: (c, a, proxy = defaultProxy()) => proxy({
-      method: 'PUT', endpoint: `/v4/spreadsheets/${str(a.spreadsheetId)}/values/${encodeURIComponent(str(a.range))}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
+      method: 'PUT', endpoint: `/v4/spreadsheets/${seg(a.spreadsheetId)}/values/${encodeURIComponent(str(a.range))}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey,
       params: { valueInputOption: 'USER_ENTERED' }, data: { values: (a.values as unknown[]) ?? [] },
     }).then((r) => r.data),
   },
@@ -445,8 +453,8 @@ const GSHEETS_TOOLS: NangoToolSpec[] = [
 
 // ── Monday (GraphQL v2) ───────────────────────────────────────────────────────
 
-const mondayGraphql = (c: DeliveryConnection, query: string, proxy: NangoProxy) =>
-  proxy({ method: 'POST', endpoint: '/v2', connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { query } }).then((r) => r.data)
+const mondayGraphql = (c: DeliveryConnection, query: string, proxy: NangoProxy, variables?: Record<string, unknown>) =>
+  proxy({ method: 'POST', endpoint: '/v2', connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: variables ? { query, variables } : { query } }).then((r) => r.data)
 
 const MONDAY_TOOLS: NangoToolSpec[] = [
   {
@@ -459,7 +467,14 @@ const MONDAY_TOOLS: NangoToolSpec[] = [
     provider: 'monday', name: 'monday_create_item', isWrite: true,
     description: 'Add an item to a Monday.com board.',
     inputSchema: { type: 'object', properties: { boardId: { type: 'string' }, itemName: { type: 'string' } }, required: ['boardId', 'itemName'] },
-    run: (c, a, proxy = defaultProxy()) => mondayGraphql(c, `mutation { create_item (board_id: ${str(a.boardId)}, item_name: ${JSON.stringify(str(a.itemName))}) { id } }`, proxy),
+    // GraphQL VARIABLES (not string interpolation): boardId/itemName come from
+    // the LLM, so interpolating them into the query is an injection vector.
+    run: (c, a, proxy = defaultProxy()) => mondayGraphql(
+      c,
+      'mutation ($boardId: ID!, $itemName: String!) { create_item (board_id: $boardId, item_name: $itemName) { id } }',
+      proxy,
+      { boardId: str(a.boardId), itemName: str(a.itemName) },
+    ),
   },
 ]
 
@@ -482,7 +497,7 @@ const ZENDESK_TOOLS: NangoToolSpec[] = [
     provider: 'zendesk', name: 'zendesk_update_ticket', isWrite: true,
     description: 'Update a Zendesk ticket’s status/priority or add a comment.',
     inputSchema: { type: 'object', properties: { ticketId: { type: 'string' }, ticket: { type: 'object', description: 'Ticket fields to set.' } }, required: ['ticketId', 'ticket'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PUT', endpoint: `/api/v2/tickets/${str(a.ticketId)}.json`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { ticket: (a.ticket as Record<string, unknown>) ?? {} } }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PUT', endpoint: `/api/v2/tickets/${seg(a.ticketId)}.json`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: { ticket: (a.ticket as Record<string, unknown>) ?? {} } }).then((r) => r.data),
   },
 ]
 
@@ -516,13 +531,13 @@ const SALESFORCE_TOOLS: NangoToolSpec[] = [
     provider: 'salesforce', name: 'salesforce_get_record', isWrite: false,
     description: 'Read a Salesforce record by object type and id.',
     inputSchema: { type: 'object', properties: { sobject: { type: 'string' }, id: { type: 'string' } }, required: ['sobject', 'id'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/services/data/v60.0/sobjects/${str(a.sobject)}/${str(a.id)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/services/data/v60.0/sobjects/${seg(a.sobject)}/${seg(a.id)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey }).then((r) => r.data),
   },
   {
     provider: 'salesforce', name: 'salesforce_update_record', isWrite: true,
     description: 'Update fields on an existing Salesforce record.',
     inputSchema: { type: 'object', properties: { sobject: { type: 'string' }, id: { type: 'string' }, fields: { type: 'object' } }, required: ['sobject', 'id', 'fields'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PATCH', endpoint: `/services/data/v60.0/sobjects/${str(a.sobject)}/${str(a.id)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: (a.fields as Record<string, unknown>) ?? {} }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'PATCH', endpoint: `/services/data/v60.0/sobjects/${seg(a.sobject)}/${seg(a.id)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, data: (a.fields as Record<string, unknown>) ?? {} }).then((r) => r.data),
   },
 ]
 
@@ -539,7 +554,7 @@ const GMAIL_READ_TOOLS: NangoToolSpec[] = [
     provider: 'gmail', name: 'gmail_read_message', isWrite: false,
     description: 'Read the full content of a Gmail message.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/gmail/v1/users/me/messages/${str(a.id)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { format: 'full' } }).then((r) => r.data),
+    run: (c, a, proxy = defaultProxy()) => proxy({ method: 'GET', endpoint: `/gmail/v1/users/me/messages/${seg(a.id)}`, connectionId: c.connectionId, providerConfigKey: c.providerConfigKey, params: { format: 'full' } }).then((r) => r.data),
   },
 ]
 

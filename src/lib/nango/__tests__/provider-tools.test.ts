@@ -120,12 +120,20 @@ test('all authored providers have tools and unique tool names', () => {
   assert.equal(names.length, new Set(names).size, 'tool names are unique')
 })
 
-test('jira_list_issues builds JQL from a project when no jql given', async () => {
+test('jira_list_issues builds JQL from a project and uses the /search/jql endpoint', async () => {
   const byJql = await run('jira_list_issues', { jql: 'assignee = currentUser()' })
-  assert.equal(byJql.endpoint, '/rest/api/3/search')
+  assert.equal(byJql.endpoint, '/rest/api/3/search/jql')
   assert.equal((byJql.params as { jql: string }).jql, 'assignee = currentUser()')
+  assert.ok((byJql.params as { fields: string }).fields.includes('summary'))
   const byProject = await run('jira_list_issues', { project: 'ENG' })
   assert.ok((byProject.params as { jql: string }).jql.includes('project = ENG'))
+})
+
+test('jira_create_issue wraps description in Atlassian Document Format', async () => {
+  const c = await run('jira_create_issue', { project: 'ENG', summary: 'Bug', description: 'Steps to repro' })
+  const desc = (c.data as { fields: { description: { type: string; content: unknown[] } } }).fields.description
+  assert.equal(desc.type, 'doc')
+  assert.ok(Array.isArray(desc.content))
 })
 
 test('notion tools send the Notion-Version header', async () => {
@@ -149,11 +157,19 @@ test('salesforce_query → GET /query with the SOQL in q', async () => {
   assert.equal((c.params as { q: string }).q, 'SELECT Id FROM Account')
 })
 
-test('monday_create_item embeds a GraphQL mutation with the item name JSON-escaped', async () => {
+test('monday_create_item passes board_id/item_name as GraphQL variables (no injection)', async () => {
   const c = await run('monday_create_item', { boardId: '123', itemName: 'Say "hi"' })
   assert.equal(c.endpoint, '/v2')
-  const q = (c.data as { query: string }).query
-  assert.ok(q.includes('create_item') && q.includes('board_id: 123') && q.includes('"Say \\"hi\\""'))
+  const data = c.data as { query: string; variables: { boardId: string; itemName: string } }
+  // Values ride in variables, not interpolated into the query string.
+  assert.ok(data.query.includes('create_item') && data.query.includes('$boardId') && data.query.includes('$itemName'))
+  assert.ok(!data.query.includes('123') && !data.query.includes('Say'))
+  assert.deepEqual(data.variables, { boardId: '123', itemName: 'Say "hi"' })
+})
+
+test('path segments from args are URL-encoded (no traversal)', async () => {
+  const c = await run('salesforce_get_record', { sobject: 'Account', id: '../../limits' })
+  assert.equal(c.endpoint, '/services/data/v60.0/sobjects/Account/..%2F..%2Flimits')
 })
 
 test('toolCountForConfigKey counts provider + delivery tools; 0 for unknown keys', async () => {
