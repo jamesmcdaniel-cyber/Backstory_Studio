@@ -6,7 +6,7 @@ import {
   proposalToCreateTemplateArgs,
   proposalImprovementTarget,
 } from '@/lib/templates/accept-proposal'
-import { provisionAgentFromConfig } from '@/lib/templates/instantiate'
+import { provisionAgentFromConfig, missingIntegrations } from '@/lib/templates/instantiate'
 import { generateFlowGraph } from '@/lib/flows/generate-flow-graph'
 import { triggerFromGraph } from '@/lib/flows/trigger'
 import { recordEstimatedUsage } from '@/lib/usage/ai-guard'
@@ -109,5 +109,37 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       return { status: 'accepted', kind: 'agent', templateId: template.id }
     }
   }
-  return { status: 'accepted', kind: 'flow', templateId: template.id }
+
+  // flow_template: provision a fully WIRED flow. Generate the graph from the
+  // proposal's instructions via the shared copilot pipeline (grounds on the
+  // org's real agents/tools/integrations so nodes reference ids that exist),
+  // then create a DRAFT flow the user lands on ready to run. Best-effort: if
+  // generation fails the catalogue template still stands (client falls back).
+  if (proposal.kind === 'flow_template') {
+    try {
+      const config = asObj(proposal.configuration)
+      const description = asStr(config.instructions) || proposal.title
+      const { graph, rawParts } = await generateFlowGraph(auth.organizationId, auth.dbUser.id, description)
+      recordEstimatedUsage(auth.organizationId, ...rawParts)
+      const flow = await prisma.flow.create({
+        data: {
+          name: template.name,
+          description: asStr(config.description) || proposal.rationale,
+          status: 'DRAFT',
+          visibility: 'shared',
+          folder: '',
+          trigger: jsonValue(triggerFromGraph(graph)),
+          graph: jsonValue(graph),
+          organizationId: auth.organizationId,
+          userId: auth.dbUser.id,
+        },
+      })
+      const referenced = Array.isArray(config.integrations) ? config.integrations.filter((i): i is string => typeof i === 'string') : []
+      const missing = await missingIntegrations(auth.organizationId, auth.dbUser.id, referenced)
+      return { status: 'accepted', kind: 'flow', templateId: template.id, flowId: flow.id, missingIntegrations: missing }
+    } catch {
+      return { status: 'accepted', kind: 'flow', templateId: template.id }
+    }
+  }
+  return { status: 'accepted', kind: 'template', templateId: template.id }
 })
