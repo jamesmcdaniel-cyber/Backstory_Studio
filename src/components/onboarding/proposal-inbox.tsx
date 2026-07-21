@@ -85,6 +85,18 @@ export function ProposalInbox({ generating }: { generating: boolean }) {
         toast.success('Opened what it wants to improve.')
         return
       }
+      // 1-click: accept provisioned a LIVE artifact — land the user on it.
+      if (typeof data.agentId === 'string' && data.agentId) {
+        const missing = Array.isArray(data.missingIntegrations) ? (data.missingIntegrations as string[]) : []
+        toast.success(missing.length ? `Agent created — connect ${missing.join(', ')} to fully activate it.` : 'Agent created and ready to run.')
+        window.location.href = `/dashboard?agent=${data.agentId}`
+        return
+      }
+      if (typeof data.flowId === 'string' && data.flowId) {
+        toast.success('Flow created and wired — ready to run.')
+        window.location.href = `/flows/${data.flowId}`
+        return
+      }
       toast.success('Added to your catalogue.')
     } finally {
       setBusyId(null)

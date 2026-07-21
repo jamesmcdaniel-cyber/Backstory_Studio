@@ -5,6 +5,7 @@ import {
   proposalToCreateTemplateArgs,
   proposalImprovementTarget,
 } from '@/lib/templates/accept-proposal'
+import { provisionAgentFromConfig } from '@/lib/templates/instantiate'
 
 // POST /api/template-proposals/[id]/accept — promote an open proposal.
 //   agent_template | flow_template → create a real org-scoped, AI-generated
@@ -73,5 +74,25 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   // Record the created id for the idempotent-return path (best-effort: the
   // accept itself already committed, so a failure here only costs the id echo).
   await stampCreatedTemplate(id, auth.organizationId, template.id).catch(() => undefined)
-  return { status: 'accepted', templateId: template.id }
+
+  // 1-CLICK: an agent_template is also provisioned as a LIVE, ready-to-run agent
+  // (instructions + integrations + the proposed cadence) so accepting lands the
+  // user on a working agent, not a catalogue entry to instantiate later. The
+  // template still exists in the library. Best-effort: if provisioning fails the
+  // template stands, so the client falls back to the template page. (flow_template
+  // provisions a wired flow — see the flow-instantiation path.)
+  if (proposal.kind === 'agent_template') {
+    try {
+      const { agent, missing } = await provisionAgentFromConfig(
+        auth.organizationId,
+        auth.dbUser.id,
+        proposal.configuration,
+        template.name,
+      )
+      return { status: 'accepted', kind: 'agent', templateId: template.id, agentId: agent.id, missingIntegrations: missing }
+    } catch {
+      return { status: 'accepted', kind: 'agent', templateId: template.id }
+    }
+  }
+  return { status: 'accepted', kind: 'flow', templateId: template.id }
 })
