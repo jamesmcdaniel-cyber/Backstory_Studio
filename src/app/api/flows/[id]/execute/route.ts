@@ -21,6 +21,11 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   // cost vector. The webhook trigger route has its own per-flow limit.
   const limited = await rateLimit(`flow-execute:${auth.organizationId}`, { limit: 30, windowMs: 60_000 })
   if (!limited.ok) throw new ApiError('Too many runs — wait a moment before running this flow again.', 429, 'RATE_LIMITED')
+  // Monthly token ceiling: flows (esp. pure ai/tool flows with no agent nodes)
+  // otherwise bypass the budget the agent runtime enforces. A single run is
+  // bounded by maxSteps; this blocks STARTING one once the workspace is over.
+  const budget = await checkMonthlyTokenBudget(auth.organizationId, auth.dbUser.id)
+  if (budget.over) throw new ApiError('Monthly token budget reached for this workspace.', 429, 'BUDGET_EXCEEDED')
   // Visibility gate: a private flow may only be run by its owner.
   const flow = await prisma.flow.findFirst({
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
