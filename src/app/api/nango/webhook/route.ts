@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getNangoClient, nangoConfigured } from '@/lib/nango/client'
 import { syncOrgNangoConnections } from '@/lib/nango/mirror'
+import { MIN_INTEGRATIONS_FOR_TEMPLATES } from '@/lib/integrations/integration-count'
+import { maybeGenerateOnGateClear } from '@/lib/templates/generation-queue'
 import { apiLogger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
@@ -68,7 +70,12 @@ export async function POST(request: NextRequest) {
       try {
         // Re-sync the whole org: upserts every current connection and reconciles
         // deletions, so this one handler covers creation, refresh, and removal.
-        await syncOrgNangoConnections(organizationId)
+        const connections = await syncOrgNangoConnections(organizationId)
+        // On-connect learning trigger (headless path): once the org plausibly
+        // meets the integration gate, kick a debounced generation check.
+        if (Object.keys(connections).length >= MIN_INTEGRATIONS_FOR_TEMPLATES) {
+          void maybeGenerateOnGateClear(organizationId).catch(() => undefined)
+        }
       } catch (error) {
         apiLogger.error('nango webhook mirror sync failed', {
           organizationId,

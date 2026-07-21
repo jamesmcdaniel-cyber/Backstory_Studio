@@ -46,6 +46,8 @@ export type UsageProfile = {
 /** Window: last 90 days AND at most the most-recent 500 audit rows (whichever tighter). */
 export const USAGE_WINDOW_DAYS = 90
 export const MAX_AUDIT_ROWS = 500
+/** Recency half-life for provider/tool ranking: usage decays 50% every 30 days. */
+export const RECENCY_HALFLIFE_DAYS = 30
 
 /**
  * AuditEvent.action values that represent a GENUINE, EXECUTED tool invocation —
@@ -103,17 +105,39 @@ const asc = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 export function aggregateUsage(rows: UsageRow[], windowDays: number = USAGE_WINDOW_DAYS): UsageProfile {
   const clean = rows.filter((r) => r.provider)
 
-  // providers: rows per provider.
+  // Recency weight: rank by RECENT activity, not just all-window totals, so the
+  // profile tracks how the workspace works NOW. Each row decays 50% every
+  // RECENCY_HALFLIFE_DAYS relative to the newest row (pure over `rows`, so still
+  // deterministic + order-independent). Scores are rounded so tightly-clustered
+  // timestamps rank identically to raw counts; only genuinely spread-out usage
+  // re-orders. Displayed `calls` stay raw integer counts.
+  const atMsList = clean.map((r) => Date.parse(r.at)).filter((t) => Number.isFinite(t))
+  const maxAtMs = atMsList.length ? Math.max(...atMsList) : null
+  const halfLifeMs = RECENCY_HALFLIFE_DAYS * 86_400_000
+  const weightOf = (r: UsageRow): number => {
+    if (maxAtMs === null) return 1
+    const t = Date.parse(r.at)
+    if (!Number.isFinite(t)) return 1
+    return Math.pow(2, -(maxAtMs - t) / halfLifeMs)
+  }
+  const round3 = (n: number): number => Math.round(n * 1000) / 1000
+
+  // providers: rows per provider (+ recency score).
   const providerCounts = new Map<string, number>()
-  // topTools: rows per (provider, tool), keyed by JSON [provider, tool].
+  const providerScores = new Map<string, number>()
+  // topTools: rows per (provider, tool), keyed by JSON [provider, tool] (+ score).
   const toolCounts = new Map<string, number>()
+  const toolScores = new Map<string, number>()
   // runs: ordered rows per non-null runId.
   const runs = new Map<string, UsageRow[]>()
 
   for (const r of clean) {
+    const w = weightOf(r)
     providerCounts.set(r.provider, (providerCounts.get(r.provider) ?? 0) + 1)
+    providerScores.set(r.provider, (providerScores.get(r.provider) ?? 0) + w)
     const toolKey = JSON.stringify([r.provider, r.tool])
     toolCounts.set(toolKey, (toolCounts.get(toolKey) ?? 0) + 1)
+    toolScores.set(toolKey, (toolScores.get(toolKey) ?? 0) + w)
     if (r.runId !== null) {
       const bucket = runs.get(r.runId)
       if (bucket) bucket.push(r)
@@ -122,13 +146,15 @@ export function aggregateUsage(rows: UsageRow[], windowDays: number = USAGE_WIND
   }
 
   const providers = [...providerCounts.entries()]
-    .map(([provider, calls]) => ({ provider, calls }))
-    .sort((a, b) => b.calls - a.calls || asc(a.provider, b.provider))
+    .map(([provider, calls]) => ({ provider, calls, score: round3(providerScores.get(provider) ?? 0) }))
+    .sort((a, b) => b.score - a.score || b.calls - a.calls || asc(a.provider, b.provider))
+    .map(({ provider, calls }) => ({ provider, calls }))
 
   const topTools = [...toolCounts.entries()]
-    .sort((a, b) => b[1] - a[1] || asc(a[0], b[0]))
+    .map(([key, calls]) => ({ key, calls, score: round3(toolScores.get(key) ?? 0) }))
+    .sort((a, b) => b.score - a.score || b.calls - a.calls || asc(a.key, b.key))
     .slice(0, TOP_TOOLS_CAP)
-    .map(([key, calls]) => {
+    .map(({ key, calls }) => {
       const [provider, tool] = JSON.parse(key) as [string, string]
       return { provider, tool, calls }
     })

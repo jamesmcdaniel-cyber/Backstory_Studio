@@ -50,6 +50,20 @@ export async function listOpenProposals(
   })
 }
 
+/**
+ * Titles of ALL proposals for the org regardless of status (open, dismissed,
+ * accepted). Used by generation to dedup — a dismissed or already-accepted idea
+ * must not silently regenerate on a later sweep (open-only dedup let it recur).
+ */
+export async function listAllProposalTitles(organizationId: string): Promise<string[]> {
+  const rows = await prisma.templateProposal.findMany({
+    where: { organizationId },
+    select: { title: true },
+    take: 500,
+  })
+  return rows.map((r) => r.title)
+}
+
 /** A single proposal, org-scoped (returns null if it belongs to another org). */
 export async function getProposal(
   id: string,

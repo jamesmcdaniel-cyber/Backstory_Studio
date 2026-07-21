@@ -47,6 +47,14 @@ export type GenerationResult = { written: number; skipped: string | null }
  */
 export const GENERATION_DEBOUNCE_MS = 20 * 60 * 60 * 1000
 
+/**
+ * How long an unreviewed inbox may block regeneration. Past this, generation
+ * resumes even with open proposals so a user who never clears their inbox still
+ * gets suggestions reflecting newer usage (dedup prevents the stale ones from
+ * re-appearing).
+ */
+export const STALE_OPEN_PROPOSALS_MS = 7 * 24 * 60 * 60 * 1000
+
 /** Cap the cron sweep so one tick can never fan out an unbounded scan/dispatch. */
 export const MAX_ORGS_PER_GENERATION_SWEEP = 200
 export const MAX_GENERATION_DISPATCHES_PER_TICK = 10
@@ -70,7 +78,11 @@ export interface ShouldGenerateArgs {
  */
 export function shouldGenerateNow({ lastGeneratedAt, hasOpenProposals, now, meetsGate }: ShouldGenerateArgs): boolean {
   if (!meetsGate) return false
-  if (hasOpenProposals) return false
+  // Open-proposal guard: don't pile a second batch on an unreviewed one — UNLESS
+  // that batch is stale (> STALE_OPEN_PROPOSALS_MS). Without the escape, an inbox
+  // the user never clears would freeze generation forever, so newer usage never
+  // surfaces. Generation-side dedup keeps the stale ones from re-appearing.
+  if (hasOpenProposals && (!lastGeneratedAt || now.getTime() - lastGeneratedAt.getTime() <= STALE_OPEN_PROPOSALS_MS)) return false
   if (lastGeneratedAt && now.getTime() - lastGeneratedAt.getTime() <= GENERATION_DEBOUNCE_MS) return false
   return true
 }

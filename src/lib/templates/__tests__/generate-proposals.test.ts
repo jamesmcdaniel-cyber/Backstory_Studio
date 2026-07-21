@@ -44,6 +44,7 @@ const rawTemplate = (over: Partial<RawProposal> = {}): RawProposal => ({
   schedule: 'daily',
   exampleOutput: '3 deals at risk this week: ...',
   rationale: 'people.ai and slack are used together in 5 runs',
+  confidence: 0.9,
   targetType: '',
   targetId: '',
   configJson: '',
@@ -64,7 +65,7 @@ function stubDeps(over: Partial<GenerateDeps> & { generate?: GenerateDeps['gener
     buildProfile: async () => profile,
     retrieve: async () => ({ hits: [], related: [] }),
     readCatalogueTitles: async () => [],
-    readOpenTitles: async () => [],
+    readPriorTitles: async () => [],
     readTargets: async () => ({ flows: [], agents: [] }),
     generate: async () => {
       calls.generate += 1
@@ -149,13 +150,29 @@ test('dedupe: drops a proposal matching an existing catalogue title', async () =
   assert.equal(calls.written[0][0].title, 'Pipeline forecast recap')
 })
 
-test('dedupe: drops a proposal matching an already-open proposal title', async () => {
+test('dedupe: drops a proposal matching a prior (open/dismissed/accepted) proposal title', async () => {
   const { deps } = stubDeps({
-    readOpenTitles: async () => ['deal-risk slack digest'],
+    readPriorTitles: async () => ['deal-risk slack digest'],
     generate: async () => reply([rawTemplate()]),
   })
   const result = await generateTemplateProposals('org-1', deps)
-  assert.equal(result.written, 0, 'the open-proposal duplicate is dropped')
+  assert.equal(result.written, 0, 'the prior-proposal duplicate is dropped (incl. dismissed)')
+})
+
+test('confidence floor: a proposal below CONFIDENCE_FLOOR is dropped', async () => {
+  const { deps } = stubDeps({
+    generate: async () => reply([rawTemplate({ confidence: 0.4 }), rawTemplate({ title: 'Strong pipeline recap', confidence: 0.8 })]),
+  })
+  const result = await generateTemplateProposals('org-1', deps)
+  assert.equal(result.written, 1, 'only the confident proposal survives')
+})
+
+test('usage floor: below MIN_RUNS_FOR_TEMPLATES runs returns skipped:usage and never calls generate', async () => {
+  const thin: UsageProfile = { ...profile, runCount: 1 }
+  const { deps, calls } = stubDeps({ buildProfile: async () => thin })
+  const result = await generateTemplateProposals('org-1', deps)
+  assert.deepEqual(result, { written: 0, skipped: 'usage' })
+  assert.equal(calls.generate, 0, 'the model must NOT be called before usage is learned')
 })
 
 // --- Batch cap ---------------------------------------------------------------

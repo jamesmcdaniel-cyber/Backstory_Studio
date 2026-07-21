@@ -29,7 +29,7 @@ import {
 } from '@/lib/integrations/integration-count'
 import { buildUsageProfile, type UsageProfile } from '@/lib/templates/usage-profile'
 import { listStoredCatalogue } from '@/lib/templates/catalogue'
-import { listOpenProposals, writeProposals, type ProposalInput } from '@/lib/templates/proposals'
+import { listAllProposalTitles, writeProposals, type ProposalInput } from '@/lib/templates/proposals'
 import { NANGO_PROVIDERS } from '@/lib/nango/provider-tools'
 import { retrieveContext, renderContext, type RetrievedContext } from '@/lib/rag/retrieve'
 import { getGraphRagStore } from '@/lib/rag/get-store'
@@ -41,8 +41,26 @@ export const PROPOSAL_KINDS = ['agent_template', 'flow_template', 'process_impro
 export type ProposalKind = (typeof PROPOSAL_KINDS)[number]
 const TEMPLATE_KINDS: ReadonlySet<string> = new Set(['agent_template', 'flow_template'])
 
-/** Never write more than this many proposals per run — bounds review-queue spam. */
-export const MAX_PROPOSALS = 8
+/**
+ * Never surface more than this many proposals per run. Deliberately small: the
+ * product wants a FEW high-signal suggestions, not a review queue. Combined with
+ * the confidence floor below, most runs surface 0–3.
+ */
+export const MAX_PROPOSALS = 3
+/**
+ * Drop any proposal the model scores below this confidence (0–1). The model must
+ * justify a proposal from observed usage; a low self-assessed confidence means
+ * "speculative", which we don't show. Server-enforced, not just prompt-hinted.
+ */
+export const CONFIDENCE_FLOOR = 0.6
+/**
+ * Minimum observed RUNS (distinct executions with real tool usage in the window)
+ * before we recommend anything. The integration gate proves they CONNECTED
+ * enough; this proves we've actually LEARNED how they work. Without it, an org
+ * that connects 3 integrations and runs nothing would get recommendations
+ * grounded only on what those integrations *can* do — not what they do.
+ */
+export const MIN_RUNS_FOR_TEMPLATES = 3
 /** Bounded output for the single structured call (cost cap). */
 export const PROPOSAL_MAX_TOKENS = 8000
 /**
@@ -104,6 +122,10 @@ export const PROPOSAL_SCHEMA = {
           },
           exampleOutput: { type: 'string', description: 'A concrete, realistic example showing the structure and depth of the primary output, including key sections and representative fields. Empty string if not applicable.' },
           rationale: { type: 'string', description: 'Why this proposal fits THIS workspace, referencing the observed usage.' },
+          confidence: {
+            type: 'number',
+            description: 'Your confidence (0.0–1.0) that this is a genuinely useful automation grounded in the observed usage, NOT speculative. Below 0.6 will be discarded — omit weak ideas rather than pad the list.',
+          },
           targetType: {
             type: 'string',
             enum: ['flow', 'agent', ''],
@@ -124,7 +146,7 @@ export const PROPOSAL_SCHEMA = {
         },
         required: [
           'kind', 'title', 'category', 'instructions', 'integrations', 'schedule',
-          'exampleOutput', 'rationale', 'targetType', 'targetId', 'configJson', 'sourceEvidenceJson',
+          'exampleOutput', 'rationale', 'confidence', 'targetType', 'targetId', 'configJson', 'sourceEvidenceJson',
         ],
       },
     },
@@ -142,6 +164,7 @@ export interface RawProposal {
   schedule: string
   exampleOutput: string
   rationale: string
+  confidence: number
   targetType: string
   targetId: string
   configJson: string
@@ -267,12 +290,16 @@ export function normalizeProposal(raw: RawProposal, ctx: NormalizeContext): Prop
   if (!TEMPLATE_KINDS.has(kind) && kind !== 'process_improvement') return null
   const title = typeof raw.title === 'string' ? raw.title.trim() : ''
   if (!title) return null
+  // Confidence floor: drop speculative proposals server-side (not just via the
+  // prompt). A missing/NaN score is treated as below the floor.
+  const confidence = typeof raw.confidence === 'number' && Number.isFinite(raw.confidence) ? raw.confidence : 0
+  if (confidence < CONFIDENCE_FLOOR) return null
 
   const modelEvidence = tolerantObject(raw.sourceEvidenceJson)
   // These blobs are genuine JSON (parsed from JSON / plain values), so the cast
   // to Prisma's InputJsonValue is sound; the Record<string,unknown> index
   // signature just isn't structurally assignable to the recursive JSON type.
-  const sourceEvidence = { ...modelEvidence, kind, usage: usageSignals(ctx.profile) } as unknown as Prisma.InputJsonValue
+  const sourceEvidence = { ...modelEvidence, kind, confidence, usage: usageSignals(ctx.profile) } as unknown as Prisma.InputJsonValue
 
   if (kind === 'process_improvement') {
     const targetType = raw.targetType === 'flow' || raw.targetType === 'agent' ? raw.targetType : null
@@ -339,7 +366,8 @@ export interface GenerateDeps {
   buildProfile?: (organizationId: string) => Promise<UsageProfile>
   retrieve?: (organizationId: string, profile: UsageProfile) => Promise<RetrievedContext>
   readCatalogueTitles?: (organizationId: string) => Promise<string[]>
-  readOpenTitles?: (organizationId: string) => Promise<string[]>
+  /** Titles of ALL prior proposals (open + dismissed + accepted), for dedup. */
+  readPriorTitles?: (organizationId: string) => Promise<string[]>
   readTargets?: (organizationId: string) => Promise<{ flows: ImprovementTarget[]; agents: ImprovementTarget[] }>
   generate?: (opts: {
     system: string
@@ -414,7 +442,7 @@ export function buildGenerationUser(
 
 const GENERATION_SYSTEM = [
   'You propose REVIEWABLE automation templates for a team workspace, grounded strictly in its observed integration usage.',
-  'Return between 0 and 8 proposals. Fewer, well-justified proposals are better than many speculative ones. Never invent usage that is not in the evidence.',
+  'Return AT MOST 3 proposals, and only ones you can justify from the evidence — returning 0 or 1 is the right answer when nothing strongly fits. Quality over quantity; never invent usage that is not in the evidence. Set `confidence` (0–1) honestly for each; anything below 0.6 is discarded, so omit weak ideas rather than pad the list.',
   'Two families: (1) NEW templates — kind agent_template (a single autonomous agent) or flow_template (a multi-step workflow) that automates a recurring, cross-integration pattern you see. Write implementation-grade second-person instructions with: objective and success criteria; required inputs and defaults; exact ordered tool/step plan; joins and field mappings; decision rules and thresholds; pagination/batching; retries, idempotency, deduplication, and partial-failure handling; approval gates for writes; data-quality and no-fabrication rules; output sections; delivery behavior; monitoring; and concrete test cases. Include only the integrations the task needs, a detailed example output, and a cadence when periodic. (2) process_improvement — an upgrade to an EXISTING flow or agent from the provided list; set targetType and the exact targetId, leave instructions empty, and put a specific implementation plan in configJson as a JSON object string with notes, diff, acceptanceCriteria, risks, and testPlan.',
   'For flow_template, describe a deterministic graph with stable step names, dependencies, branch conditions, inputs, outputs, and failure paths. For agent_template, define tool-selection boundaries and when to ask for clarification. Never use vague instructions such as “analyze the data” without naming the analysis and required output.',
   'The server appends a standard asset contract for polished HTML, canonical workflow JSON, cross-platform mappings, and an operations README. Focus your instructions on the automation’s domain-specific logic and make them detailed enough for that contract to produce a deployable package.',
@@ -444,7 +472,7 @@ export async function generateTemplateProposals(
   const buildProfile = deps.buildProfile ?? buildUsageProfile
   const retrieve = deps.retrieve ?? defaultRetrieve
   const readCatalogueTitles = deps.readCatalogueTitles ?? (async (org) => (await listStoredCatalogue(org)).map((t) => t.name))
-  const readOpenTitles = deps.readOpenTitles ?? (async (org) => (await listOpenProposals(org)).map((p) => p.title))
+  const readPriorTitles = deps.readPriorTitles ?? listAllProposalTitles
   const readTargets = deps.readTargets ?? defaultReadTargets
   const generate = deps.generate ?? generateStructured
   const write = deps.write ?? writeProposals
@@ -453,12 +481,20 @@ export async function generateTemplateProposals(
   const count = await countConnected(organizationId, ORG_GATE_USER_ID)
   if (!meetsTemplateGate(count)) return { written: 0, skipped: 'gate' }
 
-  // 2. Assemble grounded context (all org-scoped, in parallel).
+  // 2. Usage floor — connecting integrations is necessary but not sufficient;
+  // don't recommend until we've actually observed how they work. Building the
+  // profile is cheaper than the model call, so this still saves the expensive
+  // part for freshly-connected-but-unused orgs.
   const profile = await buildProfile(organizationId)
-  const [context, catalogueTitles, openTitles, targets] = await Promise.all([
+  if (profile.runCount < MIN_RUNS_FOR_TEMPLATES) return { written: 0, skipped: 'usage' }
+
+  // 3. Assemble grounded context (all org-scoped, in parallel). Dedup covers the
+  // catalogue AND all prior proposals (open + dismissed + accepted) so a
+  // rejected idea can't quietly regenerate on a later sweep.
+  const [context, catalogueTitles, priorTitles, targets] = await Promise.all([
     retrieve(organizationId, profile),
     readCatalogueTitles(organizationId),
-    readOpenTitles(organizationId),
+    readPriorTitles(organizationId),
     readTargets(organizationId),
   ])
 
@@ -488,7 +524,7 @@ export async function generateTemplateProposals(
   const normalized = parsed
     .map((p) => normalizeProposal(p, ctx))
     .filter((p): p is ProposalInput => p !== null)
-  const deduped = dedupeProposals(normalized, [...catalogueTitles, ...openTitles]).slice(0, MAX_PROPOSALS)
+  const deduped = dedupeProposals(normalized, [...catalogueTitles, ...priorTitles]).slice(0, MAX_PROPOSALS)
 
   // 5. Write as OPEN proposals (never a live template).
   const written = await write(organizationId, deduped)
