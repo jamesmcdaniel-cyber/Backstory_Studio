@@ -43,12 +43,24 @@ export type InterpretResult = {
   namedOutputs?: Record<string, unknown>
 }
 
+/** Thrown by the scheduler when isCancelled() reports the run was cancelled. */
+export class FlowCancelledError extends Error {
+  constructor() {
+    super('Flow run cancelled')
+    this.name = 'FlowCancelledError'
+  }
+}
+
 type Opts = {
   runAgent: RunAgentFn
   runAction?: RunActionFn
   maxSteps?: number
   maxLoopIterations?: number
   onStep?: (outcome: StepOutcome) => void
+  // Cooperative cancellation: polled once per scheduler tick (the caller
+  // throttles the DB read). Returning true throws FlowCancelledError, which the
+  // caller terminalizes as 'cancelled'. In-flight nodes are left to settle.
+  isCancelled?: () => boolean | Promise<boolean>
   // Resume support: `completed` maps node ids already finished on a prior run to
   // their output (they are skipped, not re-run); `resumeNodeId` is the node that
   // was paused and should re-run with the user's reply injected.
@@ -411,7 +423,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       const list = [...missingTokens].map((p) => `{{${p}}}`).join(', ')
       const error = `Unknown data reference ${list} — this flow has no step or input with that name. Open the step's settings and pick the value from the data menu instead of typing it.`
       const mode = 'onError' in node.data ? ((node.data as { onError?: 'stop' | 'continue' | 'route' }).onError ?? 'stop') : 'stop'
-      emit({ nodeId: node.id, status: 'failed', error, ...(mode === 'route' ? { output: { error, input: resolvedInput } } : {}) })
+      emit({ nodeId: node.id, status: 'failed', error, ...(mode === 'route' || mode === 'continue' ? { output: { error, input: resolvedInput } } : {}) })
       return onFailure(mode, error, resolvedInput)
     }
 
@@ -638,7 +650,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       }
       if (res.error) {
         const mode = node.data.onError ?? 'stop'
-        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: config } } : {}) })
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' || mode === 'continue' ? { output: { error: res.error, input: config } } : {}) })
         return onFailure(mode, res.error, config)
       }
       const output = asStructured(res.output)
@@ -670,7 +682,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       }
       if (res.error) {
         const mode = node.data.onError ?? 'stop'
-        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: config } } : {}) })
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' || mode === 'continue' ? { output: { error: res.error, input: config } } : {}) })
         return onFailure(mode, res.error, config)
       }
       const output = asStructured(res.output)
@@ -700,7 +712,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       }
       if (res.error) {
         const mode = node.data.onError ?? 'stop'
-        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: config } } : {}) })
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' || mode === 'continue' ? { output: { error: res.error, input: config } } : {}) })
         return onFailure(mode, res.error, config)
       }
       const output = asStructured(res.output)
@@ -752,7 +764,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         if (node.data.humanAssistance === false) {
           const error = 'The agent asked for help, but human assistance is turned off for this step.'
           const mode = node.data.onError ?? 'stop'
-          emit({ nodeId: node.id, status: 'failed', error, ...(mode === 'route' ? { output: { error, input: resolved } } : {}) })
+          emit({ nodeId: node.id, status: 'failed', error, ...(mode === 'route' || mode === 'continue' ? { output: { error, input: resolved } } : {}) })
           return onFailure(mode, error, resolved)
         }
         emit({ nodeId: node.id, status: 'waiting' })
@@ -760,7 +772,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
       }
       if (res.error) {
         const mode = node.data.onError ?? 'stop'
-        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' ? { output: { error: res.error, input: resolved } } : {}) })
+        emit({ nodeId: node.id, status: 'failed', error: res.error, ...(mode === 'route' || mode === 'continue' ? { output: { error: res.error, input: resolved } } : {}) })
         return onFailure(mode, res.error, resolved)
       }
       let output: unknown
@@ -768,7 +780,7 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
         const parsed = parseStructuredAgentOutput(res.output, outputFields)
         if (parsed.error) {
           const mode = node.data.onError ?? 'stop'
-          emit({ nodeId: node.id, status: 'failed', error: parsed.error, ...(mode === 'route' ? { output: { error: parsed.error, input: resolved } } : {}) })
+          emit({ nodeId: node.id, status: 'failed', error: parsed.error, ...(mode === 'route' || mode === 'continue' ? { output: { error: parsed.error, input: resolved } } : {}) })
           return onFailure(mode, parsed.error, resolved)
         }
         output = parsed.output
@@ -984,6 +996,9 @@ export async function interpretFlow(graph: FlowGraph, input: unknown, opts: Opts
 
   propagateSkips()
   while (!terminal) {
+    // Cooperative cancellation: checked once per tick before scheduling more
+    // work. In-flight nodes below settle in the caller's catch; no new node runs.
+    if (opts.isCancelled && (await opts.isCancelled())) throw new FlowCancelledError()
     const ready = readyNodes()
     if (ready.length === 0) {
       if (running.size === 0) break // quiescent — the run is done

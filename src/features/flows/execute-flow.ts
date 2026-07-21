@@ -20,7 +20,7 @@ import { triggerFromGraph, triggerInputFieldsFromTrigger } from '@/lib/flows/tri
 import { applyInputDefaults, missingRequiredInputFields } from '@/lib/flows/input-validation'
 import { shouldReuseInput, storedRunInput } from '@/lib/flows/reuse-input'
 import { stepLabelsOf } from '@/lib/flows/token-text'
-import { interpretFlow, type RunAgentFn, type RunActionFn } from './interpret'
+import { interpretFlow, FlowCancelledError, type RunAgentFn, type RunActionFn } from './interpret'
 import { flowActionRetries, flowActionTimeoutMs, runWithRetries, shouldRetryAfterTimeout } from './action-reliability'
 import { prepareHttpRequest, responseOutput, redactHttpStepInput, withBearerAuthorization } from './http'
 import { resolveHttpConnectionToken } from './http-auth'
@@ -450,7 +450,26 @@ export async function runFlowExecution(
   // loop, or the bare id on the main chain).
   const pending: Promise<unknown>[] = []
   const onStep = (outcome: { nodeId: string; iterationKey?: string; status: string; output?: unknown; error?: string }) => {
-    if (!shouldPersistInterpreterStep(nodeTypeById.get(outcome.nodeId))) return
+    if (!shouldPersistInterpreterStep(nodeTypeById.get(outcome.nodeId))) {
+      // Adapter (agent/tool/http/ai/subflow) rows are written by the adapter,
+      // which stores NULL output on failure. For an onError route/continue
+      // failure the interpreter computed the {error, input} pass-through here —
+      // backfill it onto the failed row so a RESUME replays this step from its
+      // stored output (and re-takes the error edge) instead of re-executing it,
+      // which would duplicate an external write and could diverge the path if
+      // the transient error has since cleared. Non-failure emits are no-ops.
+      if (outcome.status === 'failed' && outcome.output !== undefined) {
+        pending.push(
+          prisma.flowRunStep
+            .updateMany({
+              where: { flowRunId: run.id, nodeId: outcome.iterationKey ?? outcome.nodeId, status: 'failed' },
+              data: { output: jsonValue(outcome.output) },
+            })
+            .catch(() => undefined),
+        )
+      }
+      return
+    }
     pending.push(
       prisma.flowRunStep
         .create({
@@ -943,18 +962,52 @@ export async function runFlowExecution(
     flowName: flow.name,
   }
 
-  const result = await interpretFlow(graph, input, {
-    runAgent,
-    runAction,
-    onStep,
-    now,
-    run: runMeta,
-    // Display labels (agent titles included) so hand-typed friendly-label
-    // tokens like {{Previous Agent.output}} resolve to the right step.
-    stepLabels: stepLabelsOf(graph, orgAgents),
-    ...(resuming || replaySource ? { completed, completedRoutes } : {}),
-    ...(resuming ? { resumeNodeId, resumeReply: job.reply } : {}),
-  })
+  // Cooperative cancellation: the cancel API flips FlowRun.status to
+  // 'cancelling'; the interpreter polls this once per tick and aborts. Throttle
+  // the DB read so a fast flow doesn't hammer the row; once seen, stay cancelled.
+  let lastCancelPoll = 0
+  let cancelSeen = false
+  const isCancelled = async (): Promise<boolean> => {
+    if (cancelSeen) return true
+    const nowMs = Date.now()
+    if (nowMs - lastCancelPoll < 2000) return false
+    lastCancelPoll = nowMs
+    const fresh = await prisma.flowRun.findUnique({ where: { id: run.id }, select: { status: true } }).catch(() => null)
+    cancelSeen = fresh?.status === 'cancelling' || fresh?.status === 'cancelled'
+    return cancelSeen
+  }
+
+  let result
+  try {
+    result = await interpretFlow(graph, input, {
+      runAgent,
+      runAction,
+      onStep,
+      now,
+      run: runMeta,
+      isCancelled,
+      // Display labels (agent titles included) so hand-typed friendly-label
+      // tokens like {{Previous Agent.output}} resolve to the right step.
+      stepLabels: stepLabelsOf(graph, orgAgents),
+      ...(resuming || replaySource ? { completed, completedRoutes } : {}),
+      ...(resuming ? { resumeNodeId, resumeReply: job.reply } : {}),
+    })
+  } catch (error) {
+    if (error instanceof FlowCancelledError) {
+      // Terminalize as cancelled (not failed) + sweep still-running step rows.
+      await Promise.all(pending).catch(() => undefined)
+      await prisma.flowRun.update({
+        where: { id: run.id, organizationId: job.organizationId },
+        data: { status: 'cancelled', finishedAt: new Date() },
+      })
+      await prisma.flowRunStep.updateMany({
+        where: { flowRunId: run.id, status: 'running' },
+        data: { status: 'cancelled', finishedAt: new Date() },
+      })
+      return { flowRunId: run.id, status: 'cancelled', output: null }
+    }
+    throw error
+  }
   await Promise.all(pending) // ensure all container-step rows are written
   const status = result.status === 'succeeded' ? 'succeeded' : result.status === 'waiting' ? 'waiting' : 'failed'
   // Output node parity: when a flow declared named outputs, callers receive the
