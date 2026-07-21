@@ -11,12 +11,48 @@ export type ProposalCard = {
   rationale: string
   kind: string
   status: string
+  // Preview payload (returned by /api/template-proposals): what the user is
+  // about to provision, so accept is an informed 1-click, not a leap of faith.
+  configuration?: Record<string, unknown> | null
+  sourceEvidence?: Record<string, unknown> | null
 }
 
 const KIND_LABEL: Record<string, string> = {
   agent_template: 'New agent',
   flow_template: 'New flow',
   process_improvement: 'Improve something you already run',
+}
+
+/** Compact, at-a-glance preview of what accepting will provision. */
+function ProposalPreview({ proposal }: { proposal: ProposalCard }) {
+  const config = (proposal.configuration ?? {}) as Record<string, unknown>
+  const evidence = (proposal.sourceEvidence ?? {}) as Record<string, unknown>
+  const integrations = Array.isArray(config.integrations)
+    ? (config.integrations as unknown[]).filter((i): i is string => typeof i === 'string')
+    : []
+  const instructions = typeof config.instructions === 'string' ? config.instructions.trim() : ''
+  const schedule = typeof config.schedule === 'string' && config.schedule ? config.schedule : null
+  const confidence = typeof evidence.confidence === 'number' ? Math.round(evidence.confidence * 100) : null
+  const improvement = proposal.kind === 'process_improvement' && typeof config.notes === 'string' ? config.notes.trim() : ''
+  const hasPreview = integrations.length || instructions || schedule || confidence !== null || improvement
+  if (!hasPreview) return null
+  return (
+    <div className="mt-2 space-y-1.5 border-t pt-2">
+      {improvement && <p className="line-clamp-3 text-xs text-gray-600">{improvement}</p>}
+      {instructions && <p className="line-clamp-2 text-xs text-gray-500">{instructions}</p>}
+      {integrations.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {integrations.map((i) => (
+            <span key={i} className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">{i}</span>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2 text-[10px] text-gray-400">
+        {schedule && <span>Runs {schedule}</span>}
+        {confidence !== null && <span>· {confidence}% confidence</span>}
+      </div>
+    </div>
+  )
 }
 
 /** Poll cadence + budget while generation may still be landing proposals. */
@@ -30,7 +66,17 @@ const POLL_BUDGET = 24 // ~2 minutes, then the inbox goes static until remount
  * terminal. Rows disappear optimistically and reappear with an honest toast
  * when the server disagrees.
  */
-export function ProposalInbox({ generating }: { generating: boolean }) {
+export function ProposalInbox({
+  generating,
+  hideWhenEmpty = false,
+  title,
+}: {
+  generating: boolean
+  hideWhenEmpty?: boolean
+  /** When set, the list renders under this heading in a self-padded block (for
+   *  persistent surfaces like the dashboard). */
+  title?: string
+}) {
   const [proposals, setProposals] = useState<ProposalCard[]>([])
   const [loaded, setLoaded] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -117,6 +163,9 @@ export function ProposalInbox({ generating }: { generating: boolean }) {
     }
   }
 
+  // Persistent surfaces (dashboard) render nothing until there's a real
+  // recommendation — no "checking…" or "no suggestions" chrome.
+  if (hideWhenEmpty && !proposals.length) return null
   if (!loaded) {
     return <p className="text-sm text-gray-500">Checking for suggestions…</p>
   }
@@ -129,7 +178,7 @@ export function ProposalInbox({ generating }: { generating: boolean }) {
       </p>
     )
   }
-  return (
+  const list = (
     <ul className="space-y-3">
       {proposals.map((proposal) => (
         <li key={proposal.id} className="rounded-lg border p-4">
@@ -140,6 +189,7 @@ export function ProposalInbox({ generating }: { generating: boolean }) {
               </span>
               <p className="mt-1.5 text-sm font-semibold text-gray-900">{proposal.title}</p>
               <p className="mt-1 text-sm leading-5 text-gray-600">{proposal.rationale}</p>
+              <ProposalPreview proposal={proposal} />
             </div>
           </div>
           <div className="mt-3 flex gap-2">
@@ -165,5 +215,15 @@ export function ProposalInbox({ generating }: { generating: boolean }) {
         </li>
       ))}
     </ul>
+  )
+  if (!title) return list
+  return (
+    <div className="rounded-xl border bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center gap-1.5">
+        <Sparkles className="h-4 w-4 text-indigo-500" />
+        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+      </div>
+      {list}
+    </div>
   )
 }
