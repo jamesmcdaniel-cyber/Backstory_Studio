@@ -9,6 +9,10 @@ interface Props {
   children: ReactNode
   fallback?: ReactNode
   onError?: (error: Error, errorInfo: ErrorInfo) => void
+  /** When this value changes, the boundary clears its error state — pass the
+   *  pathname so a caught page error resets on client navigation instead of
+   *  leaving the user stuck on the fallback after they click away. */
+  resetKey?: unknown
 }
 
 interface State {
@@ -27,9 +31,17 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo)
-    
+
     if (this.props.onError) {
       this.props.onError(error, errorInfo)
+    }
+  }
+
+  public componentDidUpdate(prevProps: Props) {
+    // Reset on navigation (resetKey change) so a page error clears when the user
+    // navigates away — without remounting children the way a `key` would.
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false, error: undefined })
     }
   }
 

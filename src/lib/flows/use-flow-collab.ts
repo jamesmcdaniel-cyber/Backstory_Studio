@@ -201,11 +201,15 @@ export function useFlowCollab(
         }
         if (p.ops && typeof p.ops === 'object') {
           // Merge the change-set into OUR current local graph so our unsent
-          // edits survive; advance the shared baseline to the merged result.
+          // edits survive.
           const local = getLocalRef.current()
           const base = isGraph(local) ? local : lastGraphRef.current
           const merged = applyGraphOps(base, p.ops)
-          lastGraphRef.current = merged
+          // Advance the shared baseline by the RECEIVED ops (what the room now
+          // knows) — NOT to `merged`, which also holds our own unsent local
+          // edits. Setting it to merged made a pending trailing broadcast diff
+          // merged→(stale local) and REVERT the teammate's just-merged edit.
+          lastGraphRef.current = applyGraphOps(lastGraphRef.current, p.ops)
           onRemoteRef.current(merged)
         }
       })
@@ -262,9 +266,14 @@ export function useFlowCollab(
   const pendingGraph = useRef<FlowGraph | null>(null)
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flush = useCallback(() => {
-    const target = pendingGraph.current
+    if (!pendingGraph.current) return
     pendingGraph.current = null
-    if (!target) return
+    // Diff the LATEST local graph, not the snapshot taken when this broadcast
+    // was queued: if a remote merge landed while the flush was pending, the
+    // snapshot is pre-merge and diffing it would revert the teammate's edit —
+    // the live graph already includes it, so we send only our own delta.
+    const local = getLocalRef.current()
+    const target = isGraph(local) ? local : lastGraphRef.current
     const ops = diffGraph(lastGraphRef.current, target)
     lastGraphRef.current = target
     lastSentAt.current = Date.now()

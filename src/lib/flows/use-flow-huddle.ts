@@ -156,6 +156,11 @@ export function useFlowHuddle(
     localStream.current?.getTracks().forEach((track) => track.stop())
     localStream.current = null
     localAnalyser.current = null
+    // Close the AudioContext — browsers cap live contexts (~6/page); leaking one
+    // per join eventually breaks the speaking-pulse analyser and keeps dead
+    // contexts running. close() rejects if already closed → ignore.
+    audioCtx.current?.close().catch(() => {})
+    audioCtx.current = null
     setInHuddle(false)
     setSpeakingIds(new Set())
   }, [send, closePeer, setInHuddle])

@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Bot, Info, Workflow } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { IntegrationChip } from '@/components/integrations/integration-chip'
 import { HtmlPreview, looksLikeHtml } from '@/components/ui/html-preview'
@@ -28,13 +30,33 @@ export default function TemplateDetails() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [template, setTemplate] = useState<Template | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deploying, setDeploying] = useState(false)
 
   useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setLoadError(false)
     fetch('/api/agent-templates', { cache: 'no-store' })
-      .then((response) => response.json())
-      .then((data) => setTemplate((data.templates || []).find((item: Template) => item.id === id) || null))
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error('load failed'))))
+      .then((data) => {
+        if (cancelled) return
+        setTemplate((data.templates || []).find((item: Template) => item.id === id) || null)
+      })
+      .catch(() => {
+        // Transient failure — distinct from "loaded, but no such template" so we
+        // never sit on an infinite skeleton (a deleted/unknown id resolves to a
+        // clean not-found state below, a 500/timeout to a retryable error state).
+        if (!cancelled) setLoadError(true)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [id])
 
   const createAgent = async () => {
@@ -56,7 +78,12 @@ export default function TemplateDetails() {
       }),
     })
     setCreating(false)
-    if (response.ok) router.push('/dashboard')
+    if (response.ok) {
+      router.push('/dashboard')
+    } else {
+      const data = await response.json().catch(() => ({}))
+      toast.error(data.error || 'Could not create the agent. Please try again.')
+    }
   }
 
   // Playbook templates provision the full motion: agents + a wired Flow.
@@ -67,12 +94,13 @@ export default function TemplateDetails() {
     const data = await response.json().catch(() => ({}))
     setDeploying(false)
     if (response.ok && data.flowId) router.push(`/flows/${data.flowId}`)
+    else toast.error(data.error || 'Could not deploy this playbook. Please try again.')
   }
 
   return (
     <>
       <div className="mx-auto max-w-6xl space-y-5 p-6">
-        {!template ? (
+        {loading ? (
           <div className="space-y-4">
             <Skeleton className="h-9 w-2/3 rounded-lg" />
             <Skeleton className="h-5 w-full rounded" />
@@ -81,6 +109,18 @@ export default function TemplateDetails() {
               <Skeleton className="h-72 rounded-xl" />
             </div>
           </div>
+        ) : loadError ? (
+          <EmptyState
+            title="Couldn’t load this template"
+            description="The connection may have dropped. Try again in a moment."
+            action={<Button onClick={() => window.location.reload()}>Try again</Button>}
+          />
+        ) : !template ? (
+          <EmptyState
+            title="Template not found"
+            description="It may have been removed or is no longer shared."
+            action={<Button variant="outline" onClick={() => router.push('/dashboard?view=templates')}>Back to templates</Button>}
+          />
         ) : (
           <>
             <Link href="/dashboard?view=templates" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
