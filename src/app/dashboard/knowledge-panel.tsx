@@ -94,7 +94,7 @@ export function KnowledgePanel({ agentId }: { agentId: string }) {
         />
       </div>
       <p className="mb-2 text-xs text-gray-500">
-        Files the agent can draw on at run time. Text, Markdown, CSV, JSON, HTML, and source files are supported (PDF/DOCX coming soon).
+        Files the agent can draw on at run time. Text, Markdown, CSV, JSON, HTML, PDF, and source files are supported (DOCX coming soon).
       </p>
       {loading ? (
         <p className="text-sm text-gray-500">

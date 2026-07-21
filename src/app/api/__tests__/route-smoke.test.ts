@@ -141,4 +141,48 @@ if (TEST_DB) {
       `Authenticated GET route(s) with no smoke case: ${uncovered.join(', ')}. Add a case above, or add a documented skip.`,
     )
   })
+
+  // Mutation guard: every exported POST/PUT/PATCH/DELETE must be
+  // withAuthenticatedApi OR an allowlisted signature/secret-authed route. Closes
+  // the blind spot that the GET completeness check above leaves for mutating
+  // handlers — a new unauthenticated write route can't ship unnoticed.
+  test('every mutating route is authenticated or an allowlisted signature/secret route', () => {
+    const apiDir = fileURLToPath(new URL('..', import.meta.url))
+    const walkRoutes = (dir: string): string[] => {
+      const out: string[] = []
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === '__tests__') continue
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) out.push(...walkRoutes(full))
+        else if (entry.name === 'route.ts') out.push(full)
+      }
+      return out
+    }
+    // POST/PUT/PATCH/DELETE handlers that authenticate by signature/secret/OAuth
+    // state instead of a session — each vetted in the pre-launch security audit.
+    const signatureAuthed = new Set([
+      'nango/webhook',       // Nango webhook signature (verifyIncomingWebhookRequest)
+      'flows/[id]/trigger',  // per-flow webhook secret (constant-time)
+      'agents/[id]/trigger', // per-agent trigger secret (constant-time)
+      'cron/dispatch',       // CRON_SECRET, fail-closed
+      'cron/retention',      // CRON_SECRET, fail-closed
+      'signals/people-ai',   // People.ai HMAC signature
+    ])
+    const METHODS = ['POST', 'PUT', 'PATCH', 'DELETE']
+    const offenders: string[] = []
+    for (const file of walkRoutes(apiDir)) {
+      const src = readFileSync(file, 'utf8')
+      const route = path.relative(apiDir, path.dirname(file))
+      for (const m of METHODS) {
+        if (!new RegExp(`export (const ${m}\\b|async function ${m}\\b)`).test(src)) continue
+        const authed = new RegExp(`export const ${m} = withAuthenticatedApi`).test(src)
+        if (!authed && !signatureAuthed.has(route)) offenders.push(`${route}:${m}`)
+      }
+    }
+    assert.deepEqual(
+      offenders.sort(),
+      [],
+      `Unauthenticated mutating route(s): ${offenders.join(', ')}. Wrap in withAuthenticatedApi, or add to signatureAuthed with justification.`,
+    )
+  })
 }

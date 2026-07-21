@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { cachePing } from '@/lib/cache'
 import { neo4jPing } from '@/lib/rag/neo4j-store'
+import { apiLogger } from '@/lib/logger'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -26,12 +27,15 @@ export async function GET() {
   )
 }
 
-async function probe(fn: () => Promise<void>): Promise<{ ok: boolean; ms?: number; error?: string }> {
+async function probe(fn: () => Promise<void>): Promise<{ ok: boolean; ms?: number }> {
   const start = Date.now()
   try {
     await fn()
     return { ok: true, ms: Date.now() - start }
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    // Never return the raw error to this ANONYMOUS endpoint — a DB failure
+    // message leaks the host:port topology. Log server-side; report only up/down.
+    apiLogger.error('health probe failed', { error: error instanceof Error ? error.message : String(error) })
+    return { ok: false }
   }
 }
