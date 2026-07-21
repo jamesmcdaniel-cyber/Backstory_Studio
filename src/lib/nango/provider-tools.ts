@@ -801,3 +801,22 @@ export const NANGO_TOOL_COUNT_BY_CONFIG_KEY: Record<string, number> = (() => {
 export function toolCountForConfigKey(configKey: string): number {
   return NANGO_TOOL_COUNT_BY_CONFIG_KEY[configKey] ?? 0
 }
+
+/**
+ * Resolve a WRITE tool by its bare name across the provider registry AND the
+ * delivery adapters, unified to { provider, run }. The approval executor uses
+ * this to run ANY approved Nango write — not just the 3 delivery tools — so the
+ * approval gate can safely cover every provider's writes. Read tools and unknown
+ * names return null (they must never be executed off an approval). Mirrors the
+ * inline plane execution (tool-planes.ts): run(connection, args) with a
+ * connection resolved from PROVIDER_CONFIG_KEYS[provider].
+ */
+export function findNangoWriteTool(
+  name: string,
+): { provider: string; run: NangoToolSpec['run'] } | null {
+  const spec = NANGO_PROVIDER_TOOLS.find((tool) => tool.name === name && tool.isWrite)
+  if (spec) return { provider: spec.provider, run: spec.run }
+  const delivery = DELIVERY_TOOLS.find((tool) => tool.name === name)
+  if (delivery) return { provider: delivery.capability, run: delivery.run }
+  return null
+}

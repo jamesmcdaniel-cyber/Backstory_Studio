@@ -601,10 +601,13 @@ export async function runFlowExecution(
         })
 
         // Approval gate — the same semantics as agent tool calls: an outbound
-        // write plane (Nango delivery) is queued for approval instead of
-        // executed, and the run pauses `waiting` (kind 'approval'). The
-        // decision resumes this run via the approvals route.
-        if (capabilityFromProvider(executor.provider)) {
+        // WRITE on a delivery plane is queued for approval instead of executed,
+        // and the run pauses `waiting` (kind 'approval'). The decision resumes
+        // this run via the approvals route. The isWrite check is essential:
+        // without it the delivery planes' READ tools (salesforce_query,
+        // slack_read_messages, gmail_list_messages) were queued and then dropped
+        // (decideApproval has no spec to run for a read).
+        if (executor.isWrite && capabilityFromProvider(executor.provider)) {
           const approval = await createApproval({
             organizationId: job.organizationId,
             executionId: run.id,

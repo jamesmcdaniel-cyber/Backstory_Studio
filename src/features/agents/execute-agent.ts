@@ -489,9 +489,14 @@ export async function runAgentExecution(
         data: {
           status: 'running',
           model: runner.model,
+          // Refresh startedAt on resume too (not only on a fresh run) — the
+          // agent reaper fails any `running` execution older than 20 min, so a
+          // long-after-question resume would otherwise be false-failed mid-run.
+          // (Mirrors the flow resume's startedAt refresh.)
+          startedAt: new Date(),
           ...(resuming
             ? { metadata: jsonValue({ ...metadataOf(queuedExecution.metadata), pendingQuestion: null }) }
-            : { startedAt: new Date() }),
+            : {}),
         },
       })
     : await prisma.agentExecution.create({
@@ -956,7 +961,11 @@ export async function runAgentExecution(
               executionId: execution.id,
               userId,
               provider: binding.provider,
-              tool: call.name,
+              // The BARE tool name (binding.toolName), not the model-facing
+              // namespaced call.name (e.g. nango_slack_post_message) — decideApproval
+              // resolves the executor by bare name, so recording the namespaced one
+              // meant approved sends silently never executed.
+              tool: binding.toolName,
               args: (call.input ?? {}) as Record<string, unknown>,
             })
             await prisma.workflowStep.update({

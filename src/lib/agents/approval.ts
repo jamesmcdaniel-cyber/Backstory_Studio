@@ -11,28 +11,20 @@
 
 import { prisma } from '@/lib/prisma'
 import { recordAudit } from '@/lib/audit'
-import {
-  DELIVERY_TOOLS,
-  resolveDeliveryConnection,
-  type DeliveryCapability,
-} from '@/lib/nango/delivery'
+import { resolveNangoConnection, type DeliveryCapability } from '@/lib/nango/delivery'
+import { findNangoWriteTool, PROVIDER_CONFIG_KEYS } from '@/lib/nango/provider-tools'
 
-/**
- * Delivery planes an approval can actually EXECUTE on approve — i.e. the
- * capabilities `DELIVERY_TOOLS` knows how to run. This is deliberately the
- * executable set, not "everything that writes": gating a write we cannot later
- * execute (e.g. `nango:github`) would queue it, let a human approve it, and then
- * silently do nothing. Widening the gate therefore requires teaching
- * `decideApproval` to run those tools first.
- */
-const WRITE_PLANE = /^nango:(slack|gmail|salesforce)$/
+/** Delivery planes, used only to label an approval with a friendly capability. */
+const DELIVERY_PLANE = /^nango:(slack|gmail|salesforce)$/
 
 /**
  * Should this tool call be queued for human approval instead of run inline?
  *
- * `isWrite` comes from the tool's own binding, so read tools never get gated —
- * matching on the provider alone used to queue `slack_read_messages` for
- * approval (it shares the `nango:slack` plane with the send tool).
+ * Gates EVERY Nango write plane (not just delivery) when the agent opts in via
+ * `requireApproval`. `decideApproval` can now execute any approved Nango write
+ * (findNangoWriteTool), so gating github/jira/hubspot/… writes no longer risks a
+ * queue-then-noop. `isWrite` comes from the tool's binding, so read tools on a
+ * write plane (e.g. slack_read_messages) are never gated.
  */
 export function requiresApproval(
   agentMetadata: Record<string, unknown> | null | undefined,
@@ -40,11 +32,12 @@ export function requiresApproval(
   isWrite: boolean,
 ): boolean {
   const flag = agentMetadata?.requireApproval
-  return flag === true && isWrite === true && WRITE_PLANE.test(provider)
+  return flag === true && isWrite === true && provider.startsWith('nango:')
 }
 
+/** The delivery capability for a provider (for the approval summary), or null. */
 export function capabilityFromProvider(provider: string): DeliveryCapability | null {
-  const match = WRITE_PLANE.exec(provider)
+  const match = DELIVERY_PLANE.exec(provider)
   return match ? (match[1] as DeliveryCapability) : null
 }
 
@@ -211,26 +204,21 @@ export async function decideApproval(input: {
   let executed = false
   let writeResult: unknown = null
   try {
-    if (payload.capability) {
-      // Dispatch on the RECORDED TOOL NAME — never on the capability alone.
-      // DELIVERY_TOOLS is keyed by capability, so resolving that way ran the
-      // plane's *send* tool for ANY approval on that plane: approving a
-      // `salesforce_update_record` would CREATE a record, and approving a
-      // read-shaped call (`slack_read_messages({channel, text})`) would post
-      // `text` to the channel — the approver authorized one action and a
-      // different one ran. Resolve by name, and require the spec to belong to
-      // the capability whose connection we're about to use.
-      const spec = DELIVERY_TOOLS.find((tool) => tool.name === approval.tool)
-      if (spec && spec.capability === payload.capability) {
-        const connection = await resolveDeliveryConnection(input.organizationId, payload.capability, payload.userId)
-        if (connection) {
-          writeResult = await spec.run(connection, payload.args)
-          executed = true
-        }
+    // Dispatch on the RECORDED (bare) TOOL NAME across the full Nango write
+    // registry — never on the capability/provider alone (that would run a
+    // plane's send tool for any approval on it: approving salesforce_update
+    // would CREATE, approving a read-shaped call would post its text). Require
+    // the resolved spec's provider to match the recorded provider before using
+    // that provider's connection. No spec / mismatch / no connection → fail
+    // closed (`executed` stays false → audited approval.approved_noexec).
+    const spec = findNangoWriteTool(approval.tool)
+    if (spec && `nango:${spec.provider}` === payload.provider) {
+      const configKeys = PROVIDER_CONFIG_KEYS[spec.provider] ?? [spec.provider]
+      const connection = await resolveNangoConnection(input.organizationId, configKeys, payload.userId)
+      if (connection) {
+        writeResult = await spec.run(connection, payload.args)
+        executed = true
       }
-      // No spec for the recorded tool → fail closed: `executed` stays false, so
-      // this is audited as `approval.approved_noexec` and the agent is told the
-      // action did not run, rather than a different action running silently.
     }
   } catch (error) {
     // Delivery failed after we claimed it — mark failed (not back to pending) so

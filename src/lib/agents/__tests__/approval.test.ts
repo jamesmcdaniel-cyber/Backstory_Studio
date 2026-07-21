@@ -3,9 +3,14 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import { requiresApproval, capabilityFromProvider } from '../approval'
 
-test('requiresApproval only when flag set AND provider is a write plane', () => {
+test('requiresApproval when flag set AND provider is any Nango write plane', () => {
   assert.equal(requiresApproval({ requireApproval: true }, 'nango:slack', true), true)
   assert.equal(requiresApproval({ requireApproval: true }, 'nango:gmail', true), true)
+  // Widened: every Nango write plane is gated now that decideApproval can run
+  // any approved Nango write (not just the 3 delivery tools).
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:github', true), true)
+  assert.equal(requiresApproval({ requireApproval: true }, 'nango:jira', true), true)
+  // Non-Nango planes still run inline (Backstory MCP / People.ai are read-shaped).
   assert.equal(requiresApproval({ requireApproval: true }, 'people_ai', true), false)
   assert.equal(requiresApproval({ requireApproval: true }, 'backstory', true), false)
   assert.equal(requiresApproval({ requireApproval: false }, 'nango:slack', true), false)

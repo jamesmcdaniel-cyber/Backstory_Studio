@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { createQueue, QUEUE_NAMES, workersEnabled } from '@/lib/queue/config'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { runAgentExecution } from '@/features/agents/execute-agent'
-import { runFlowExecution } from '@/features/flows/execute-flow'
+import { dispatchDetachedFlowExecution } from '@/features/flows/execute-flow'
 import { inlineExecution } from '@/lib/queue/execution-mode'
 import { executionVisibilityScope, agentVisibilityScope } from '@/lib/server/visibility'
 import { deriveRunWaiting } from '@/lib/flows/run-waiting'
@@ -73,10 +73,13 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   if (target === 'flow' && flowStep) {
     const run = flowStep.run
     // Non-manual runs executed the published graph; resume against the same
-    // (mirrors the approvals route's derivation).
+    // (mirrors the approvals route's derivation). Resume DETACHED (queued in
+    // prod) rather than running the whole remaining flow inline in this HTTP
+    // request — a long resume would otherwise block the caller and be killed by
+    // Vercel at maxDuration, orphaning the run.
     const triggerType = (run.trigger as { type?: string } | null)?.type
     try {
-      const result = await runFlowExecution({
+      await dispatchDetachedFlowExecution({
         flowId: run.flowId,
         organizationId: auth.organizationId,
         userId: run.userId ?? auth.dbUser.id,
@@ -84,7 +87,7 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
         reply: message,
         usePublished: Boolean(triggerType && triggerType !== 'manual'),
       })
-      return { success: true, executionId: execution.id, flowRunId: run.id, result }
+      return { success: true, executionId: execution.id, flowRunId: run.id, status: 'resuming' }
     } catch (error) {
       if (error instanceof ApiError) throw error
       throw new ApiError('Flow resume failed', 500, 'RUN_FAILED')
