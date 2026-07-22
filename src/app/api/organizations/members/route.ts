@@ -12,7 +12,7 @@ export const GET = withAuthenticatedApi(async (_request, auth) => {
     where: { organizationId: auth.organizationId, isActive: true },
     orderBy: [{ name: 'asc' }, { email: 'asc' }],
     take: 200,
-    select: { id: true, name: true, email: true },
+    select: { id: true, name: true, email: true, role: true },
   })
   return { success: true, members, selfId: auth.dbUser.id }
 })

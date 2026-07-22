@@ -27,6 +27,7 @@ import { NotificationBell } from '@/components/notifications/notification-bell'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { getSnapshot } from '@/lib/client/snapshot'
+import { resizeImageToDataUrl } from '@/lib/client/image'
 import { cn } from '@/lib/utils'
 import type { Agent as AgentType } from '@/lib/types'
 
@@ -41,31 +42,6 @@ const DEFAULT_ORG_LOGO = '/backstory-mark-blue.svg'
  * Downscale an uploaded image to a small square PNG data URL so the logo can
  * be stored inline (no object storage) and still render crisply at 32px.
  */
-function resizeImageToDataUrl(file: File, size = 128): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const image = new Image()
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      const canvas = document.createElement('canvas')
-      canvas.width = size
-      canvas.height = size
-      const context = canvas.getContext('2d')
-      if (!context) return reject(new Error('Canvas unavailable'))
-      // Cover-fit: crop the shorter axis so logos stay centered and square.
-      const scale = Math.max(size / image.width, size / image.height)
-      const width = image.width * scale
-      const height = image.height * scale
-      context.drawImage(image, (size - width) / 2, (size - height) / 2, width, height)
-      resolve(canvas.toDataURL('image/png'))
-    }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error('Could not read that image'))
-    }
-    image.src = url
-  })
-}
 type Usage = { executions: number; inputTokens: number; outputTokens: number; exempt?: boolean }
 
 // Module-level snapshot of the sidebar's fetched data, persisted across the
@@ -506,7 +482,11 @@ export function Sidebar() {
               )}
             </div>
           )}
-          <div className="flex items-center gap-2 px-1">
+          <Link
+            href="/settings"
+            className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors duration-fast hover:bg-gray-100"
+            title="Settings"
+          >
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600">
               {(user?.firstName || 'U').charAt(0).toUpperCase()}
             </div>
@@ -517,7 +497,7 @@ export function Sidebar() {
             {activeOrg && (
               <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600">{planLabel(activeOrg.plan)}</span>
             )}
-          </div>
+          </Link>
         </div>
       </div>
 
