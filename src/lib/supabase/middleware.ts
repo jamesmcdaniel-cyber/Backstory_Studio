@@ -45,6 +45,9 @@ export async function updateSession(request: NextRequest) {
 
   const { data: { user } } = await supabase.auth.getUser()
   const isAuthPage = pathname.startsWith('/auth/')
+  // Invite pages must be viewable signed-out so a recipient can see who invited
+  // them and choose to sign in or create an account.
+  const isPublic = publicPages.has(pathname) || pathname.startsWith('/invite/')
 
   // Production is SSO/invite-only: password signup is disabled unless
   // explicitly allowed (AUTH_ALLOW_PASSWORD=true keeps it for dev).
@@ -55,7 +58,7 @@ export async function updateSession(request: NextRequest) {
     return copyCookies(response, NextResponse.redirect(url))
   }
 
-  if (!user && !isApi && !publicPages.has(pathname)) {
+  if (!user && !isApi && !isPublic) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'
     url.search = ''

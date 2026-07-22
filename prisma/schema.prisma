@@ -57,8 +57,36 @@ model Organization {
   knowledgeDocuments  KnowledgeDocument[]
   sharedSkills        SharedSkill[]
   templateProposals   TemplateProposal[]
+  invitations         Invitation[]
 
   @@map("organizations")
+}
+
+/// A pending invitation to join an organization. The plaintext token is emailed
+/// (and shown once to the inviter); only its SHA-256 hash is stored. Accepting
+/// moves the invited user into this org with `role`. Membership is a single-org
+/// FK on User, so accepting reassigns the user's organizationId.
+model Invitation {
+  id               String    @id @default(cuid())
+  email            String
+  organizationId   String    @db.Uuid
+  // 'ADMIN' | 'USER' — validated at the API layer (kept as text to avoid an
+  // enum-typed column on a brand-new table).
+  role             String    @default("USER")
+  tokenHash        String    @unique
+  // 'PENDING' | 'ACCEPTED' | 'REVOKED'
+  status           String    @default("PENDING")
+  invitedById      String?
+  acceptedByUserId String?
+  expiresAt        DateTime  @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @db.Timestamptz(6)
+  acceptedAt       DateTime? @db.Timestamptz(6)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("invitations")
 }
 
 model User {

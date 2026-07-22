@@ -235,17 +235,60 @@ function WorkspaceSection({ isAdmin }: { isAdmin: boolean }) {
 
 /* ------------------------------- Members -------------------------------- */
 
+type Invite = { id: string; email: string; role: 'ADMIN' | 'USER'; createdAt: string; expiresAt: string }
+
 function MembersSection({ isAdmin, selfId }: { isAdmin: boolean; selfId: string | null }) {
   const [members, setMembers] = useState<Member[]>([])
   const [loaded, setLoaded] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [invites, setInvites] = useState<Invite[]>([])
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<'ADMIN' | 'USER'>('USER')
+  const [inviting, setInviting] = useState(false)
 
   const load = useCallback(async () => {
     const data = await fetch('/api/organizations/members', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
     if (data?.success) setMembers(data.members ?? [])
     setLoaded(true)
   }, [])
-  useEffect(() => { void load() }, [load])
+  const loadInvites = useCallback(async () => {
+    if (!isAdmin) return
+    const data = await fetch('/api/organizations/invitations', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+    if (data?.success) setInvites(data.invitations ?? [])
+  }, [isAdmin])
+  useEffect(() => { void load(); void loadInvites() }, [load, loadInvites])
+
+  const sendInvite = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setInviting(true)
+    try {
+      const res = await fetch('/api/organizations/invitations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(data.error || 'Could not send the invitation.'); return }
+      setInviteEmail('')
+      await loadInvites()
+      if (data.emailSent) {
+        toast.success(`Invitation emailed to ${data.invitation.email}.`)
+      } else {
+        // No email provider configured (or send failed): hand the admin the link.
+        try { await navigator.clipboard.writeText(data.link) } catch { /* clipboard blocked */ }
+        toast.success('Invite created — link copied to clipboard to share.')
+      }
+    } finally { setInviting(false) }
+  }
+
+  const revokeInvite = async (invite: Invite) => {
+    setBusyId(invite.id)
+    try {
+      const res = await fetch(`/api/organizations/invitations/${invite.id}`, { method: 'DELETE' })
+      if (!res.ok) toast.error('Could not revoke the invitation.')
+      else { setInvites((prev) => prev.filter((i) => i.id !== invite.id)); toast.success('Invitation revoked.') }
+    } finally { setBusyId(null) }
+  }
 
   const changeRole = async (member: Member, role: 'ADMIN' | 'USER') => {
     setBusyId(member.id)
@@ -319,11 +362,45 @@ function MembersSection({ isAdmin, selfId }: { isAdmin: boolean; selfId: string 
           ))}
         </ul>
       )}
-      {/* Invites need an email provider (none configured), so this is disabled
-          rather than a broken flow. See the follow-up note in the PR/summary. */}
-      <div className="flex items-center gap-2 rounded-lg border border-dashed bg-gray-50 px-3 py-2.5 text-xs text-gray-500">
-        <span>Inviting new members by email isn’t available yet — email delivery hasn’t been set up for this workspace.</span>
-      </div>
+      {isAdmin && (
+        <div className="space-y-3 border-t pt-4">
+          <form onSubmit={sendInvite} className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[12rem] flex-1 space-y-1.5">
+              <Label htmlFor="invite-email">Invite by email</Label>
+              <Input id="invite-email" type="email" placeholder="teammate@company.com" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} required />
+            </div>
+            <select
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as 'ADMIN' | 'USER')}
+              className="h-9 rounded-md border bg-white px-2 text-sm text-gray-700"
+              aria-label="Invite role"
+            >
+              <option value="USER">Member</option>
+              <option value="ADMIN">Admin</option>
+            </select>
+            <Button type="submit" loading={inviting} disabled={!inviteEmail.trim()}>Send invite</Button>
+          </form>
+
+          {invites.length > 0 && (
+            <ul className="divide-y rounded-lg border">
+              {invites.map((invite) => (
+                <li key={invite.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate text-gray-700">{invite.email}</span>
+                  <Badge variant="outline">Pending · {invite.role === 'ADMIN' ? 'Admin' : 'Member'}</Badge>
+                  <button
+                    type="button"
+                    disabled={busyId === invite.id}
+                    onClick={() => void revokeInvite(invite)}
+                    className="text-xs font-medium text-gray-400 hover:text-red-600 disabled:opacity-50"
+                  >
+                    Revoke
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </Section>
   )
 }

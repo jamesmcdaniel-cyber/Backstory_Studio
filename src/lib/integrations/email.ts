@@ -21,6 +21,42 @@ export function emailConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY)
 }
 
+/**
+ * Send a transactional email via Resend. Returns false (without throwing) when
+ * no RESEND_API_KEY is configured, so callers can degrade gracefully (e.g. show
+ * the invite link to copy manually). Throws only on an actual API failure.
+ */
+export async function sendEmail({
+  to,
+  subject,
+  html,
+  text,
+}: {
+  to: string
+  subject: string
+  html?: string
+  text?: string
+}): Promise<boolean> {
+  const apiKey = process.env.RESEND_API_KEY
+  if (!apiKey) return false
+  const from = process.env.EMAIL_FROM || 'Backstory <onboarding@resend.dev>'
+  const payload: Record<string, unknown> = { from, to: [to], subject }
+  if (html) {
+    payload.html = html
+    payload.text = text ?? html.replace(/<[^>]+>/g, '').replace(/\n{3,}/g, '\n\n').trim()
+  } else {
+    payload.text = text ?? ''
+  }
+  const response = await fetch(RESEND_API_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) throw new Error(`Email API error ${response.status}`)
+  return true
+}
+
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------

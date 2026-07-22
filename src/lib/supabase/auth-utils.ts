@@ -26,6 +26,15 @@ async function findDbUserCached(supabaseId: string): Promise<DbUserRow> {
   return row
 }
 
+/**
+ * Drop the cached auth row for a user so the next request re-reads it. Call
+ * after mutating a user's org/role out-of-band (e.g. accepting an invitation),
+ * or the stale cache would keep them in their old workspace for up to the TTL.
+ */
+export function invalidateAuthCache(supabaseId: string) {
+  dbUserCache.delete(supabaseId)
+}
+
 // Self-healing bootstrap: the handle_new_user Postgres trigger is optional
 // infra that may never be installed, so provision the app user + organization
 // on first authenticated request when they don't exist yet.
@@ -35,22 +44,42 @@ async function provisionUser(user: User) {
   const metaString = (key: string) => (typeof meta[key] === 'string' ? (meta[key] as string) : '')
   const orgName = metaString('organization_name') || metaString('full_name') || emailPrefix
   const name = metaString('full_name') || emailPrefix
+  const inviteEmail = user.email?.trim().toLowerCase() || null
 
   try {
     return await prisma.$transaction(async (tx) => {
-      const organization = await tx.organization.create({
-        data: { name: orgName, slug: `org-${user.id}` },
-      })
-      return tx.user.create({
+      // If this email was invited, join that workspace (with the invited role)
+      // instead of spawning a fresh solo org — no orphaned workspace, and the
+      // invite is consumed atomically with the join.
+      const invite = inviteEmail
+        ? await tx.invitation.findFirst({
+            where: { email: inviteEmail, status: 'PENDING', expiresAt: { gt: new Date() } },
+            orderBy: { createdAt: 'desc' },
+          })
+        : null
+
+      const organizationId = invite
+        ? invite.organizationId
+        : (await tx.organization.create({ data: { name: orgName, slug: `org-${user.id}` } })).id
+
+      const created = await tx.user.create({
         data: {
           supabaseId: user.id,
           email: user.email ?? null,
           name,
-          role: 'ADMIN',
-          organizationId: organization.id,
+          role: invite ? (invite.role === 'ADMIN' ? 'ADMIN' : 'USER') : 'ADMIN',
+          organizationId,
         },
         include: { organization: true },
       })
+
+      if (invite) {
+        await tx.invitation.update({
+          where: { id: invite.id },
+          data: { status: 'ACCEPTED', acceptedByUserId: created.id, acceptedAt: new Date() },
+        })
+      }
+      return created
     })
   } catch {
     // Lost a race (unique supabaseId/slug) or the trigger created it
