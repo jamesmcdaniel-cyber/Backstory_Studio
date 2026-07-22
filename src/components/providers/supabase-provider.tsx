@@ -22,6 +22,9 @@ type SupabaseContext = {
   loading: boolean
   signIn: (email: string, password: string) => ReturnType<typeof supabase.auth.signInWithPassword>
   signUp: (email: string, password: string, options?: { data?: Record<string, unknown> }) => ReturnType<typeof supabase.auth.signUp>
+  /** Start the Google OAuth redirect. `nextPath` (a same-origin path) is carried
+   *  through the callback so the user lands where they intended after auth. */
+  signInWithGoogle: (nextPath?: string) => ReturnType<typeof supabase.auth.signInWithOAuth>
   signOut: () => Promise<void>
 }
 
@@ -114,6 +117,16 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         emailRedirectTo: `${appOrigin()}/auth/callback`,
       },
     }),
+    signInWithGoogle: (nextPath) => {
+      // Redirect back through our own callback (which exchanges the code for a
+      // session), carrying `next` so invitees resume their deep-linked page.
+      const redirect = new URL(`${appOrigin()}/auth/callback`)
+      if (nextPath && /^\/(?!\/)/.test(nextPath)) redirect.searchParams.set('next', nextPath)
+      return supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: redirect.toString() },
+      })
+    },
     signOut: async () => {
       const { error } = await supabase.auth.signOut()
       if (error) throw error
