@@ -131,7 +131,9 @@ export function NotificationBell() {
       <Button
         variant="outline"
         size="icon"
-        className="relative h-9 w-9 shrink-0"
+        // overflow-visible: the Button base clips with overflow-hidden, which
+        // would cut off the unread badge sitting outside the button bounds.
+        className="relative h-9 w-9 shrink-0 overflow-visible"
         aria-label="Notifications"
         onClick={() => { setOpen((o) => !o); if (!open) markRead() }}
       >

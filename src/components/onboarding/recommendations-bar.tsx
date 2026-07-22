@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Check, ChevronDown, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useProposals } from '@/components/providers/proposals-provider'
-import { KIND_LABEL } from './proposal-shared'
+import { IntegrationChips, KIND_LABEL, proposalIntegrations } from './proposal-shared'
 
 const COLLAPSE_KEY = 'backstory:recs-collapsed'
 
@@ -66,6 +66,7 @@ export function RecommendationsBar() {
                 </span>
                 <span className="text-sm font-medium text-gray-900 group-hover:underline">{proposal.title}</span>
               </button>
+              <IntegrationChips slugs={proposalIntegrations(proposal)} />
               <button
                 type="button"
                 onClick={() => openDetail(proposal)}
