@@ -3,12 +3,15 @@
 import { Toaster } from 'sonner'
 import { MotionConfig } from 'motion/react'
 import { SupabaseProvider } from './supabase-provider'
+import { ProposalsProvider } from './proposals-provider'
 
 export function ClientProviders({ children }: { children: React.ReactNode }) {
   return (
     <MotionConfig reducedMotion="user">
       <SupabaseProvider>
-        {children}
+        <ProposalsProvider>
+          {children}
+        </ProposalsProvider>
         <Toaster
           richColors
           position="bottom-right"

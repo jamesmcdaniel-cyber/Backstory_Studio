@@ -15,7 +15,7 @@ import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/s
 import { useAuth } from '@/hooks/use-auth'
 import { getSnapshot, SnapshotError } from '@/lib/client/snapshot'
 import { TemplatesView } from '@/components/templates/templates-view'
-import { ProposalInbox } from '@/components/onboarding/proposal-inbox'
+import { RecommendationsBar } from '@/components/onboarding/recommendations-bar'
 import { ViewToggle, type DashboardView } from './view-toggle'
 import { cn } from '@/lib/utils'
 
@@ -500,12 +500,12 @@ function AgentHQ() {
             </div>
           )}
 
-          {/* Persistent recommendation surface — renders only when the AI has
-              generated a suggestion from real usage (hideWhenEmpty), so future
-              recommendations are actionable beyond the onboarding inbox. */}
+          {/* Persistent recommendation surface — a compact collapsible bar that
+              renders only when the AI has a suggestion from real usage; each row
+              opens a detail popup, and the bell mirrors the same proposals. */}
           {!loading && !authError && (
             <div className="px-4 pt-4">
-              <ProposalInbox generating={false} hideWhenEmpty title="Recommended for you" />
+              <RecommendationsBar />
             </div>
           )}
 
