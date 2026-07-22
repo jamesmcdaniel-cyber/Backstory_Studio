@@ -17,6 +17,6 @@ test('flow notifications without a link keep the activity-page fallback', () => 
 })
 
 test('non-flow notifications keep the dashboard run fallback', () => {
-  assert.equal(notificationHref({ type: 'agent.done', executionId: 'run1' }), '/dashboard?run=run1')
+  assert.equal(notificationHref({ type: 'agent.done', executionId: 'run1' }), '/agents?run=run1')
   assert.equal(notificationHref({ type: 'agent.done' }), '/dashboard')
 })

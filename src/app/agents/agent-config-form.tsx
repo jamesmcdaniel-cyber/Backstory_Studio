@@ -14,7 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { MiniCalendar } from '@/components/ui/mini-calendar'
 import { IntegrationLogo } from '@/components/integrations/integration-logo'
-import { KnowledgePanel } from '@/app/dashboard/knowledge-panel'
+import { KnowledgePanel } from '@/app/agents/knowledge-panel'
 import { cn } from '@/lib/utils'
 
 /**
@@ -493,7 +493,7 @@ export function AgentConfigForm({
 
   const openRun = (runId: string) => {
     if (onOpenRun) onOpenRun(runId)
-    else router.push(`/dashboard?run=${runId}`)
+    else router.push(`/agents?run=${runId}`)
   }
 
   const publishTemplate = async () => {
@@ -972,7 +972,7 @@ export function AgentConfigForm({
         )}
         <p className="mt-1.5 text-xs text-muted-foreground">
           Add skills from the{' '}
-          <Link href="/dashboard?view=templates" className="text-primary hover:underline">
+          <Link href="/agents?view=templates" className="text-primary hover:underline">
             Templates page
           </Link>
           .

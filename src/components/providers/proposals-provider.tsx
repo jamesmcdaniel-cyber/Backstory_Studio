@@ -90,7 +90,7 @@ export function ProposalsProvider({ children }: { children: React.ReactNode }) {
         if (target?.targetType === 'flow' && target.targetId) {
           window.open(`/flows/${target.targetId}`, '_blank', 'noopener')
         } else if (target?.targetType === 'agent' && target.targetId) {
-          window.open(`/dashboard?agent=${target.targetId}`, '_blank', 'noopener')
+          window.open(`/agents?agent=${target.targetId}`, '_blank', 'noopener')
         }
         toast.success('Opened what it wants to improve.')
         return
@@ -99,7 +99,7 @@ export function ProposalsProvider({ children }: { children: React.ReactNode }) {
       if (typeof data.agentId === 'string' && data.agentId) {
         const missing = Array.isArray(data.missingIntegrations) ? (data.missingIntegrations as string[]) : []
         toast.success(missing.length ? `Agent created — connect ${missing.join(', ')} to fully activate it.` : 'Agent created and ready to run.')
-        window.location.href = `/dashboard?agent=${data.agentId}`
+        window.location.href = `/agents?agent=${data.agentId}`
         return
       }
       if (typeof data.flowId === 'string' && data.flowId) {

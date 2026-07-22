@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import {
+  Bot,
   Brain,
   Check,
   ChevronDown,
@@ -62,8 +63,9 @@ export function notifyAgentsChanged() {
 
 const navigation = [
   { name: 'Home', href: '/dashboard', icon: Brain },
-  { name: 'Integrations', href: '/integrations', icon: Plug },
+  { name: 'Agents', href: '/agents', icon: Bot },
   { name: 'Flows', href: '/flows', icon: Workflow },
+  { name: 'Integrations', href: '/integrations', icon: Plug },
 ]
 
 function planLabel(plan: string) {
@@ -268,7 +270,7 @@ export function Sidebar() {
       <button
         className="flex-1 truncate text-left text-sm"
         title={agent.description || agent.title}
-        onClick={() => router.push(`/dashboard?agent=${agent.id}`)}
+        onClick={() => router.push(`/agents?agent=${agent.id}`)}
       >
         {agent.title}
       </button>
@@ -423,7 +425,7 @@ export function Sidebar() {
               size="icon"
               variant="ghost"
               className="h-5 w-5"
-              onClick={() => router.push('/dashboard?agent=new')}
+              onClick={() => router.push('/agents?agent=new')}
               aria-label="New agent"
             >
               <Plus className="h-3.5 w-3.5" />

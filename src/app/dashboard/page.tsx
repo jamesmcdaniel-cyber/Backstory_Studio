@@ -1,662 +1,220 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertCircle, FileText, List, Loader2, Play, Plus, Settings2, Sparkles, X } from 'lucide-react'
-import { AgentActivityPane, resultText } from './agent-activity-pane'
-import { AgentConfigForm, type AgentDraft } from './agent-config-form'
-import { AssistantPanel } from './assistant-panel'
-import { Button } from '@/components/ui/button'
-import { EmptyState } from '@/components/ui/empty-state'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { AGENTS_CHANGED_EVENT, notifyAgentsChanged } from '@/components/layout/sidebar'
-import { useAuth } from '@/hooks/use-auth'
-import { getSnapshot, SnapshotError } from '@/lib/client/snapshot'
-import { TemplatesView } from '@/components/templates/templates-view'
-import { RecommendationsBar } from '@/components/onboarding/recommendations-bar'
-import { ViewToggle, type DashboardView } from './view-toggle'
+import { ArrowUp, Bot, FileText, History, Loader2, Paperclip, Sparkles, Workflow, Wrench } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-import type { Agent, Activity } from '@/lib/types'
-
-type GranolaNote = {
+type LibrarianResult = {
+  type: 'agent' | 'flow' | 'template' | 'run'
   id: string
   title: string
-  owner: { name: string; email: string } | null
-  created_at: string | null
+  subtitle: string
+  href: string
+}
+type Turn = { question: string; answer: string; results: LibrarianResult[] }
+
+// Visual-only for now: the persona tunes the hint copy (behavior wiring is a
+// deliberate follow-up).
+const PERSONAS = [
+  { key: 'SALES', hint: 'Deal impact and next actions' },
+  { key: 'CSM', hint: 'Retention and account health' },
+  { key: 'MARKETING', hint: 'Campaigns and pipeline influence' },
+  { key: 'IT', hint: 'Setup, access, and governance' },
+] as const
+
+const SUGGESTIONS = [
+  'How can Backstory improve deal discovery?',
+  'What can I do with Backstory MCP?',
+  'How can I build an alert for at-risk deals?',
+  'How should I plan my automation roadmap?',
+  'How do I connect Slack?',
+]
+
+const RESULT_ICON = { flow: Workflow, agent: Bot, template: FileText, run: History }
+
+function greeting(): string {
+  const h = new Date().getHours()
+  return h < 12 ? 'GOOD MORNING' : h < 18 ? 'GOOD AFTERNOON' : 'GOOD EVENING'
 }
 
-/** Sentinel selection meaning "setting up a brand-new agent". */
-const NEW_AGENT = 'new'
-
-// Right-pane (assistant) width — user-resizable on desktop, persisted per browser.
-const ASSISTANT_WIDTH_KEY = 'dashboard.assistantWidth'
-const ASSISTANT_WIDTH_DEFAULT = 480
-const ASSISTANT_WIDTH_MIN = 360
-const ASSISTANT_WIDTH_MAX = 800
-
-function clampAssistantWidth(width: number) {
-  return Math.min(ASSISTANT_WIDTH_MAX, Math.max(ASSISTANT_WIDTH_MIN, width))
-}
-
-function isConfigured(agent: Agent) {
-  return agent.status === 'active' && Boolean(agent.instructions?.trim())
-}
-
-function AgentHQ() {
-  const { user } = useAuth()
+export default function LibrarianHome() {
   const router = useRouter()
-  const searchParams = useSearchParams()
-  const [agents, setAgents] = useState<Agent[]>([])
-  const [activities, setActivities] = useState<Activity[]>([])
-  const [loading, setLoading] = useState(true)
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const [configureOpen, setConfigureOpen] = useState(false)
-  const [focusRunId, setFocusRunId] = useState<string | null>(null)
-  // The run expanded in the left pane, whose output renders in the right pane.
-  const [selectedRun, setSelectedRun] = useState<Activity | null>(null)
-  const [describe, setDescribe] = useState('')
-  const [building, setBuilding] = useState(false)
-  const [runningId, setRunningId] = useState<string | null>(null)
-  const [authError, setAuthError] = useState<string | null>(null)
-  const [authStatus, setAuthStatus] = useState<number | null>(null)
-  const [granolaPickerOpen, setGranolaPickerOpen] = useState(false)
-  const [granolaFetchingList, setGranolaFetchingList] = useState(false)
-  const [granolaFetchingNote, setGranolaFetchingNote] = useState(false)
-  const [granolaNotes, setGranolaNotes] = useState<GranolaNote[]>([])
-  const [assistantWidth, setAssistantWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return ASSISTANT_WIDTH_DEFAULT
-    const saved = Number(window.localStorage.getItem(ASSISTANT_WIDTH_KEY))
-    return saved ? clampAssistantWidth(saved) : ASSISTANT_WIDTH_DEFAULT
-  })
-  const assistantWidthRef = useRef(assistantWidth)
+  const [input, setInput] = useState('')
+  const [persona, setPersona] = useState<(typeof PERSONAS)[number]['key']>('SALES')
+  const [thread, setThread] = useState<Turn[]>([])
+  const [busy, setBusy] = useState(false)
+  const [hello, setHello] = useState('GOOD MORNING')
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const threadEndRef = useRef<HTMLDivElement>(null)
 
-  // Agents / Templates view, driven by the URL (?view=templates) so it's
-  // linkable and the old /templates route can redirect straight into it.
-  const view: DashboardView = searchParams.get('view') === 'templates' ? 'templates' : 'agents'
-  const setView = useCallback(
-    (next: DashboardView) => router.replace(next === 'templates' ? '/dashboard?view=templates' : '/dashboard', { scroll: false }),
-    [router],
-  )
-  // Count for the toggle's Templates badge — fetched up front, then kept in sync
-  // by the embedded TemplatesView as templates are created/removed.
-  const [templateCount, setTemplateCount] = useState<number | null>(null)
-  useEffect(() => {
-    fetch('/api/agent-templates', { cache: 'no-store' })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => { if (data?.templates) setTemplateCount(data.templates.length) })
-      .catch(() => undefined)
-  }, [])
+  // Compute the time-of-day greeting on the client to avoid an SSR mismatch.
+  useEffect(() => setHello(greeting()), [])
+  useEffect(() => { threadEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [thread, busy])
 
-  // Drag-to-resize for the assistant pane's left edge. Grid layout (not the
-  // flex row `ResizablePanel` assumes), so the drag math is inlined here and
-  // drives `assistantWidth`, which the grid's gridTemplateColumns reads.
-  const onAssistantResizeStart = useCallback((event: React.MouseEvent) => {
-    event.preventDefault()
-    const startX = event.clientX
-    const startWidth = assistantWidthRef.current
-    const onMove = (moveEvent: MouseEvent) => {
-      // Right pane, so dragging LEFT (smaller clientX) widens it.
-      const next = clampAssistantWidth(startWidth + (startX - moveEvent.clientX))
-      assistantWidthRef.current = next
-      setAssistantWidth(next)
-    }
-    const onUp = () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      document.body.style.userSelect = ''
-      document.body.style.cursor = ''
-      try {
-        window.localStorage.setItem(ASSISTANT_WIDTH_KEY, String(assistantWidthRef.current))
-      } catch {
-        /* storage unavailable */
-      }
-    }
-    document.body.style.userSelect = 'none'
-    document.body.style.cursor = 'col-resize'
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }, [])
-  const resetAssistantWidth = useCallback(() => {
-    assistantWidthRef.current = ASSISTANT_WIDTH_DEFAULT
-    setAssistantWidth(ASSISTANT_WIDTH_DEFAULT)
+  const grow = (el: HTMLTextAreaElement) => { el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 200)}px` }
+
+  const ask = async (question: string) => {
+    const q = question.trim()
+    if (!q || busy) return
+    setInput('')
+    if (textareaRef.current) textareaRef.current.style.height = 'auto'
+    setBusy(true)
     try {
-      window.localStorage.setItem(ASSISTANT_WIDTH_KEY, String(ASSISTANT_WIDTH_DEFAULT))
-    } catch {
-      /* storage unavailable */
-    }
-  }, [])
-
-  const load = useCallback(async (force = false) => {
-    try {
-      const snapshot = await getSnapshot(force ? 0 : undefined)
-      setAgents(snapshot.agents || [])
-      setActivities(snapshot.activities || [])
-      setAuthError(null)
-      setAuthStatus(null)
-    } catch (error) {
-      // The gate: no active Sales AI connection — send to the connect flow.
-      if (error instanceof SnapshotError && error.code === 'ENTITLEMENT_REQUIRED') {
-        window.location.assign('/connect')
-        return
-      }
-      const status = error instanceof SnapshotError ? error.status ?? 500 : 500
-      setAuthStatus(status)
-      setAuthError(error instanceof Error ? error.message : `Couldn't load agents (HTTP ${status}).`)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    load().catch(() => setLoading(false))
-    // Poll only while the tab is visible — a hidden tab generating 2 API calls
-    // every 10s per user is pure load for nothing. Refresh on return instead.
-    const interval = window.setInterval(() => {
-      if (!document.hidden) load().catch(() => undefined)
-    }, 10000)
-    const onVisible = () => {
-      if (!document.hidden) load().catch(() => undefined)
-    }
-    const onChanged = () => load(true).catch(() => undefined)
-    document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener(AGENTS_CHANGED_EVENT, onChanged)
-    return () => {
-      window.clearInterval(interval)
-      document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener(AGENTS_CHANGED_EVENT, onChanged)
-    }
-  }, [load])
-
-  // Land on the most recently updated agent unless a deep link already chose.
-  useEffect(() => {
-    if (loading || selectedAgentId) return
-    if (agents.length) setSelectedAgentId(agents[0].id)
-  }, [loading, agents, selectedAgentId])
-
-  // Deep links from the command palette and sidebar: ?agent=<id|new>, ?run=<id>.
-  useEffect(() => {
-    const agentParam = searchParams.get('agent')
-    if (!agentParam) return
-    if (agentParam === NEW_AGENT) {
-      setSelectedAgentId(NEW_AGENT)
-      setConfigureOpen(false)
-      setFocusRunId(null)
-      router.replace('/dashboard')
-      return
-    }
-    if (!agents.length) return
-    if (agents.some((candidate) => candidate.id === agentParam)) {
-      setSelectedAgentId(agentParam)
-      setConfigureOpen(false)
-      setFocusRunId(null)
-    }
-    router.replace('/dashboard')
-  }, [searchParams, agents, router])
-
-  useEffect(() => {
-    const runParam = searchParams.get('run')
-    if (!runParam || loading) return
-    const openRun = (activity: Activity) => {
-      if (activity.agentTaskId) setSelectedAgentId(activity.agentTaskId)
-      setConfigureOpen(false)
-      setFocusRunId(activity.id)
-    }
-    const activity = activities.find((candidate) => candidate.id === runParam)
-    if (activity) {
-      openRun(activity)
-      router.replace('/dashboard')
-      return
-    }
-    fetch(`/api/workflows/executions?executionId=${runParam}`, { cache: 'no-store' })
-      .then((response) => response.json())
-      .then((data) => {
-        const execution = data.items?.[0]?.execution
-        if (execution) openRun(execution)
-      })
-      .catch(() => undefined)
-      .finally(() => router.replace('/dashboard'))
-  }, [searchParams, activities, loading, router])
-
-  // Escape closes the Granola meeting picker (keyboard parity with the close button).
-  useEffect(() => {
-    if (!granolaPickerOpen) return
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setGranolaPickerOpen(false) }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [granolaPickerOpen])
-
-  const selectedAgent = useMemo(
-    () => agents.find((candidate) => candidate.id === selectedAgentId) ?? null,
-    [agents, selectedAgentId],
-  )
-
-  const agentActivities = useMemo(
-    () => (selectedAgent ? activities.filter((activity) => activity.agentTaskId === selectedAgent.id) : []),
-    [activities, selectedAgent],
-  )
-
-  const hasFailedRun = useMemo(
-    () => agentActivities.some((activity) => activity.status.toLowerCase() === 'failed'),
-    [agentActivities],
-  )
-
-  // The expanded run's output, shown in the right (assistant) pane.
-  const runOutput = useMemo(() => {
-    if (!selectedRun) return null
-    const text = resultText(selectedRun)
-    if (!text) return null
-    return {
-      title: selectedRun.metadata?.title || selectedRun.agentType,
-      at: selectedRun.startedAt,
-      status: selectedRun.status.toLowerCase(),
-      text,
-    }
-  }, [selectedRun])
-
-  // A different agent's runs are unrelated — clear the shown output on switch.
-  useEffect(() => {
-    setSelectedRun(null)
-  }, [selectedAgentId])
-
-  // Setup opens only when creating a new agent, editing an incomplete agent,
-  // or explicitly toggling configuration for the selected agent.
-  const creatingNew = selectedAgentId === NEW_AGENT
-  const showSetup = creatingNew || Boolean(selectedAgent && (!isConfigured(selectedAgent) || configureOpen))
-  const editingAgent = showSetup && selectedAgent && selectedAgentId !== NEW_AGENT ? selectedAgent : null
-
-  const greeting = useMemo(() => {
-    if (!selectedAgent) return agents.length ? 'Select an agent to see its activity.' : 'Describe what you need and Backstory builds the agent.'
-    const counts: Record<string, number> = {}
-    for (const activity of agentActivities) {
-      const status = activity.status.toLowerCase()
-      counts[status] = (counts[status] || 0) + 1
-    }
-    const parts: string[] = []
-    if (counts.completed) parts.push(`${counts.completed} completed`)
-    if (counts.waiting_for_input) parts.push(`${counts.waiting_for_input} need your input`)
-    if (counts.failed) parts.push(`${counts.failed} hit errors`)
-    if (counts.running) parts.push(`${counts.running} running`)
-    return parts.length ? `${parts.join(', ')}.` : 'Ready for the first run.'
-  }, [selectedAgent, agents.length, agentActivities])
-
-  const selectAgent = (id: string) => {
-    setSelectedAgentId(id)
-    setConfigureOpen(false)
-    setFocusRunId(null)
-  }
-
-  const saveAgent = async (draft: AgentDraft) => {
-    const response = await fetch('/api/agents', {
-      method: editingAgent ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editingAgent ? { ...draft, id: editingAgent.id } : draft),
-    })
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}))
-      const message = data.error || `Failed to save agent (HTTP ${response.status}).`
-      toast.error(message)
-      throw new Error(message)
-    }
-    const data = await response.json().catch(() => ({}))
-    notifyAgentsChanged()
-    toast.success(editingAgent ? 'Agent updated.' : 'Agent created.')
-    setConfigureOpen(false)
-    await load(true)
-    if (!editingAgent && data.agent?.id) setSelectedAgentId(data.agent.id)
-  }
-
-  const buildFromDescription = async () => {
-    if (!describe.trim()) return
-    setBuilding(true)
-    try {
-      const response = await fetch('/api/agents/draft', {
+      const res = await fetch('/api/librarian', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: describe, create: true }),
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        toast.error(data.error || `Couldn't build the agent (HTTP ${response.status}).`)
-        return
-      }
-      setDescribe('')
-      notifyAgentsChanged()
-      toast.success(`Created "${data.draft?.title || 'agent'}".`)
-      await load(true)
-      if (data.agentId) setSelectedAgentId(data.agentId)
-    } finally {
-      setBuilding(false)
-    }
-  }
-
-  const openGranolaPicker = async () => {
-    setGranolaFetchingList(true)
-    setGranolaNotes([])
-    try {
-      const response = await fetch('/api/granola/notes')
-      const data = await response.json().catch(() => ({}))
-      if (!data.success) {
-        toast.error(data.error || 'Granola not connected')
-        return
-      }
-      setGranolaNotes(data.notes || [])
-      setGranolaPickerOpen(true)
-    } catch {
-      toast.error('Could not reach Granola. Please try again.')
-    } finally {
-      setGranolaFetchingList(false)
-    }
-  }
-
-  const importGranolaNote = async (note: GranolaNote) => {
-    setGranolaFetchingNote(true)
-    try {
-      const response = await fetch(`/api/granola/notes/${encodeURIComponent(note.id)}`)
-      const data = await response.json().catch(() => ({}))
-      if (!data.success) {
-        toast.error(data.error || 'Could not load that meeting note.')
-        return
-      }
-      const { title, summary } = data.note as { id: string; title: string; summary: string }
-      const prefill = `Build an agent based on this meeting. Identify the workflow or task that was requested and create an agent that carries it out.\n\nMeeting: ${title}\n\n${summary}`
-      setDescribe(prefill.slice(0, 3800))
-      setGranolaPickerOpen(false)
-    } catch {
-      toast.error('Could not load that meeting note. Please try again.')
-    } finally {
-      setGranolaFetchingNote(false)
-    }
-  }
-
-  const runAgent = async (agent: Agent) => {
-    setRunningId(agent.id)
-    try {
-      const res = await fetch(`/api/agents/${agent.id}/execute`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ question: q }),
       })
       const data = await res.json().catch(() => ({}))
-      if (res.ok) {
-        if (data.result?.status === 'waiting_for_input') {
-          toast(`${agent.title} needs your input`)
-        } else {
-          toast.success(`${agent.title} ran`)
-        }
-        setSelectedAgentId(agent.id)
-        setConfigureOpen(false)
-        if (data.executionId) setFocusRunId(data.executionId)
-        await load(true)
-      } else {
-        toast.error(data.error || 'Run failed')
-      }
+      if (!res.ok) { toast.error(data.error || 'The Librarian couldn’t answer that.'); return }
+      setThread((prev) => [...prev, { question: q, answer: data.answer ?? '', results: data.results ?? [] }])
+    } catch {
+      toast.error('Could not reach the Librarian.')
     } finally {
-      setRunningId(null)
+      setBusy(false)
     }
   }
 
+  const activeHint = PERSONAS.find((p) => p.key === persona)?.hint
+
   return (
-    <div className="flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:overflow-hidden">
-      {/* Agents / Templates toggle — folds the former Templates page into Home. */}
-      <div className="flex shrink-0 items-center justify-center border-b bg-white/80 px-4 py-2.5 backdrop-blur-md supports-[backdrop-filter]:bg-white/70">
-        <ViewToggle view={view} onChange={setView} templateCount={templateCount} />
-      </div>
+    <div className="mx-auto w-full max-w-4xl px-4 pb-24 pt-10 sm:pt-16">
+      <p className="mb-10 font-mono text-xs tracking-[0.2em] text-gray-500">
+        <span className="text-horizon-500">{'///'}</span> {hello}
+      </p>
 
-      {view === 'templates' ? (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <TemplatesView embedded onCount={setTemplateCount} />
+      {/* Composer — matches the mockup: prompt, attach + BUILD, send, persona row */}
+      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm transition-colors focus-within:border-horizon-400 focus-within:ring-4 focus-within:ring-horizon-500/10">
+        <div className="px-5 pt-5">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            rows={1}
+            onChange={(e) => { setInput(e.target.value); grow(e.target) }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void ask(input) } }}
+            placeholder="Ask the Librarian about the library, setup, or a goal…"
+            className="w-full resize-none bg-transparent text-lg text-gray-900 outline-none placeholder:text-gray-400"
+          />
         </div>
-      ) : (
-      /* lg: rows locked to the viewport (minmax(0,1fr)) — an implicit auto row
-         would grow with content and clip each pane's bottom (form buttons,
-         chat composer) behind the grid's overflow-hidden. */
-      <div
-        className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden"
-        style={{ gridTemplateColumns: `minmax(420px,1fr) ${assistantWidth}px` }}
-      >
-        {/* ── Left pane: activity for the selected agent, or the setup flow ── */}
-        <section className="min-w-0 border-b bg-white lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
-          <div className="sticky top-0 z-10 border-b bg-white/80 p-4 backdrop-blur-md supports-[backdrop-filter]:bg-white/70">
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                {agents.length > 0 ? (
-                  <Select value={selectedAgent?.id ?? ''} onValueChange={selectAgent}>
-                    <SelectTrigger className="h-9 font-medium" aria-label="Select agent">
-                      <SelectValue placeholder="New agent" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agents.map((agent) => (
-                        <SelectItem key={agent.id} value={agent.id}>{agent.title}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <h1 className="text-xl font-semibold">{loading ? 'Loading…' : 'Create your first agent'}</h1>
-                )}
-                <p className="mt-1 truncate text-sm text-gray-500" aria-live="polite">
-                  Hey, {user?.firstName || 'there'}. {greeting}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                {selectedAgent && isConfigured(selectedAgent) && (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      disabled={runningId === selectedAgent.id}
-                      onClick={() => runAgent(selectedAgent)}
-                      aria-label={`Run ${selectedAgent.title}`}
-                      title="Run agent"
-                    >
-                      {runningId === selectedAgent.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => setConfigureOpen((open) => !open)}
-                      aria-label={configureOpen ? 'Back to activity' : 'Configure agent'}
-                      title={configureOpen ? 'Back to activity' : 'Configure agent'}
-                      className={cn('transition-colors duration-150', configureOpen && 'bg-indigo-50 text-indigo-700')}
-                    >
-                      {configureOpen ? <List className="h-4 w-4" /> : <Settings2 className="h-4 w-4" />}
-                    </Button>
-                  </>
-                )}
-                <Button
-                  variant="outline"
-                  onClick={() => { setSelectedAgentId(NEW_AGENT); setConfigureOpen(false); setFocusRunId(null) }}
-                >
-                  <Plus className="mr-1.5 h-4 w-4" /> New agent
-                </Button>
-              </div>
-            </div>
+
+        <div className="flex items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => toast('Attachments are coming soon.')}
+              className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              aria-label="Attach"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push('/agents?agent=new')}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-2 font-mono text-xs uppercase tracking-wider text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+            >
+              <Wrench className="h-3.5 w-3.5" /> Build
+            </button>
           </div>
+          <button
+            type="button"
+            onClick={() => void ask(input)}
+            disabled={!input.trim() || busy}
+            className={cn(
+              'flex h-9 w-9 items-center justify-center rounded-full text-white transition-colors',
+              input.trim() && !busy ? 'bg-horizon-600 hover:bg-horizon-700' : 'bg-gray-300',
+            )}
+            aria-label="Send"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+          </button>
+        </div>
 
-          {authError && (
-            <div className="m-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                {authStatus === 401 ? (
-                  <>
-                    <p className="font-medium">You’re not signed in.</p>
-                    <p className="mb-2 text-amber-800">This environment has no active session — sign in to load your workspace.</p>
-                    <Button size="sm" onClick={() => router.push('/auth/login')}>Sign in</Button>
-                  </>
-                ) : authStatus === 403 ? (
-                  <>
-                    <p className="font-medium">Your workspace is still provisioning.</p>
-                    <p className="text-amber-800">Reload in a moment. If this persists, the database isn’t reachable for this environment.</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-medium">{authError}</p>
-                    <p className="text-amber-800">The database or auth isn’t configured for this environment.</p>
-                  </>
+        <div className="border-t px-4 py-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="font-mono text-[11px] uppercase tracking-wider text-gray-500">Tailor output for</span>
+            {activeHint && <span className="text-sm text-gray-400">{activeHint}</span>}
+          </div>
+          <div className="grid grid-cols-4 gap-1 rounded-lg bg-gray-50 p-1">
+            {PERSONAS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                onClick={() => setPersona(p.key)}
+                className={cn(
+                  'rounded-md py-2 text-center font-mono text-xs tracking-wider transition-colors',
+                  persona === p.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600',
+                )}
+              >
+                {p.key}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Suggestion chips (empty state only) */}
+      {thread.length === 0 && !busy && (
+        <div className="mt-5 flex flex-wrap gap-3">
+          {SUGGESTIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => void ask(s)}
+              className="rounded-full border border-gray-200 bg-white px-4 py-2.5 font-mono text-sm text-gray-600 transition-colors hover:border-gray-300 hover:bg-gray-50"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Conversation */}
+      {(thread.length > 0 || busy) && (
+        <div className="mt-8 space-y-8">
+          {thread.map((turn, i) => (
+            <div key={i} className="space-y-3">
+              <p className="text-right text-sm font-medium text-gray-900">{turn.question}</p>
+              <div className="rounded-2xl border bg-white p-4 shadow-sm">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-horizon-600">
+                  <Sparkles className="h-3.5 w-3.5" /> Librarian
+                </div>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700">{turn.answer}</p>
+                {turn.results.length > 0 && (
+                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                    {turn.results.map((r) => {
+                      const Icon = RESULT_ICON[r.type]
+                      return (
+                        <Link
+                          key={`${r.type}-${r.id}`}
+                          href={r.href}
+                          className="flex items-center gap-3 rounded-lg border p-3 transition-colors hover:border-horizon-300 hover:bg-gray-50"
+                        >
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-gray-100 text-gray-500">
+                            <Icon className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-medium text-gray-900">{r.title}</span>
+                            <span className="block truncate text-xs text-gray-400">{r.subtitle}</span>
+                          </span>
+                        </Link>
+                      )
+                    })}
+                  </div>
                 )}
               </div>
             </div>
-          )}
-
-          {/* Persistent recommendation surface — a compact collapsible bar that
-              renders only when the AI has a suggestion from real usage; each row
-              opens a detail popup, and the bell mirrors the same proposals. */}
-          {!loading && !authError && (
-            <div className="px-4 pt-4">
-              <RecommendationsBar />
+          ))}
+          {busy && (
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+              <Loader2 className="h-4 w-4 animate-spin" /> Searching your library…
             </div>
           )}
-
-          {loading && (
-            <div className="space-y-3 p-4">
-              <Skeleton className="h-20 rounded-xl" />
-              <Skeleton className="h-20 rounded-xl" />
-              <Skeleton className="h-20 rounded-xl" />
-            </div>
-          )}
-
-          {!loading && showSetup && (
-            <div className="space-y-4 p-4">
-              {!editingAgent && (
-                <div>
-                  {/* Den-style: describe an agent in plain language and build it. */}
-                  <div className="flex items-center gap-2 rounded-xl border bg-gray-50 px-3 py-2 transition-shadow duration-150 focus-within:ring-2 focus-within:ring-indigo-200">
-                    <Sparkles className="h-4 w-4 shrink-0 text-indigo-500" />
-                    <input
-                      className="flex-1 bg-transparent text-sm outline-none placeholder:text-gray-400"
-                      placeholder={"Describe an agent to build — e.g. “Every Monday, summarize last week’s GitHub activity and post it to Slack”"}
-                      value={describe}
-                      disabled={building}
-                      onChange={(event) => setDescribe(event.target.value)}
-                      onKeyDown={(event) => event.key === 'Enter' && buildFromDescription()}
-                    />
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={granolaFetchingList || building}
-                      onClick={openGranolaPicker}
-                      title="Import from Granola"
-                      className="shrink-0 gap-1.5 text-xs text-gray-500 hover:text-gray-700"
-                    >
-                      {granolaFetchingList ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
-                      Import
-                    </Button>
-                    <Button size="sm" loading={building} disabled={!describe.trim()} onClick={buildFromDescription}>
-                      Build
-                    </Button>
-                  </div>
-                  {/* Granola meeting picker */}
-                  {granolaPickerOpen && (
-                    <div className="relative mt-1 max-h-64 origin-top animate-scale-in overflow-y-auto rounded-xl border bg-white shadow-popover">
-                      <div className="sticky top-0 flex items-center justify-between border-b bg-white px-3 py-2">
-                        <span className="text-xs font-medium text-gray-600">Select a meeting to import</span>
-                        <button
-                          className="rounded p-0.5 text-gray-400 transition-colors duration-150 hover:text-gray-700"
-                          onClick={() => setGranolaPickerOpen(false)}
-                          aria-label="Close picker"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                      {granolaFetchingNote && (
-                        <div className="flex items-center justify-center p-6 text-sm text-gray-500">
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading meeting…
-                        </div>
-                      )}
-                      {!granolaFetchingNote && granolaNotes.length === 0 && (
-                        <p className="p-4 text-sm text-gray-500">No recent meetings found in Granola.</p>
-                      )}
-                      {!granolaFetchingNote && granolaNotes.map((note) => (
-                        <button
-                          key={note.id}
-                          className="flex w-full flex-col gap-0.5 border-b px-3 py-2.5 text-left transition-colors duration-150 last:border-b-0 hover:bg-gray-50"
-                          onClick={() => importGranolaNote(note)}
-                        >
-                          <span className="truncate text-sm font-medium">{note.title}</span>
-                          <span className="truncate text-xs text-gray-400">
-                            {note.owner?.name || note.owner?.email || ''}
-                            {note.owner && note.created_at ? ' · ' : ''}
-                            {note.created_at ? new Date(note.created_at).toLocaleDateString() : ''}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {editingAgent && !isConfigured(editingAgent) && (
-                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                  Finish setting up this agent to see its activity here.
-                </p>
-              )}
-
-              <div className="animate-fade-in-up rounded-lg border bg-white p-4 shadow-1">
-                <p className="eyebrow mb-3">{editingAgent ? 'Agent setup' : 'Set up manually'}</p>
-                <AgentConfigForm
-                  key={editingAgent?.id || NEW_AGENT}
-                  editingAgent={editingAgent}
-                  onSave={saveAgent}
-                  onRunAgent={editingAgent ? runAgent : undefined}
-                  runningId={runningId}
-                  onOpenRun={(runId) => { setConfigureOpen(false); setFocusRunId(runId) }}
-                />
-              </div>
-            </div>
-          )}
-
-          {!loading && !showSetup && selectedAgent && (
-            <AgentActivityPane
-              agent={selectedAgent}
-              activities={agentActivities}
-              focusRunId={focusRunId}
-              onChanged={() => load(true).catch(() => undefined)}
-              onSelectRun={setSelectedRun}
-            />
-          )}
-
-          {!loading && !showSetup && !selectedAgent && agents.length === 0 && (
-            <div className="p-4">
-              <EmptyState
-                icon={Play}
-                title="No runs yet"
-                description="Create agent and logs will show here"
-              />
-            </div>
-          )}
-        </section>
-
-        {/* ── Right pane: persistent assistant chat for the selected agent ── */}
-        <section className="relative flex h-[70vh] min-w-0 flex-col bg-white lg:h-auto lg:min-h-0">
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize assistant panel"
-            onMouseDown={onAssistantResizeStart}
-            onDoubleClick={resetAssistantWidth}
-            title="Drag to resize · double-click to reset"
-            className="absolute left-0 top-0 z-20 hidden h-full w-1.5 -translate-x-1/2 cursor-col-resize transition-colors hover:bg-indigo-200 lg:block"
-          />
-          <AssistantPanel
-            key={selectedAgent?.id ?? 'none'}
-            agent={selectedAgent}
-            hasFailedRun={hasFailedRun}
-            runOutput={runOutput}
-            onAgentUpdated={() => load(true).catch(() => undefined)}
-          />
-        </section>
-      </div>
+          <div ref={threadEndRef} />
+        </div>
       )}
     </div>
-  )
-}
-
-export default function AgentHQPage() {
-  return (
-    <Suspense fallback={null}>
-      <AgentHQ />
-    </Suspense>
   )
 }

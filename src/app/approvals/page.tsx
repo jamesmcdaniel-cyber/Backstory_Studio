@@ -92,7 +92,7 @@ function providerLabel(provider: string): string {
  */
 function activityHref(row: ApprovalRow): string | null {
   if (row.source?.kind === 'flow') return `/flows/${row.source.flowId}/activity`
-  if (row.source?.kind === 'agent') return `/dashboard?run=${row.executionId}`
+  if (row.source?.kind === 'agent') return `/agents?run=${row.executionId}`
   return null
 }
 

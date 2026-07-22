@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertCircle, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Search } from 'lucide-react'
+import { AlertCircle, Bot, Brain, CheckCircle2, CircleDashed, FileText, HelpCircle, Loader2, Plug, Search } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
@@ -19,8 +19,9 @@ type Result =
 // Mirrors the sidebar's navigation so ⌘K doubles as quick navigation.
 const NAV_ITEMS: NavResult[] = [
   { label: 'Home', href: '/dashboard', icon: Brain },
+  { label: 'Agents', href: '/agents', icon: Bot },
   { label: 'Integrations', href: '/integrations', icon: Plug },
-  { label: 'Templates', href: '/dashboard?view=templates', icon: FileText },
+  { label: 'Templates', href: '/agents?view=templates', icon: FileText },
 ]
 
 function runStatusIcon(status: string) {
@@ -90,8 +91,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const select = useCallback((result: Result) => {
     onOpenChange(false)
     if (result.kind === 'nav') router.push(result.nav.href)
-    else if (result.kind === 'agent') router.push(`/dashboard?agent=${result.agent.id}`)
-    else router.push(`/dashboard?run=${result.run.id}`)
+    else if (result.kind === 'agent') router.push(`/agents?agent=${result.agent.id}`)
+    else router.push(`/agents?run=${result.run.id}`)
   }, [onOpenChange, router])
 
   const onKeyDown = (event: React.KeyboardEvent) => {

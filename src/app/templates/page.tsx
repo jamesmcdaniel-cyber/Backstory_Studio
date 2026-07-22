@@ -4,5 +4,5 @@ import { redirect } from 'next/navigation'
 // Agents/Templates toggle. Old links (and the /templates/[id] back button) land
 // on that view.
 export default function TemplatesPage() {
-  redirect('/dashboard?view=templates')
+  redirect('/agents?view=templates')
 }

@@ -13,5 +13,5 @@ export type NotificationLinkFields = {
 export function notificationHref(n: NotificationLinkFields): string {
   if (n.link) return n.link
   if (n.type.startsWith('flow.') && n.executionId) return `/flows/${n.executionId}/activity`
-  return n.executionId ? `/dashboard?run=${n.executionId}` : '/dashboard'
+  return n.executionId ? `/agents?run=${n.executionId}` : '/dashboard'
 }

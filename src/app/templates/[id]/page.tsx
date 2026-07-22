@@ -119,11 +119,11 @@ export default function TemplateDetails() {
           <EmptyState
             title="Template not found"
             description="It may have been removed or is no longer shared."
-            action={<Button variant="outline" onClick={() => router.push('/dashboard?view=templates')}>Back to templates</Button>}
+            action={<Button variant="outline" onClick={() => router.push('/agents?view=templates')}>Back to templates</Button>}
           />
         ) : (
           <>
-            <Link href="/dashboard?view=templates" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+            <Link href="/agents?view=templates" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
               <ArrowLeft className="h-4 w-4" /> Back to templates
             </Link>
 
