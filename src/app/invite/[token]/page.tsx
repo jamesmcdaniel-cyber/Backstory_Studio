@@ -60,7 +60,7 @@ export default function InvitePage() {
       <div className="w-full max-w-md animate-fade-in-up">
         <div className="mb-8 text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/backstory-logo-white.svg" alt="Backstory" className="mx-auto mb-6 h-7" />
+          <img src="/backstory-symbol-white.png" alt="Backstory" className="mx-auto mb-6 h-7" />
         </div>
 
         <Card className="shadow-3">

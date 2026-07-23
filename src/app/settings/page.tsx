@@ -22,7 +22,7 @@ const PLAN_LABEL: Record<string, string> = {
   ENTERPRISE: 'Enterprise',
 }
 
-const DEFAULT_ORG_LOGO = '/backstory-mark-blue.svg'
+const DEFAULT_ORG_LOGO = '/backstory-symbol-black.png'
 
 function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
   return (

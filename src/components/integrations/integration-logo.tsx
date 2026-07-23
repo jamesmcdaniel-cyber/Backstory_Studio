@@ -55,7 +55,7 @@ const LOCAL_LOGOS: Record<string, string> = {
   granola: '/logos/granola.jpg',
   // Salesforce was removed from the Simple Icons CDN (trademark), so bundle it.
   salesforce: '/logos/salesforce.svg',
-  backstory: '/backstory-mark-blue.svg',
+  backstory: '/backstory-symbol-black.png',
   googledrive: '/logos/googledrive.svg',
   googlesheets: '/logos/googlesheets.webp',
   monday: '/logos/monday.jpg',

@@ -52,7 +52,7 @@ function ProductShot() {
     <div className="bs-l-stage bs-l-rise bs-l-rise--3" role="img" aria-label="A Backstory Studio run log: an agent's tool calls with results, one flagged error, and the run's output.">
       <div className="bs-l-appbar">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/backstory-mark-blue.svg" alt="" />
+        <img src="/backstory-symbol-black.png" alt="" />
         Weekly pipeline digest
         <span className="bs-l-nav-spacer" />
         <span className="bs-l-pill bs-l-pill--info">Run #142</span>
@@ -120,7 +120,7 @@ export default async function Home() {
     <div className="bs-l-page">
       <header className="bs-l-wrap bs-l-nav">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/backstory-lockup-black.svg" alt="Backstory" style={{ height: 22 }} />
+        <img src="/backstory-lockup-black.png" alt="Backstory" style={{ height: 22 }} />
         <span className="bs-l-nav-spacer" />
         <a className="bs-l-nav-link" href="#features">
           What you get
@@ -160,7 +160,7 @@ export default async function Home() {
           <div className="bs-l-tagline bs-l-rise bs-l-rise--3">
             <span>see what&apos;s coming</span>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/backstory-mark-blue.svg" alt="" />
+            <img src="/backstory-symbol-black.png" alt="" />
             <span>know what to do</span>
           </div>
         </div>
@@ -264,7 +264,7 @@ export default async function Home() {
       <footer className="bs-l-footer">
         <div className="bs-l-wrap">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/backstory-lockup-black.svg" alt="Backstory" />
+          <img src="/backstory-lockup-black.png" alt="Backstory" />
           <span className="bs-l-footer-tagline">see what&apos;s coming · know what to do</span>
           <span className="bs-l-nav-spacer" />
           <Link href="/privacy">Privacy</Link>

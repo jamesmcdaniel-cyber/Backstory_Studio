@@ -135,7 +135,7 @@ function ConnectInner() {
     <main className="flex min-h-screen items-center justify-center bg-gradient-horizon-soft p-6">
       <div className="w-full max-w-xl animate-fade-in-up rounded-xl border bg-white p-8 shadow-3">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/backstory-lockup-black.svg" alt="Backstory" className="h-6 w-auto" />
+        <img src="/backstory-lockup-black.png" alt="Backstory" className="h-6 w-auto" />
 
         {/* Stepper */}
         <ol className="mt-8 flex items-center gap-2">
