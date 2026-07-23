@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { serializeTemplate, listStoredCatalogue } from '@/lib/templates/catalogue'
+import { EXAMPLE_REPORTS } from '@/lib/templates/example-reports'
 import { createTemplate } from '@/lib/templates/create-template'
 import { enhanceAutomationInstructions } from '@/lib/templates/automation-assets'
 
@@ -20,6 +21,10 @@ const templateSchema = z.object({
   visibility: z.enum(['org', 'global']).optional(),
 })
 
+// Every example output is a full house-format HTML report (see
+// src/features/agents/report-format.ts and src/lib/templates/example-reports)
+// — the gallery renders it via HtmlPreview, so the advertised example IS the
+// exact format live runs produce.
 const builtInTemplates = [
   {
     "id": "39-salesai-upsell-engine",
@@ -39,43 +44,7 @@ const builtInTemplates = [
       "weekly"
     ],
     "model": "claude-sonnet-5",
-    // House report format (see src/features/agents/report-format.ts) — the
-    // gallery renders this via HtmlPreview, so the advertised example IS the
-    // exact format live runs produce.
-    "exampleOutput": `<!doctype html><html><head><meta charset="utf-8"><style>
-body{margin:0;background:#f1f5f9;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;color:#0f172a;padding:24px}
-.report{max-width:960px;margin:0 auto}
-.card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px 24px;margin-bottom:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
-.hero{background:linear-gradient(135deg,#ecfdf5,#ffffff 60%);display:flex;justify-content:space-between;gap:16px}
-.eyebrow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#047857;margin:0 0 6px}
-h1{font-size:22px;margin:0 0 6px}h2{font-size:16px;margin:0}
-.sub{color:#475569;font-size:14px;margin:0}
-.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #d1fae5;background:#fff;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600;color:#065f46;white-space:nowrap;height:fit-content}
-.dot{width:7px;height:7px;border-radius:999px;background:#10b981;display:inline-block}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.stat{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px}
-.stat b{font-size:18px}.stat span{display:block;color:#64748b;font-size:12px;margin-top:2px}
-.summary{border-left:3px solid #10b981}.summary p{color:#334155;font-size:14px;line-height:1.6;margin:10px 0 0}
-.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-.count{border:1px solid #e2e8f0;border-radius:999px;padding:3px 10px;font-size:12px;color:#334155;background:#fff}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;text-align:left;padding:10px 12px;background:#f8fafc}
-td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
-.right{text-align:right}.muted{color:#64748b}
-.prio-high{color:#047857;font-weight:700;font-size:12px}.prio-med{color:#b45309;font-weight:700;font-size:12px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-.mini{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px}
-.mini b{font-size:13.5px}.mini p{margin:4px 0;color:#475569;font-size:13px}.mini small{color:#94a3b8;font-size:11.5px}
-.banner{background:#0f172a;color:#f8fafc;border-radius:14px;text-align:center;padding:14px;font-size:13px;font-weight:600}
-</style></head><body><div class="report">
-<div class="card hero"><div><p class="eyebrow">Upsell Intelligence Report</p><h1>SalesAI Upsell Engine — Weekly Sweep</h1><p class="sub">Scored the in-segment account universe across readiness, competitive risk, use-case fit, and sales motion.</p></div><span class="pill"><span class="dot"></span>18 of 23 scored · Action ready</span></div>
-<div class="stats"><div class="stat">🏆 <b>6</b><span>Accounts ready NOW</span></div><div class="stat">📈 <b>64</b><span>Avg readiness score</span></div><div class="stat">💰 <b>$2.1M</b><span>Qualified pipeline</span></div><div class="stat">⚠️ <b>3</b><span>Competitive eval signals</span></div></div>
-<div class="card summary"><h2>✨ Executive summary</h2><p>Scored 18 of 23 in-segment accounts (5 lacked usage data). Six are ready now, led by Seismic (91) with an engaged champion and peaking usage. Three accounts show live competitive evaluations and two show engagement decay. Recommended focus this week: close the Seismic expansion while re-engaging the two decaying renewals before the signals compound.</p></div>
-<div class="card"><p class="eyebrow">Evidence-backed analysis</p><div class="head"><h2>🔎 Priority matrix</h2><span class="count">Top 5 of 18 scored</span></div><table><tr><th>Tier</th><th>Account</th><th class="right">Readiness</th><th>Comp. risk</th><th>Primary use case</th></tr><tr><td class="prio-high">NOW</td><td>Seismic</td><td class="right">91</td><td>Medium</td><td>Forecast roll-ups</td></tr><tr><td class="prio-high">NOW</td><td>Zscaler</td><td class="right">88</td><td>High</td><td>Pipeline inspection</td></tr><tr><td class="prio-high">NOW</td><td>CrowdStrike</td><td class="right">84</td><td>Medium</td><td>Deal reviews</td></tr><tr><td class="prio-med">NEXT</td><td>Palo Alto Networks</td><td class="right">79</td><td>Medium</td><td>Renewal save plan</td></tr><tr><td class="prio-med">NEXT</td><td>Datadog</td><td class="right">76</td><td>Low</td><td>Deal reviews</td></tr></table></div>
-<div class="card"><p class="eyebrow">Recommended execution</p><div class="head"><h2>✅ Action plan — week 1</h2><span class="count">Owner + date assigned</span></div><table><tr><th>#</th><th>Next action</th><th>Owner</th><th>Due</th></tr><tr><td class="muted">1</td><td>Book Seismic expansion review with the engaged champion</td><td>Account team</td><td>Jul 16</td></tr><tr><td class="muted">2</td><td>Counter Zscaler's live competitive evaluation with ROI brief</td><td>Solutions</td><td>Jul 17</td></tr><tr><td class="muted">3</td><td>Re-engage the two decaying renewals with usage health review</td><td>CSM</td><td>Jul 18</td></tr></table></div>
-<div class="card"><h2>🧾 Evidence trail</h2><div class="cards"><div class="mini"><b>Backstory MCP</b><p>Opportunity data and 30-day communications intelligence.</p><small>↻ Updated 2h ago</small></div><div class="mini"><b>Snowflake</b><p>Feature adoption and usage telemetry per account.</p><small>↻ Jul 13</small></div><div class="mini"><b>Salesforce</b><p>Stage history, ARR, and named stakeholders.</p><small>↻ Updated 2h ago</small></div></div></div>
-<div class="banner">🎉 18 accounts scored · Priority matrix delivered · Executive digest emailed · Slack summary posted</div>
-</div></body></html>`,
+    "exampleOutput": EXAMPLE_REPORTS['39-salesai-upsell-engine'],
     "allowSubagents": true,
     "playbook": "salesai-upsell"
   },
@@ -95,7 +64,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "on-demand"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Account scorecard — ManpowerGroup\n\nReadiness: 91/100 (high confidence)\n• Data quality: 95 — full account + opp coverage, recent activity.\n• Feature maturity: 72 — core adopted, analytics unused (whitespace).\n• AI use-case fit: 96 — real-time analytics need stated by Janet Anderson.\n• Account health: 90 — 100% engaged on New Business, ARR trending up.\n\nRisk: LOW. Compliance concern raised by Elizabeth Moore — address in security review.\nNext action: book an exec value review with Olivia Jenkins (EB) on the analytics use case."
+    "exampleOutput": EXAMPLE_REPORTS['40-upsell-account-scorer'],
   },
   {
     "id": "01-sales-digest",
@@ -113,7 +82,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "daily"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Good morning, James. 3 accounts need attention today.\n\n• ManpowerGroup — New Business $494.5K (100% engaged), closes Oct 15. Momentum strong; confirm legal review this week.\n• Twitch Interactive — Renewal $313K slipping (10% engaged). No exec touch in 12 days — schedule a check-in.\n• Slice — Renewal $117K overdue (0% engaged). Flag to manager.\n\nPipeline in view: $3.8M across 20 accounts. Delivered to #sales-james."
+    "exampleOutput": EXAMPLE_REPORTS['01-sales-digest'],
   },
   {
     "id": "02-meeting-brief",
@@ -131,7 +100,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "daily"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Briefing — ManpowerGroup, today 2:00 PM\n\nWho: Olivia Jenkins (Economic Buyer), + 2 stakeholders.\nDeal: New Business $494.5K, closes Oct 15, 100% engaged.\nSince last meeting: security review completed; 2 support tickets resolved.\nRisks: data-privacy/compliance raised by Elizabeth Moore.\nSuggested agenda: 1) close security follow-ups 2) confirm procurement timeline 3) align on go-live."
+    "exampleOutput": EXAMPLE_REPORTS['02-meeting-brief'],
   },
   {
     "id": "03-silence-contract-monitor",
@@ -149,7 +118,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "account"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "⚠️ 2 accounts went quiet.\n\n• Slice — Renewal $117K, closes Dec 29. 0% engagement, no activity in 21 days. Contract in renewal window → churn risk HIGH.\n• Falken Group — no exec touch since the security review. Recommend a call before Friday.\n\nNo action needed on 18 other monitored accounts."
+    "exampleOutput": EXAMPLE_REPORTS['03-silence-contract-monitor'],
   },
   {
     "id": "04-opportunity-discovery",
@@ -167,7 +136,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "3 hidden opportunities surfaced this week:\n\n• ABBYY — high engagement (Andrew Wright, Gregory Roberts) but no open opp. Est. $200K+ whitespace.\n• Five9 — expanded usage signals, single-product today. Cross-sell candidate.\n• HFF — champion promoted; warm intro path opened.\n\nTop pick: ABBYY — assign for discovery this week."
+    "exampleOutput": EXAMPLE_REPORTS['04-opportunity-discovery'],
   },
   {
     "id": "05-forecast-coach",
@@ -184,7 +153,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Forecast coaching — Team West, this week\n\nCommit: $1.2M (7 deals). Best case: $1.9M.\nAt risk: 2 commit deals with <20% engagement — coach reps to secure exec sponsor.\nSandbagging signal: 3 best-case deals at 100% engagement past close date — push to commit.\nCoaching focus: Rep D's deals all lack a documented next step."
+    "exampleOutput": EXAMPLE_REPORTS['05-forecast-coach'],
   },
   {
     "id": "06-executive-inbox",
@@ -202,7 +171,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "account"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Inbox triage — 14 unread, 3 need you.\n\n1. Olivia Jenkins (ManpowerGroup) — asking for revised SOW. Reply today; deal $494.5K.\n2. Procurement@abbyy — security questionnaire attached. Route to SE.\n3. Champion at HFF — intro to their VP Eng. High value; respond personally.\n\n11 others summarized and archived."
+    "exampleOutput": EXAMPLE_REPORTS['06-executive-inbox'],
   },
   {
     "id": "07-churn-risk-scorecard",
@@ -221,7 +190,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "customer"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Weekly churn risk — CS team\n\nRED (2): Slice (0% engaged, renewal overdue), Acme (support escalations up 3x).\nAMBER (4): declining logins, exec sponsor departed, NPS drop.\nGREEN (31).\n\nBiggest mover: Slice ↓ from Amber to Red. Recommend save play + exec outreach."
+    "exampleOutput": EXAMPLE_REPORTS['07-churn-risk-scorecard'],
   },
   {
     "id": "08-renewal-prep-brief",
@@ -240,7 +209,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "customer"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Renewal prep — ManpowerGroup (T-30 days)\n\nContract: $494.5K, renews Feb 20. Engagement 9% (down from 100% at signing).\nUsage: 2 of 5 seats active; core feature adoption low.\nRisks: champion quiet 3 weeks; competitor mentioned in last call.\nPlay: schedule value review, surface ROI data, re-engage exec sponsor."
+    "exampleOutput": EXAMPLE_REPORTS['08-renewal-prep-brief'],
   },
   {
     "id": "09-onboarding-pulse",
@@ -259,7 +228,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "customer"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Onboarding pulse — Day 45\n\n• Five9 — GREEN. Kickoff done, 4/5 milestones hit, daily active.\n• NewCo — AMBER. No admin login in 10 days; onboarding stalled at integration step. CSM: reach out today.\n\n1 account on track, 1 needs a nudge before the 90-day mark."
+    "exampleOutput": EXAMPLE_REPORTS['09-onboarding-pulse'],
   },
   {
     "id": "10-activity-gap-detector",
@@ -277,7 +246,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "coaching"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Activity gaps — this week\n\nRep C: 40% fewer outbound touches than team median; 0 exec meetings booked.\nRep A (top performer) benchmark: 22 touches, 5 multi-thread accounts.\nGap: Rep C's open deals average 1.2 contacts vs team 3.4 — coach on multi-threading."
+    "exampleOutput": EXAMPLE_REPORTS['10-activity-gap-detector'],
   },
   {
     "id": "11-deal-hygiene-audit",
@@ -296,7 +265,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "coaching"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Pipeline hygiene — 42 open opps scanned.\n\n9 flagged:\n• 4 past close date, not updated → push or lose.\n• 3 missing next step.\n• 2 amount blank on commit-stage deals.\n\nCleanest reps: A, D. Send list to managers for Friday cleanup."
+    "exampleOutput": EXAMPLE_REPORTS['11-deal-hygiene-audit'],
   },
   {
     "id": "12-win-loss-debrief",
@@ -314,7 +283,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "coaching"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Win/Loss debrief — ManpowerGroup (WON, $494.5K)\n\nWhy we won: strong exec sponsor (Olivia Jenkins), fast security clearance, clear ROI.\nDeciding factor: real-time analytics vs incumbent.\nWatch-outs: procurement added 3 weeks; document for next time.\nReplicable play: lead with the analytics demo."
+    "exampleOutput": EXAMPLE_REPORTS['12-win-loss-debrief'],
   },
   {
     "id": "13-competitive-displacement-alert",
@@ -333,7 +302,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "🚨 Competitive signal — Keyslogic account\n\nElizabeth Moore raised fault-tolerance concerns and mentioned evaluating an alternative.\nEngagement dropped 40% in 2 weeks. Renewal in 90 days.\nRecommend: exec escalation + tailored reliability proof points this week."
+    "exampleOutput": EXAMPLE_REPORTS['13-competitive-displacement-alert'],
   },
   {
     "id": "14-territory-heat-map",
@@ -351,7 +320,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Territory heat map — Rep James\n\n🔥 Hot: ManpowerGroup, ABBYY, HFF (high engagement + open pipeline).\n🌤 Warm: Five9, Dropbox Paper (engaged, no open opp).\n❄️ Cold: 6 accounts, no activity 30d+.\n\nFocus this week: convert the 2 warm whitespace accounts."
+    "exampleOutput": EXAMPLE_REPORTS['14-territory-heat-map'],
   },
   {
     "id": "15-qbr-auto-prep",
@@ -371,7 +340,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "QBR pack — ManpowerGroup (Q3)\n\nHealth: GREEN. ARR $494.5K, 100% → 9% engagement (flag).\nWins: security review passed, 2 new use cases live.\nRisks: seat adoption 2/5; renewal Feb.\nProposed asks: expand to 5 teams, exec alignment on analytics roadmap.\nSlides drafted and attached."
+    "exampleOutput": EXAMPLE_REPORTS['15-qbr-auto-prep'],
   },
   {
     "id": "16-executive-sponsor-tracker",
@@ -390,7 +359,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Exec sponsor tracker — strategic deals\n\n• ManpowerGroup — sponsor Olivia Jenkins, last touch 3 days ago. HEALTHY.\n• Twitch — sponsor Dorian Quinn, last touch 18 days ago. AT RISK — no meeting booked.\n• ABBYY — no exec sponsor identified. GAP — map one this week."
+    "exampleOutput": EXAMPLE_REPORTS['16-executive-sponsor-tracker'],
   },
   {
     "id": "17-marketing-sales-handoff-scorer",
@@ -408,7 +377,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "MQL handoff — 5 leads scored\n\n• A. Wright (ABBYY) — SCORE 92. Existing engaged account, buying-committee member. Route to AE now.\n• J. Doe (unknown co) — SCORE 34. No Backstory footprint, generic title. Nurture.\n\n2 hot, 1 warm, 2 nurture. Hot leads assigned round-robin."
+    "exampleOutput": EXAMPLE_REPORTS['17-marketing-sales-handoff-scorer'],
   },
   {
     "id": "18-channel-pulse",
@@ -426,7 +395,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "account"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "#account-manpowergroup — 60-sec update\n\n💰 $494.5K New Business, closes Oct 15 · 100% engaged\n📈 Security review passed; SOW in legal\n⚠️ Watch: procurement timeline\n👤 Owner: Olivia Jenkins"
+    "exampleOutput": EXAMPLE_REPORTS['18-channel-pulse'],
   },
   {
     "id": "19-customer-stack-blueprint",
@@ -443,7 +412,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Implementation blueprint — “Daily digest to Slack”\n\nSource stack: Salesforce (CRM), Gong (meetings), Slack (delivery).\nCanonical steps: 1) pull accounts+opps 2) enrich w/ meeting signals 3) compose digest 4) route to Slack.\nAdapters needed: salesforce→canonical, gong→canonical, canonical→slack.\nReuses 3 existing library patterns; 1 new adapter required."
+    "exampleOutput": EXAMPLE_REPORTS['19-customer-stack-blueprint'],
   },
   {
     "id": "20-crm-signal-normalizer",
@@ -460,7 +429,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Normalized 128 CRM records (Salesforce → canonical)\n\nMapped: Opportunity→deal, Account→account, Owner→owner.\n12 records flagged: missing close_date (7), unmapped stage value (5).\nCanonical output validated against schema v2. Ready for downstream steps."
+    "exampleOutput": EXAMPLE_REPORTS['20-crm-signal-normalizer'],
   },
   {
     "id": "21-meeting-intelligence-normalizer",
@@ -477,7 +446,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Normalized 9 meetings (Gong + Zoom → canonical)\n\nExtracted: 9 transcripts, 23 attendees resolved to CRM contacts, 14 action items.\n2 attendees unmatched (external). 3 action items linked to open opps.\nOutput ready for the digest and brief workflows."
+    "exampleOutput": EXAMPLE_REPORTS['21-meeting-intelligence-normalizer'],
   },
   {
     "id": "22-multi-channel-delivery-router",
@@ -492,7 +461,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Routed insight payload → Slack #sales-james\n\nResolved channel from owner identity (James McDaniel → Slack DM fallback: #sales-james).\nFormat: Slack blocks. Email fallback not needed (Slack reachable).\nDelivered at 06:00 MT. Receipt confirmed."
+    "exampleOutput": EXAMPLE_REPORTS['22-multi-channel-delivery-router'],
   },
   {
     "id": "23-identity-resolution-hub",
@@ -507,7 +476,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Resolved 42 identities across CRM + messaging\n\n• Olivia Jenkins → SF Contact 003x, Slack @olivia, owner of 2 opps.\n• 3 duplicate accounts merged (ManpowerGroup variants).\n• 2 unresolved externals flagged for review.\nCanonical identity map updated."
+    "exampleOutput": EXAMPLE_REPORTS['23-identity-resolution-hub'],
   },
   {
     "id": "24-workflow-contract-validator",
@@ -522,7 +491,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Contract validation — digest pipeline\n\n✅ Step 1→2 payload matches schema v2.\n❌ Step 2→3: field `engagement_score` missing on 4 records.\n⚠️ Step 3→4: extra field `legacy_id` (non-breaking).\nBlocking issue: 1. Fix before rollout."
+    "exampleOutput": EXAMPLE_REPORTS['24-workflow-contract-validator'],
   },
   {
     "id": "25-implementation-gap-audit",
@@ -537,7 +506,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Gap audit — customer request vs library\n\nRequested: Dynamics 365 → Teams digest.\nCovered: canonical model, Teams delivery adapter. ✅\nGaps: Dynamics 365 source adapter (not in library), owner-resolution for Dynamics ids.\nEffort: ~1 new adapter + mapping. Recommend before commit."
+    "exampleOutput": EXAMPLE_REPORTS['25-implementation-gap-audit'],
   },
   {
     "id": "26-orchestrator-migration-planner",
@@ -552,7 +521,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Migration plan — Salesforce → canonical digest\n\nSteps: 1) deploy sf-source adapter 2) map fields (12) 3) wire canonical→slack 4) validate w/ golden payloads.\nRisks: custom stage values need mapping table.\nEstimated 3 build steps, 1 validation gate. Plan attached."
+    "exampleOutput": EXAMPLE_REPORTS['26-orchestrator-migration-planner'],
   },
   {
     "id": "27-adapter-regression-monitor",
@@ -568,7 +537,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Adapter regression — nightly replay\n\nReplayed 40 golden payloads through CRM/meeting/identity/delivery adapters.\n✅ 38 passed. ❌ 2 failed: salesforce adapter dropped `next_step` after API v60 change.\nSeverity: HIGH. Owner paged. Details attached."
+    "exampleOutput": EXAMPLE_REPORTS['27-adapter-regression-monitor'],
   },
   {
     "id": "28-rollout-readiness-scorecard",
@@ -583,7 +552,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "platform"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Rollout readiness — Acme stack\n\nScore: 78/100 (AMBER).\n✅ CRM adapter, identity resolution, delivery.\n⚠️ Meeting adapter untested on their Gong instance.\n❌ No fallback channel configured.\nVerdict: fix 2 items before go-live."
+    "exampleOutput": EXAMPLE_REPORTS['28-rollout-readiness-scorecard'],
   },
   {
     "id": "29-digital-chief-of-staff",
@@ -601,7 +570,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Chief of Staff — daily brief for James\n\nTop 3 moves today: 1) ManpowerGroup SOW to legal 2) re-engage Twitch exec 3) ABBYY discovery.\nCalendar: 3 meetings, brief attached for each.\nInbox: 3 items need you (triaged).\nPipeline: $3.8M in view; 2 at-risk deals flagged."
+    "exampleOutput": EXAMPLE_REPORTS['29-digital-chief-of-staff'],
   },
   {
     "id": "30-market-research-brief",
@@ -619,7 +588,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Market brief — target accounts, this week\n\n• ManpowerGroup: announced Q3 hiring surge → expansion signal.\n• ABBYY: new CISO hired → security messaging resonates.\n• Twitch: cost-cutting reported → lead with ROI.\nSources: public filings + normalized account activity. Full brief attached."
+    "exampleOutput": EXAMPLE_REPORTS['30-market-research-brief'],
   },
   {
     "id": "31-deal-inspection",
@@ -635,7 +604,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "/dealcheck ManpowerGroup — New Business\n\n$494.5K · closes Oct 15 · 100% engaged · owner Olivia Jenkins\nStage: Negotiation. Next step: legal review (this week).\nRisk: LOW. Multi-threaded (3 contacts), exec sponsor active.\nMEDDPICC: Metrics ✅ EB ✅ Champion ✅ Paper 🟡 (in legal)."
+    "exampleOutput": EXAMPLE_REPORTS['31-deal-inspection'],
   },
   {
     "id": "32-revenue-orchestration",
@@ -651,7 +620,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Proposed CRM update (awaiting approval)\n\nSignal: security review passed on ManpowerGroup.\nProposed: advance stage → Negotiation, set next step “legal review by Fri”, notify Olivia.\nOwner message drafted. \n▶ Approve to apply · ✎ Edit · ✕ Discard"
+    "exampleOutput": EXAMPLE_REPORTS['32-revenue-orchestration'],
   },
   {
     "id": "33-prospecting-brief",
@@ -667,7 +636,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Prospecting brief — ABBYY\n\nStatus: engaged (Andrew Wright, Gregory Roberts), no open opp.\nRecent activity: 2 site visits, 1 pricing-page view.\nAngle: real-time analytics + security (new CISO).\nOpening: reference their Q3 hiring surge. Suggested contacts + email draft attached."
+    "exampleOutput": EXAMPLE_REPORTS['33-prospecting-brief'],
   },
   {
     "id": "34-manager-coaching-brief",
@@ -683,7 +652,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "coaching"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Coaching brief — Rep C (this week)\n\nPipeline: $620K, 6 opps. Scorecard: activity below median, 2 deals single-threaded.\nCoaching points: 1) multi-thread ManpowerGroup 2) set next steps on all opps 3) book 2 exec meetings.\nTalk track and deal list attached."
+    "exampleOutput": EXAMPLE_REPORTS['34-manager-coaching-brief'],
   },
   {
     "id": "35-grounded-follow-up",
@@ -699,7 +668,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "coaching"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Follow-up draft — ManpowerGroup (grounded in last call)\n\nSubject: Next steps after your security review\n\nHi Olivia — great to close out the security items today. As discussed, I've attached the revised SOW reflecting the analytics scope. Next: legal review by Friday, targeting Oct 15 go-live. Anything you need from me before then?\n(Cites: call 7/3, ticket #482)"
+    "exampleOutput": EXAMPLE_REPORTS['35-grounded-follow-up'],
   },
   {
     "id": "36-pipeline-forecast-digest",
@@ -715,7 +684,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Pipeline & forecast digest\n\nTop records: 20 accounts, $3.8M pipeline, 39 open opps.\nCommit $1.2M · Best case $1.9M.\nAt-risk (expanded): Twitch renewal $313K (10% engaged), Slice $117K (overdue).\nBiggest gap: Slice renewal, 0% engagement, past close."
+    "exampleOutput": EXAMPLE_REPORTS['36-pipeline-forecast-digest'],
   },
   {
     "id": "37-deal-risk-next-actions",
@@ -731,7 +700,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "pipeline"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Deal risk + next actions — Twitch Interactive\n\nRisk: HIGH. Renewal $313K, 10% engaged, no exec touch 18 days.\nDrivers: champion quiet, competitor mentioned, past close date.\nNext actions: 1) exec escalation to Dorian Quinn 2) send ROI recap 3) book renewal review this week."
+    "exampleOutput": EXAMPLE_REPORTS['37-deal-risk-next-actions'],
   },
   {
     "id": "38-account-planning-strategy",
@@ -747,7 +716,7 @@ td{padding:12px;border-top:1px solid #e2e8f0;vertical-align:top}
       "strategic"
     ],
     "model": "claude-sonnet-5",
-    "exampleOutput": "Account plan — ManpowerGroup\n\nCurrent: $494.5K New Business + $494.5K renewal. Engagement 100%/9%.\nWhitespace: 3 teams not yet using analytics (~$200K).\nStakeholders: Olivia Jenkins (EB), Elizabeth Moore (blocker on compliance).\nStrategy: land go-live, prove ROI, expand in Q4. 3 plays attached."
+    "exampleOutput": EXAMPLE_REPORTS['38-account-planning-strategy'],
   }
 ]
 
