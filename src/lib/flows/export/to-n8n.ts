@@ -81,14 +81,28 @@ function placeholder(note: string): { type: string; typeVersion: number; paramet
   return { type: 'n8n-nodes-base.noOp', typeVersion: 1, parameters: {}, notes: note }
 }
 
+/** Working credentials embedded at export time so the flow runs without the
+ *  user hunting for them (the secret is minted fresh for the export). */
+export type ExportCredentials = { triggerUrl: string; triggerSecret: string }
+
 /** Map one flow node to its n8n type + parameters (+ optional note). */
-function mapNode(node: FlowNode, names: Map<string, string>): { type: string; typeVersion: number; parameters: Record<string, unknown>; notes?: string } {
+function mapNode(node: FlowNode, names: Map<string, string>, credentials?: ExportCredentials): { type: string; typeVersion: number; parameters: Record<string, unknown>; notes?: string } {
   const tr = (v: unknown) => (typeof v === 'string' ? translateTokens(v, names) : v)
   switch (node.type) {
     case 'trigger': {
       const t = node.data.trigger?.type
       if (t === 'schedule') return { type: 'n8n-nodes-base.scheduleTrigger', typeVersion: 1, parameters: {}, notes: 'Set the schedule interval to match your flow.' }
-      if (t === 'webhook') return { type: 'n8n-nodes-base.webhook', typeVersion: 1, parameters: { httpMethod: 'POST', path: 'flow' }, notes: 'Point your caller at this webhook URL.' }
+      if (t === 'webhook') {
+        return {
+          type: 'n8n-nodes-base.webhook',
+          typeVersion: 1,
+          parameters: { httpMethod: 'POST', path: 'flow' },
+          notes: credentials
+            ? 'Point your caller at this webhook URL. To run the original flow on Backstory instead (or from a step below), POST to ' +
+              `${credentials.triggerUrl} with header "x-trigger-secret: ${credentials.triggerSecret}" — this secret was minted for this export and is ready to use.`
+            : 'Point your caller at this webhook URL.',
+        }
+      }
       return { type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, parameters: {} }
     }
     case 'http':
@@ -151,7 +165,7 @@ function outputIndexFor(sourceType: string, branch: string | undefined): number 
 }
 
 /** Convert a flow graph to an importable n8n workflow. */
-export function flowToN8n(flow: { name?: string; graph: FlowGraph }): N8nWorkflow {
+export function flowToN8n(flow: { name?: string; graph: FlowGraph; credentials?: ExportCredentials }): N8nWorkflow {
   const graph = flow.graph
   const names = buildNameMap(graph)
   const positions = layoutGraph(graph)
@@ -162,7 +176,7 @@ export function flowToN8n(flow: { name?: string; graph: FlowGraph }): N8nWorkflo
   const nodes: N8nNode[] = graph.nodes
     .filter((n) => !containerMembers.has(n.id)) // container bodies are summarized in the container's note
     .map((node) => {
-      const mapped = mapNode(node, names)
+      const mapped = mapNode(node, names, flow.credentials)
       const pos = positions.get(node.id) ?? { x: 0, y: 0 }
       return {
         parameters: mapped.parameters,

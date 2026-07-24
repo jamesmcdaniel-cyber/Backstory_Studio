@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { ApiError, withAuthenticatedApi } from '@/lib/server/api-handler'
 import { agentVisibilityScope } from '@/lib/server/visibility'
@@ -15,11 +16,15 @@ function jsonValue(value: unknown) {
 }
 
 // POST /api/flows/[id]/publish — publish the draft (graph → publishedGraph,
-// version++), or revert the draft to the published version ({ revert: true }).
+// status ACTIVE, version = publish count), revert the draft to the published
+// version ({ revert: true }), or unpublish ({ unpublish: true } — clears
+// publishedGraph and deactivates; version history is kept).
 export const POST = withAuthenticatedApi(async (request, auth) => {
   const id = request.nextUrl.pathname.split('/').at(-2)
   if (!id) throw new ApiError('Flow id is required')
-  const { revert } = z.object({ revert: z.boolean().default(false) }).parse(await request.json().catch(() => ({})))
+  const { revert, unpublish } = z
+    .object({ revert: z.boolean().default(false), unpublish: z.boolean().default(false) })
+    .parse(await request.json().catch(() => ({})))
 
   const existing = await prisma.flow.findFirst({
     where: { id, organizationId: auth.organizationId, ...agentVisibilityScope(auth.dbUser.id) },
@@ -30,6 +35,23 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
   if (revert) {
     if (existing.publishedGraph == null) throw new ApiError('Nothing published to revert to', 400, 'NO_PUBLISHED')
     const flow = await prisma.flow.update({ where: { id, organizationId: auth.organizationId }, data: { graph: existing.publishedGraph } })
+    return { success: true, flow: serializeFlow(flow) }
+  }
+
+  if (unpublish) {
+    if (existing.publishedGraph == null) throw new ApiError('Flow is not published', 400, 'NOT_PUBLISHED')
+    const flow = await prisma.flow.update({
+      where: { id, organizationId: auth.organizationId },
+      data: { publishedGraph: Prisma.DbNull, status: 'DRAFT' },
+    })
+    await recordAudit({
+      organizationId: auth.organizationId,
+      actorUserId: auth.dbUser.id,
+      action: 'flow.unpublished',
+      resourceType: 'flow',
+      resourceId: id,
+      detail: { version: existing.version },
+    }).catch(() => undefined)
     return { success: true, flow: serializeFlow(flow) }
   }
 
@@ -55,7 +77,15 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
     throw new ApiError(validationErrorMessage(validation), 400, 'FLOW_VALIDATION_ERROR')
   }
 
-  const nextVersion = existing.version + 1
+  // Version = publish count: v1 on the first publish, +1 per publish after.
+  // Derived from the snapshot history (not flow.version, which seeds at 1) so
+  // the number keeps advancing across unpublish/republish cycles.
+  const latestSnapshot = await prisma.flowVersion.findFirst({
+    where: { flowId: id },
+    orderBy: { version: 'desc' },
+    select: { version: true },
+  })
+  const nextVersion = (latestSnapshot?.version ?? 0) + 1
   const trigger = jsonValue(preserveWebhookSecretHash(triggerFromGraph(graph, existing.trigger), existing.trigger))
   const [flow] = await prisma.$transaction([
     prisma.flow.update({
@@ -63,7 +93,10 @@ export const POST = withAuthenticatedApi(async (request, auth) => {
       data: {
         trigger,
         publishedGraph: existing.graph ?? {},
-        version: { increment: 1 },
+        version: nextVersion,
+        // Publishing arms the flow: triggers/schedules/signals all require
+        // ACTIVE. Lifecycle is owned by publish/unpublish, not a separate toggle.
+        status: 'ACTIVE',
       },
     }),
     prisma.flowVersion.create({

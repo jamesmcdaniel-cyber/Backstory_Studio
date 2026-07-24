@@ -64,3 +64,18 @@ test('flowToN8n gives every node a unique name and a position', () => {
     assert.ok(Number.isFinite(n.position[0]) && Number.isFinite(n.position[1]))
   }
 })
+
+test('flowToN8n embeds export credentials into the webhook trigger note', () => {
+  const credentials = { triggerUrl: 'https://app.example.com/api/flows/f1/trigger', triggerSecret: 's3cret-token' }
+  const wf = flowToN8n({ name: 'x', graph, credentials })
+  const trigger = wf.nodes.find((n) => n.name === 'Trigger')!
+  assert.ok(trigger.notes?.includes(credentials.triggerUrl), 'note carries the trigger URL')
+  assert.ok(trigger.notes?.includes(credentials.triggerSecret), 'note carries the minted secret')
+  assert.ok(trigger.notes?.includes('x-trigger-secret'), 'note names the auth header')
+})
+
+test('flowToN8n without credentials keeps the plain webhook note (no secrets)', () => {
+  const wf = flowToN8n({ name: 'x', graph })
+  const trigger = wf.nodes.find((n) => n.name === 'Trigger')!
+  assert.ok(!trigger.notes?.includes('x-trigger-secret'))
+})

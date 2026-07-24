@@ -111,7 +111,10 @@ function orderedSteps(graph: FlowGraph): FlowNode[] {
 }
 
 /** Build the copilot-ready instructions (Markdown) for a flow. */
-export function flowToInstructions(flow: { name?: string; description?: string; graph: FlowGraph }, agents?: { id: string; title: string }[]): string {
+export function flowToInstructions(
+  flow: { name?: string; description?: string; graph: FlowGraph; credentials?: { triggerUrl: string; triggerSecret: string } },
+  agents?: { id: string; title: string }[],
+): string {
   const graph = flow.graph
   const labels = stepLabelsOf(graph, agents)
   const trigger = graph.nodes.find((n) => n.type === 'trigger')
@@ -140,6 +143,13 @@ export function flowToInstructions(flow: { name?: string; description?: string; 
   if (integrations.length) {
     lines.push('## Connections you’ll need')
     for (const name of integrations) lines.push(`- ${name}`)
+    lines.push('')
+  }
+  if (flow.credentials) {
+    lines.push('## Credentials (ready to use)')
+    lines.push(`- Trigger URL: \`${flow.credentials.triggerUrl}\``)
+    lines.push(`- Trigger secret: \`${flow.credentials.triggerSecret}\` (send as the \`x-trigger-secret\` header)`)
+    lines.push('- These were minted for this export — the flow can be triggered on Backstory with them as-is, no extra setup.')
     lines.push('')
   }
   lines.push('## Notes')

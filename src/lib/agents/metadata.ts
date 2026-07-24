@@ -18,6 +18,10 @@ export type AgentMetadata = {
   pendingQuestion?: unknown
   allowSubagents?: boolean
   subagentIds?: string[]
+  /** Lets this agent run published flows via the run_flow tool. */
+  allowFlows?: boolean
+  /** Restrict which flows it may run. Empty/omitted = any visible published flow. */
+  flowIds?: string[]
   /** When true, a question closely matching a past answer is auto-answered from memory. */
   autoAnswerFromMemory?: boolean
   /** When true, every run starts with an explicit numbered plan before any tool call. */

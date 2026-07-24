@@ -33,6 +33,8 @@ export function serializeAgent(agent: {
     icon: metadata.icon || '',
     allowSubagents: (metadata as { allowSubagents?: boolean }).allowSubagents === true,
     subagentIds: ((metadata as { subagentIds?: string[] }).subagentIds ?? []).filter((id) => typeof id === 'string'),
+    allowFlows: (metadata as { allowFlows?: boolean }).allowFlows === true,
+    flowIds: ((metadata as { flowIds?: string[] }).flowIds ?? []).filter((id) => typeof id === 'string'),
     autoAnswerFromMemory: metadata.autoAnswerFromMemory === true,
     alwaysStrategize: metadata.alwaysStrategize === true,
     requireApproval: metadata.requireApproval === true,

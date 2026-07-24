@@ -90,6 +90,10 @@ export type AgentDraft = {
   allowSubagents?: boolean
   /** Restrict which agents it may run. Empty = any of the user's agents. */
   subagentIds?: string[]
+  /** Lets this agent run published flows via the run_flow tool. */
+  allowFlows?: boolean
+  /** Restrict which flows it may run. Empty = any visible published flow. */
+  flowIds?: string[]
   /** The outcome this agent ultimately serves — steers every run + self-evaluation. */
   goal: string
   /** When true, a question closely matching a past answer is auto-answered from memory. */
@@ -144,6 +148,8 @@ const emptyDraft: AgentDraft = {
   visibility: 'shared',
   allowSubagents: false,
   subagentIds: [],
+  allowFlows: false,
+  flowIds: [],
   goal: '',
   autoAnswerFromMemory: false,
   alwaysStrategize: false,
@@ -314,6 +320,8 @@ export function AgentConfigForm({
   const [memoriesLoading, setMemoriesLoading] = useState(false)
   // Other agents in the workspace, offered as run_agent targets.
   const [orgAgents, setOrgAgents] = useState<{ id: string; title: string }[]>([])
+  // Published flows for the "Call flows" picker (published = runnable by agents).
+  const [orgFlows, setOrgFlows] = useState<{ id: string; name: string }[]>([])
 
   useEffect(() => {
     if (!active) return
@@ -321,6 +329,13 @@ export function AgentConfigForm({
       .then((res) => res.json())
       .then((data) => {
         if (data.success) setOrgAgents((data.agents as { id: string; title: string }[]).map((a) => ({ id: a.id, title: a.title })))
+      })
+      .catch(() => {})
+    fetch('/api/flows', { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        const flows = (data.flows ?? []) as { id: string; name: string; published?: boolean }[]
+        setOrgFlows(flows.filter((f) => f.published).map((f) => ({ id: f.id, name: f.name })))
       })
       .catch(() => {})
   }, [active])
@@ -435,6 +450,8 @@ export function AgentConfigForm({
       visibility: source.visibility || 'shared',
       allowSubagents: source.allowSubagents === true,
       subagentIds: Array.isArray(source.subagentIds) ? source.subagentIds : [],
+      allowFlows: source.allowFlows === true,
+      flowIds: Array.isArray(source.flowIds) ? source.flowIds : [],
       goal: source.goal || '',
       autoAnswerFromMemory: source.autoAnswerFromMemory === true,
       alwaysStrategize: source.alwaysStrategize === true,
@@ -848,6 +865,64 @@ export function AgentConfigForm({
                 </div>
               )}
               {candidates.length === 0 && <p className="px-1 text-xs text-gray-400">No other agents yet — create more to delegate to them.</p>}
+            </div>
+          )
+        })()}
+      </div>
+
+      {/* ── Call flows ──────────────────────────────────────────────── */}
+      <div className="rounded-lg border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <Label>Call flows</Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Let this agent run your published flows via a run_flow tool and use their output.
+            </p>
+          </div>
+          <Switch
+            checked={draft.allowFlows === true}
+            onCheckedChange={(on) => setDraft({ ...draft, allowFlows: on })}
+          />
+        </div>
+
+        {draft.allowFlows === true && (() => {
+          const selected = draft.flowIds ?? []
+          const allSelected = selected.length === 0
+          const toggleFlow = (id: string) => {
+            const next = selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]
+            setDraft({ ...draft, flowIds: next })
+          }
+          return (
+            <div className="mt-3 border-t pt-3">
+              <p className="mb-2 text-xs font-medium text-gray-600">Which flows can it run?</p>
+              <label className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-sm hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-indigo-600"
+                  checked={allSelected}
+                  onChange={() => setDraft({ ...draft, flowIds: [] })}
+                />
+                <span className="font-medium">All published flows</span>
+                <span className="text-xs text-gray-400">({orgFlows.length} available)</span>
+              </label>
+              {orgFlows.length > 0 && (
+                <div className="mt-1 max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-1">
+                  {orgFlows.map((flow) => (
+                    <label key={flow.id} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-gray-50">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 accent-indigo-600"
+                        checked={allSelected || selected.includes(flow.id)}
+                        onChange={() => toggleFlow(flow.id)}
+                      />
+                      <span className="truncate">{flow.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {orgFlows.length === 0 && (
+                <p className="px-1 text-xs text-gray-400">No published flows yet — publish a flow in the builder to make it callable.</p>
+              )}
             </div>
           )
         })()}

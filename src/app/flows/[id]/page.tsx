@@ -204,11 +204,16 @@ function FlowBuilder() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [graph, setGraph] = useState<FlowGraph>(emptyGraph())
+  // Lifecycle status is owned by publish/unpublish (server-side); the client
+  // only mirrors it for exports — there is no manual status control.
   const [status, setStatus] = useState('draft')
   const [version, setVersion] = useState(1)
   // undefined = not yet loaded: webhook arming copy stays neutral instead of
   // flashing "publish to arm" on already-published flows before the fetch lands.
   const [published, setPublished] = useState<boolean | undefined>(undefined)
+  // True when the saved draft differs from the published graph (server-derived).
+  // Combined with `dirty` (unsaved local edits) to flip Publish ⇄ Unpublish.
+  const [unpublishedChanges, setUnpublishedChanges] = useState(false)
   // Share role: 'view' flows are runnable by the org but editable only by the owner.
   const [canEdit, setCanEdit] = useState(true)
   const [visibility, setVisibility] = useState('shared')
@@ -273,7 +278,7 @@ function FlowBuilder() {
   // Last run + status this session has SEEN, so pollRuns only toasts outcomes
   // it witnessed transition (never a stale terminal run on first poll).
   const watchedRun = useRef<{ id: string; status: string } | null>(null)
-  const dirty = savedSnapshot !== '' && JSON.stringify({ name, description, graph, status }) !== savedSnapshot
+  const dirty = savedSnapshot !== '' && JSON.stringify({ name, description, graph }) !== savedSnapshot
 
   useEffect(() => {
     let cancelled = false
@@ -304,13 +309,14 @@ function FlowBuilder() {
           setStatus(flow.status)
           setVersion(flow.version ?? 1)
           setPublished(Boolean(flow.published))
+          setUnpublishedChanges(Boolean(flow.unpublishedChanges))
           setCanEdit(flow.canEdit !== false)
           setVisibility(flow.visibility ?? 'shared')
           setOwnerId(flow.ownerId ?? null)
           setExternal(Boolean(flow.external))
           setShareToken(flow.shareToken ?? null)
           setShareRole(flow.shareRole === 'edit' ? 'edit' : 'view')
-          setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g, status: flow.status }))
+          setSavedSnapshot(JSON.stringify({ name: flow.name, description: flow.description || '', graph: g }))
           // Only now is it safe to persist — every save path checks this flag.
           loadedOkRef.current = true
         } else {
@@ -806,8 +812,9 @@ function FlowBuilder() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         // baseUpdatedAt lets the server reject a stale overwrite if a co-editor
-        // saved since we loaded (optimistic concurrency).
-        body: JSON.stringify({ id, name, description, graph, status: status.toUpperCase(), ...(baseUpdatedAt.current ? { baseUpdatedAt: baseUpdatedAt.current } : {}) }),
+        // saved since we loaded (optimistic concurrency). Status is deliberately
+        // NOT sent — publish/unpublish own the lifecycle server-side.
+        body: JSON.stringify({ id, name, description, graph, ...(baseUpdatedAt.current ? { baseUpdatedAt: baseUpdatedAt.current } : {}) }),
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
@@ -822,36 +829,45 @@ function FlowBuilder() {
       const data = await response.json().catch(() => ({}))
       // Advance our concurrency base to the just-saved version.
       if (data.flow?.updatedAt) baseUpdatedAt.current = data.flow.updatedAt
-      setSavedSnapshot(JSON.stringify({ name, description, graph, status }))
+      if (data.flow) setUnpublishedChanges(Boolean(data.flow.unpublishedChanges))
+      setSavedSnapshot(JSON.stringify({ name, description, graph }))
       return true
     } finally {
       setSaving(false)
     }
-  }, [id, name, description, graph, status, canEdit, external])
+  }, [id, name, description, graph, canEdit, external])
 
   const publish = useCallback(
-    async (revert = false) => {
+    async (action: 'publish' | 'revert' | 'unpublish' = 'publish') => {
       setPublishing(true)
       try {
-        if (!revert && !validation.ok) {
+        if (action === 'publish' && !validation.ok) {
           toast.error(validation.errors[0]?.message || 'Fix the flow before publishing.')
           return
         }
-        if (!revert && !(await save())) return
+        if (action === 'publish' && !(await save())) return
         const response = await fetch(`/api/flows/${id}/publish`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ revert }),
+          body: JSON.stringify({ revert: action === 'revert', unpublish: action === 'unpublish' }),
         })
         const data = await response.json().catch(() => ({}))
         if (!response.ok) {
-          toast.error(data.error || 'Could not publish.')
+          toast.error(data.error || (action === 'unpublish' ? 'Could not unpublish.' : 'Could not publish.'))
           return
         }
-        if (revert && data.flow?.graph) setGraph(data.flow.graph)
+        if (action === 'revert' && data.flow?.graph) setGraph(data.flow.graph)
         setVersion(data.flow?.version ?? version)
         setPublished(Boolean(data.flow?.published))
-        toast.success(revert ? 'Reverted to the published version.' : `Published v${data.flow?.version}.`)
+        if (data.flow?.status) setStatus(data.flow.status)
+        if (data.flow) setUnpublishedChanges(Boolean(data.flow.unpublishedChanges))
+        toast.success(
+          action === 'revert'
+            ? 'Reverted to the published version.'
+            : action === 'unpublish'
+              ? 'Unpublished — the flow will no longer run.'
+              : `Published v${data.flow?.version}.`,
+        )
       } finally {
         setPublishing(false)
       }
@@ -997,14 +1013,15 @@ function FlowBuilder() {
       const data = await response.json().catch(() => ({}))
       if (response.ok && data.flow?.graph) {
         commitGraph(data.flow.graph)
-        setSavedSnapshot(JSON.stringify({ name, description, graph: data.flow.graph, status }))
+        setSavedSnapshot(JSON.stringify({ name, description, graph: data.flow.graph }))
+        setUnpublishedChanges(true)
         setViewingVersion(null)
         toast.success(`Restored v${v} into the draft.`)
       } else {
         toast.error(data.error || 'Could not restore that version.')
       }
     },
-    [id, commitGraph, name, description, status],
+    [id, commitGraph, name, description],
   )
 
   const run = useCallback(async () => {
@@ -1143,21 +1160,47 @@ function FlowBuilder() {
     downloadBlob(JSON.stringify(payload, null, 2), 'application/json', `${filenameSlug(flowName)}.json`)
   }, [name, description, status, version, graph])
 
+  // Webhook-trigger flows export with WORKING credentials: a fresh trigger
+  // secret is minted (rotating any prior one) and embedded alongside the
+  // trigger URL, so the exported file runs against Backstory without the user
+  // hunting for credentials. Non-webhook flows (or a failed mint, e.g. a
+  // view-only viewer) export without credentials, as before.
+  const exportCredentials = useCallback(async (): Promise<{ triggerUrl: string; triggerSecret: string } | undefined> => {
+    const triggerNode = graph.nodes.find((n) => n.type === 'trigger')
+    const triggerType = triggerNode && 'trigger' in triggerNode.data ? triggerNode.data.trigger?.type : undefined
+    if (triggerType !== 'webhook') return undefined
+    try {
+      const response = await fetch(`/api/flows/${id}/trigger-secret`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rotate: true }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || typeof data.secret !== 'string' || !data.secret) return undefined
+      toast('A fresh trigger secret was minted into this export — any previously issued secret no longer works.', { duration: 6000 })
+      return { triggerUrl: String(data.url || ''), triggerSecret: data.secret }
+    } catch {
+      return undefined
+    }
+  }, [id, graph])
+
   // Export for n8n: an importable workflow JSON (structural nodes run; agent/
   // tool steps import as flagged No-Op placeholders — see @/lib/flows/export).
-  const exportN8n = useCallback(() => {
+  const exportN8n = useCallback(async () => {
     const flowName = name.trim() || 'Untitled flow'
-    downloadBlob(JSON.stringify(flowToN8n({ name: flowName, graph }), null, 2), 'application/json', `${filenameSlug(flowName)}.n8n.json`)
+    const credentials = await exportCredentials()
+    downloadBlob(JSON.stringify(flowToN8n({ name: flowName, graph, credentials }), null, 2), 'application/json', `${filenameSlug(flowName)}.n8n.json`)
     toast.success('Exported for n8n — import it under Workflows → Import.')
-  }, [name, graph])
+  }, [name, graph, exportCredentials])
 
   // Export as copilot-ready instructions (Markdown): paste into Zapier/Workato/
   // Make/n8n AI builders, or follow by hand.
-  const exportInstructions = useCallback(() => {
+  const exportInstructions = useCallback(async () => {
     const flowName = name.trim() || 'Untitled flow'
-    downloadBlob(flowToInstructions({ name: flowName, description, graph }, agents), 'text/markdown', `${filenameSlug(flowName)}.md`)
+    const credentials = await exportCredentials()
+    downloadBlob(flowToInstructions({ name: flowName, description, graph, credentials }, agents), 'text/markdown', `${filenameSlug(flowName)}.md`)
     toast.success('Exported instructions — paste them into your platform’s AI builder.')
-  }, [name, description, graph, agents])
+  }, [name, description, graph, agents, exportCredentials])
 
   const deleteFlow = useCallback(async () => {
     const flowName = name.trim() || 'this flow'
@@ -1307,15 +1350,6 @@ function FlowBuilder() {
         <Button variant="ghost" size="icon" onClick={redo} aria-label="Redo" title="Redo (⌘⇧Z)">
           <Redo2 className="h-4 w-4" />
         </Button>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="rounded-lg border border-border bg-background px-2 py-1.5 text-xs outline-none"
-        >
-          <option value="draft">Draft</option>
-          <option value="active">Active</option>
-          <option value="disabled">Disabled</option>
-        </select>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="Flow settings" title="Flow settings">
@@ -1428,11 +1462,29 @@ function FlowBuilder() {
               <Save className="mr-1.5 h-4 w-4" /> Save
               {dirty && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-400" title="Unsaved changes" />}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => publish(false)} loading={publishing} title={published ? `Published v${version}` : 'Not yet published'}>
-              {published ? `Publish v${version + 1}` : 'Publish'}
-            </Button>
-            {published && (
-              <Button variant="ghost" size="sm" onClick={() => publish(true)} title="Discard draft changes and restore the published version">
+            {published && !dirty && !unpublishedChanges ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => publish('unpublish')}
+                loading={publishing}
+                title={`Published v${version} — unpublish to stop it running`}
+              >
+                Unpublish
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => publish()}
+                loading={publishing}
+                title={published ? `Published v${version} — publish your changes as v${version + 1}` : 'Not yet published'}
+              >
+                Publish
+              </Button>
+            )}
+            {published && (dirty || unpublishedChanges) && (
+              <Button variant="ghost" size="sm" onClick={() => publish('revert')} title="Discard draft changes and restore the published version">
                 Revert
               </Button>
             )}

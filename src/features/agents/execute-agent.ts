@@ -57,6 +57,8 @@ export type AgentExecutionJob = {
 // the parent's tool loop, so many/deep runs would blow the run's time budget.
 const MAX_SUBAGENT_DEPTH = 2
 const MAX_SUBAGENTS_PER_RUN = 15
+// Flow-invocation bound (run_flow tool) — same rationale as the sub-agent caps.
+const MAX_FLOW_RUNS_PER_RUN = 10
 
 // Ceiling on a single tool result appended to the transcript. Without it, one
 // large payload (a CRM list, a big web page) can push the accumulating,
@@ -696,6 +698,93 @@ export async function runAgentExecution(
       tools.push(runAgentTool)
       // Not a write plane: a sub-agent's own writes are gated inside its run.
       bindings.set('run_agent', { provider: 'agent', serverUrl: '', toolName: 'run_agent', isWrite: false, client: runAgentClient })
+    }
+
+    // Call flows: an opted-in agent can run this workspace's PUBLISHED flows as
+    // tools (mirrors run_agent above). The flow executes inline against its
+    // published graph and its output comes back as the tool result. Bounded by
+    // a per-run count cap plus the flow-side subflow nesting guard.
+    if (agentMetadata.allowFlows === true && depth < MAX_SUBAGENT_DEPTH) {
+      // A non-empty flowIds allow-list restricts the roster; empty = any
+      // visible published flow (the default), matching subagentIds semantics.
+      const flowAllowList = (Array.isArray(agentMetadata.flowIds) ? agentMetadata.flowIds : []).filter(
+        (id): id is string => typeof id === 'string',
+      )
+      const callableFlows = (
+        await prisma.flow.findMany({
+          where: {
+            organizationId,
+            ...(flowAllowList.length ? { id: { in: flowAllowList } } : {}),
+            ...agentVisibilityScope(userId),
+          },
+          select: { id: true, name: true, description: true, publishedGraph: true },
+          take: 100,
+        })
+      )
+        // Published = publishedGraph set (house rule — there is no boolean column).
+        .filter((flow) => flow.publishedGraph != null)
+        .map(({ id: flowId, name: flowName, description }) => ({ id: flowId, name: flowName, description }))
+      if (callableFlows.length) {
+        const flowRoster = callableFlows
+          .map((flow) => `- "${flow.name}"${flow.description ? ` — ${flow.description}` : ''}`)
+          .join('\n')
+        const runFlowTool: ToolDefinition = {
+          name: 'run_flow',
+          description:
+            'Run one of this workspace\'s published flows and get its output back. ' +
+            `You can call it up to ${MAX_FLOW_RUNS_PER_RUN} times this run. Available flows:\n${flowRoster}`,
+          inputSchema: {
+            type: 'object',
+            properties: {
+              flow: { type: 'string', description: 'The exact name of the flow to run (from the list above).' },
+              input: { type: 'string', description: 'Input to pass to the flow (what its trigger would receive).' },
+            },
+            required: ['flow'],
+          },
+        }
+        let flowRunCount = 0
+        const runFlowClient: McpToolClient = {
+          executeTool: async (_serverUrl, _name, args) => {
+            const wanted = String((args as Record<string, unknown>).flow || '').trim()
+            const flowInput = (args as Record<string, unknown>).input
+            if (!wanted) return { error: 'Provide the name of the flow to run.' }
+            if (flowRunCount >= MAX_FLOW_RUNS_PER_RUN) {
+              return { error: `Flow-run limit reached (${MAX_FLOW_RUNS_PER_RUN} per run). Summarize what you have instead of running more.` }
+            }
+            const target = callableFlows.find((flow) => flow.id === wanted || flow.name.toLowerCase() === wanted.toLowerCase())
+            if (!target) return { error: `No published flow named "${wanted}" is available to run.` }
+            flowRunCount += 1
+            try {
+              // Dynamic import: execute-flow statically imports this module (flows
+              // run agent steps), so a static edge back would be a cycle — same
+              // idiom as the signal emit at the end of this run.
+              const { runFlowExecution } = await import('@/features/flows/execute-flow')
+              const result = await runFlowExecution({
+                flowId: target.id,
+                organizationId,
+                userId,
+                input: typeof flowInput === 'string' && flowInput.trim() ? flowInput : undefined,
+                usePublished: true,
+                trigger: { type: 'subflow', agentId: agent.id, executionId: execution.id },
+                subflowDepth: depth + 1,
+              })
+              if (result.status === 'succeeded') return { flow: target.name, output: result.output ?? null }
+              if (result.status === 'waiting') {
+                return {
+                  flow: target.name,
+                  note: 'The flow paused to ask for human input, which agent runs do not support. Make it self-sufficient or pass what it needs in the input.',
+                }
+              }
+              return { flow: target.name, error: `The flow run ${result.status}.` }
+            } catch (error) {
+              return { error: error instanceof Error ? error.message : String(error) }
+            }
+          },
+        }
+        tools.push(runFlowTool)
+        // Not a write plane: the flow's own write steps are gated inside its run.
+        bindings.set('run_flow', { provider: 'flow', serverUrl: '', toolName: 'run_flow', isWrite: false, client: runFlowClient })
+      }
     }
 
     // Retrieved context (graph-RAG + uploaded knowledge + agent memory) is
