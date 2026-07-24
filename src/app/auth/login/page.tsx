@@ -1,23 +1,13 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useSupabase } from '@/components/providers/supabase-provider'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { GoogleButton } from '@/components/auth/google-button'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { toast } from 'sonner'
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  
-  const { signIn, user, loading: authLoading } = useSupabase()
+  const { user, loading: authLoading } = useSupabase()
   const router = useRouter()
 
   // Where to land after sign-in: honor `return_to` from the deep link (e.g. a
@@ -60,32 +50,6 @@ export default function LoginPage() {
     }
   }, [user, authLoading, router])
 
-  const handleEmailLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-
-    try {
-      const { data, error } = await signIn(email, password)
-      
-      if (error) {
-        setError(error.message)
-        toast.error(error.message)
-      } else if (data?.user) {
-        // Full-page load so server auth state is fresh; land on the invited
-        // page (return_to) when present, else the dashboard.
-        const dest = safeReturnTo()
-        window.location.href = dest === '/dashboard' ? '/dashboard?auth=success' : dest
-      }
-    } catch (err: any) {
-      const errorMessage = err.message || 'An unexpected error occurred'
-      setError(errorMessage)
-      toast.error(errorMessage)
-    } finally {
-      setLoading(false)
-    }
-  }
-
   // Show loading spinner while checking auth state
   if (authLoading) {
     return (
@@ -111,63 +75,12 @@ export default function LoginPage() {
         <Card className="shadow-3">
           <CardHeader>
             <CardTitle>Sign in</CardTitle>
-            <CardDescription>Enter your credentials to access your workspace.</CardDescription>
+            <CardDescription>
+              Continue with your People.ai or Backstory company Google account.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {error && (
-              <div className="animate-fade-in rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-
+          <CardContent>
             <GoogleButton label="Sign in with Google" />
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">or continue with email</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleEmailLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  aria-invalid={Boolean(error)}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
-              <Button type="submit" className="w-full" loading={loading}>
-                {loading ? 'Signing in…' : 'Sign in'}
-              </Button>
-            </form>
-
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground">
-                Don&apos;t have an account?{' '}
-                <Link href="/auth/signup" className="font-medium text-primary hover:underline">
-                  Sign up
-                </Link>
-              </p>
-            </div>
           </CardContent>
         </Card>
       </div>
