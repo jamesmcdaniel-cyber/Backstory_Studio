@@ -15,6 +15,8 @@ import {
   Loader2,
   Lock,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plug,
   Plus,
@@ -26,6 +28,7 @@ import { toast } from 'sonner'
 import { CommandPalette } from '@/components/search/command-palette'
 import { NotificationBell } from '@/components/notifications/notification-bell'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAuth } from '@/hooks/use-auth'
 import { getSnapshot } from '@/lib/client/snapshot'
 import { resizeImageToDataUrl } from '@/lib/client/image'
@@ -55,6 +58,7 @@ type SidebarSnapshot = { organizations: Organization[]; activeOrgId: string | nu
 let sidebarCache: SidebarSnapshot | null = null
 
 const CREDIT_TOKENS = 1_000_000
+const SIDEBAR_COLLAPSED_KEY = 'backstory:sidebar-collapsed'
 export const AGENTS_CHANGED_EVENT = 'backstory:agents-changed'
 
 export function notifyAgentsChanged() {
@@ -86,7 +90,8 @@ export function Sidebar() {
   const [activeOrgId, setActiveOrgId] = useState<string | null>(() => sidebarCache?.activeOrgId ?? null)
   const [agents, setAgents] = useState<Agent[]>(() => sidebarCache?.agents ?? [])
   const [usage, setUsage] = useState<Usage | null>(() => sidebarCache?.usage ?? null)
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const [folderCollapsed, setFolderCollapsed] = useState<Record<string, boolean>>({})
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false)
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
 
@@ -140,6 +145,26 @@ export function Sidebar() {
   useEffect(() => {
     setMobileOpen(false)
   }, [pathname])
+
+  useEffect(() => {
+    try {
+      setDesktopCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true')
+    } catch {
+      // Private browsing can disable storage; the expanded default still works.
+    }
+  }, [])
+
+  const toggleDesktopSidebar = () => {
+    setDesktopCollapsed((current) => {
+      const next = !current
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next))
+      } catch {
+        // Keep the preference for this session when storage is unavailable.
+      }
+      return next
+    })
+  }
 
   const activeOrg = organizations.find((org) => org.id === activeOrgId) || organizations[0] || null
 
@@ -286,7 +311,7 @@ export function Sidebar() {
   )
 
   return (
-    <>
+    <TooltipProvider delayDuration={250}>
       {mobileOpen && (
         <div className="fixed inset-0 z-40 bg-black bg-opacity-50 lg:hidden" onClick={() => setMobileOpen(false)} />
       )}
@@ -301,16 +326,42 @@ export function Sidebar() {
 
       <div
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r bg-gray-50 transition-transform duration-200 lg:relative lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r bg-gray-50 transition-all duration-200 lg:relative lg:translate-x-0',
+          desktopCollapsed && 'lg:w-16',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
         )}
       >
         {/* Org switcher */}
-        <div className="relative border-b p-3">
+        <div className={cn('relative border-b p-3', desktopCollapsed && 'lg:px-2')}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={toggleDesktopSidebar}
+                aria-label={desktopCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+                aria-expanded={!desktopCollapsed}
+                className="absolute right-0 top-5 z-30 hidden h-6 w-6 translate-x-1/2 rounded-full bg-white shadow-sm lg:inline-flex"
+              >
+                {desktopCollapsed
+                  ? <PanelLeftOpen className="h-3.5 w-3.5" />
+                  : <PanelLeftClose className="h-3.5 w-3.5" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {desktopCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            </TooltipContent>
+          </Tooltip>
+
           <button
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-fast hover:bg-gray-100"
+            className={cn(
+              'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 transition-colors duration-fast hover:bg-gray-100',
+              desktopCollapsed && 'lg:justify-center lg:px-0',
+            )}
             onClick={() => setOrgMenuOpen((open) => !open)}
             aria-label={`Workspace: ${activeOrg?.name || 'Workspace'}`}
+            title={desktopCollapsed ? activeOrg?.name || 'Workspace' : undefined}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -318,13 +369,20 @@ export function Sidebar() {
               alt=""
               className="h-8 w-8 rounded-lg object-cover"
             />
-            <span className="flex-1 truncate text-left text-sm font-semibold">{activeOrg?.name || 'Workspace'}</span>
-            <ChevronsUpDown className="h-4 w-4 text-gray-400" />
+            <span className={cn('flex-1 truncate text-left text-sm font-semibold', desktopCollapsed && 'lg:hidden')}>
+              {activeOrg?.name || 'Workspace'}
+            </span>
+            <ChevronsUpDown className={cn('h-4 w-4 text-gray-400', desktopCollapsed && 'lg:hidden')} />
           </button>
           {orgMenuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setOrgMenuOpen(false)} />
-              <div className="absolute left-3 right-3 z-20 mt-1 origin-top animate-scale-in rounded-lg border bg-white p-1 shadow-popover">
+              <div
+                className={cn(
+                  'absolute left-3 right-3 z-20 mt-1 origin-top animate-scale-in rounded-lg border bg-white p-1 shadow-popover',
+                  desktopCollapsed && 'lg:left-full lg:right-auto lg:top-0 lg:ml-2 lg:mt-0 lg:w-64',
+                )}
+              >
                 {organizations.map((org) => (
                   <button
                     key={org.id}
@@ -379,14 +437,19 @@ export function Sidebar() {
             </>
           )}
 
-          <div className="mt-2 flex items-center gap-2">
+          <div className={cn('mt-2 flex items-center gap-2', desktopCollapsed && 'lg:flex-col')}>
             <button
-              className="flex flex-1 items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-sm text-gray-400 transition-colors duration-fast hover:border-graphite-300 hover:text-gray-600"
+              className={cn(
+                'flex flex-1 items-center gap-2 rounded-lg border bg-white px-2.5 py-1.5 text-sm text-gray-400 transition-colors duration-fast hover:border-graphite-300 hover:text-gray-600',
+                desktopCollapsed && 'lg:h-9 lg:w-9 lg:flex-none lg:justify-center lg:px-0',
+              )}
               onClick={() => setPaletteOpen(true)}
+              aria-label="Search"
+              title={desktopCollapsed ? 'Search (⌘K)' : undefined}
             >
               <Search className="h-3.5 w-3.5" />
-              <span className="flex-1 text-left">Search</span>
-              <kbd className="rounded border bg-gray-50 px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+              <span className={cn('flex-1 text-left', desktopCollapsed && 'lg:hidden')}>Search</span>
+              <kbd className={cn('rounded border bg-gray-50 px-1.5 py-0.5 text-[10px]', desktopCollapsed && 'lg:hidden')}>⌘K</kbd>
             </button>
             <NotificationBell />
           </div>
@@ -401,78 +464,83 @@ export function Sidebar() {
                 <Link
                   key={item.name}
                   href={item.href}
+                  title={desktopCollapsed ? item.name : undefined}
+                  aria-label={desktopCollapsed ? item.name : undefined}
                   className={cn(
                     'flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors duration-fast',
+                    desktopCollapsed && 'lg:justify-center lg:px-0 lg:py-2',
                     isActive ? 'bg-indigo-50 text-indigo-700' : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900',
                   )}
                 >
-                  <item.icon className={cn('h-4 w-4', isActive ? 'text-indigo-600' : 'text-gray-400')} />
-                  {item.name}
+                  <item.icon className={cn('h-4 w-4', desktopCollapsed && 'lg:h-5 lg:w-5', isActive ? 'text-indigo-600' : 'text-gray-400')} />
+                  <span className={cn(desktopCollapsed && 'lg:hidden')}>{item.name}</span>
                 </Link>
               )
             })}
           </nav>
 
-          <div
-            className={cn(
-              'flex items-center justify-between rounded-lg px-2 pb-1 pt-3',
-              dragOver === 'workspace' && 'bg-indigo-50',
-            )}
-            {...dropProps('workspace', { folder: null, visibility: 'shared' })}
-          >
-            <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">Workspace</span>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-5 w-5"
-              onClick={() => router.push('/agents?agent=new')}
-              aria-label="New agent"
+          <div className={cn(desktopCollapsed && 'lg:hidden')}>
+            <div
+              className={cn(
+                'flex items-center justify-between rounded-lg px-2 pb-1 pt-3',
+                dragOver === 'workspace' && 'bg-indigo-50',
+              )}
+              {...dropProps('workspace', { folder: null, visibility: 'shared' })}
             >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-          {sections.workspace.map(([folder, folderAgents]) => {
-            const key = `ws:${folder}`
-            const isCollapsed = collapsed[key]
-            const isGeneral = folder === 'General'
-            return (
-              <div key={key} className="mb-0.5">
-                <button
-                  className={cn(
-                    'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100',
-                    dragOver === key && 'bg-indigo-50',
-                  )}
-                  onClick={() => setCollapsed((current) => ({ ...current, [key]: !current[key] }))}
-                  {...dropProps(key, { folder: isGeneral ? null : folder, visibility: 'shared' })}
-                >
-                  {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  <Folder className="h-3.5 w-3.5 text-gray-400" />
-                  <span className="flex-1 truncate text-left">{folder}</span>
-                  <span className="text-xs text-gray-400">{folderAgents.length}</span>
-                </button>
-                {!isCollapsed && <div className="ml-3 border-l pl-1">{folderAgents.map(renderAgent)}</div>}
-              </div>
-            )
-          })}
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">Workspace</span>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-5 w-5"
+                onClick={() => router.push('/agents?agent=new')}
+                aria-label="New agent"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {sections.workspace.map(([folder, folderAgents]) => {
+              const key = `ws:${folder}`
+              const isCollapsed = folderCollapsed[key]
+              const isGeneral = folder === 'General'
+              return (
+                <div key={key} className="mb-0.5">
+                  <button
+                    className={cn(
+                      'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100',
+                      dragOver === key && 'bg-indigo-50',
+                    )}
+                    onClick={() => setFolderCollapsed((current) => ({ ...current, [key]: !current[key] }))}
+                    {...dropProps(key, { folder: isGeneral ? null : folder, visibility: 'shared' })}
+                  >
+                    {isCollapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    <Folder className="h-3.5 w-3.5 text-gray-400" />
+                    <span className="flex-1 truncate text-left">{folder}</span>
+                    <span className="text-xs text-gray-400">{folderAgents.length}</span>
+                  </button>
+                  {!isCollapsed && <div className="ml-3 border-l pl-1">{folderAgents.map(renderAgent)}</div>}
+                </div>
+              )
+            })}
 
-          <div
-            className={cn(
-              'flex items-center gap-1.5 rounded-lg px-2 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-gray-400',
-              dragOver === 'private' && 'bg-indigo-50',
-            )}
-            {...dropProps('private', { folder: null, visibility: 'private' })}
-          >
-            <Lock className="h-3 w-3" /> Private
+            <div
+              className={cn(
+                'flex items-center gap-1.5 rounded-lg px-2 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-gray-400',
+                dragOver === 'private' && 'bg-indigo-50',
+              )}
+              {...dropProps('private', { folder: null, visibility: 'private' })}
+            >
+              <Lock className="h-3 w-3" /> Private
+            </div>
+            {sections.private.length > 0
+              ? <div className="ml-3 border-l pl-1">{sections.private.map(renderAgent)}</div>
+              : <p className="px-2 py-1 text-xs text-gray-400">Drag agents here to make them private.</p>}
           </div>
-          {sections.private.length > 0
-            ? <div className="ml-3 border-l pl-1">{sections.private.map(renderAgent)}</div>
-            : <p className="px-2 py-1 text-xs text-gray-400">Drag agents here to make them private.</p>}
         </div>
 
         {/* Footer: usage + user */}
-        <div className="border-t p-3">
+        <div className={cn('border-t p-3', desktopCollapsed && 'lg:px-2')}>
           {usage && (
-            <div className="mb-2 px-1">
+            <div className={cn('mb-2 px-1', desktopCollapsed && 'lg:hidden')}>
               <div className="mb-1 flex justify-between text-xs text-gray-500">
                 <span>Usage this month</span>
                 <span>{usage.exempt ? 'Unlimited' : `${creditPct}% of credits`}</span>
@@ -486,24 +554,30 @@ export function Sidebar() {
           )}
           <Link
             href="/settings"
-            className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors duration-fast hover:bg-gray-100"
+            className={cn(
+              'flex items-center gap-2 rounded-lg px-1 py-1 transition-colors duration-fast hover:bg-gray-100',
+              desktopCollapsed && 'lg:justify-center lg:px-0',
+            )}
             title="Settings"
+            aria-label={desktopCollapsed ? 'Settings' : undefined}
           >
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600">
               {(user?.firstName || 'U').charAt(0).toUpperCase()}
             </div>
-            <div className="min-w-0 flex-1">
+            <div className={cn('min-w-0 flex-1', desktopCollapsed && 'lg:hidden')}>
               <div className="truncate text-sm font-medium">{user?.firstName || 'Account'}</div>
               <div className="truncate text-xs text-gray-400">{user?.emailAddress}</div>
             </div>
             {activeOrg && (
-              <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600">{planLabel(activeOrg.plan)}</span>
+              <span className={cn('rounded-full bg-gray-200 px-2 py-0.5 text-xs text-gray-600', desktopCollapsed && 'lg:hidden')}>
+                {planLabel(activeOrg.plan)}
+              </span>
             )}
           </Link>
         </div>
       </div>
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
-    </>
+    </TooltipProvider>
   )
 }
